@@ -4,7 +4,14 @@ This document defines the template and formatting rules for posting PR review re
 
 ## Report Templates
 
-Write the complete markdown to `/tmp/pr-review.md` before posting. Use the appropriate template based on the verdict.
+Write the complete markdown to `$REVIEW_TMPDIR/pr-review.md` before posting. Initialise the directory first:
+
+```bash
+REVIEW_TMPDIR="${PR_REVIEW_TMPDIR:-${TMPDIR:-/tmp}}"
+mkdir -p "$REVIEW_TMPDIR"
+```
+
+Use the appropriate template based on the verdict.
 
 ### APPROVE Template
 
@@ -326,7 +333,7 @@ FIX_SECTION: A code block with language hint showing the suggested fix, or a pla
 
 ### Inline JSON Format
 
-Write inline comments to `/tmp/pr-review-inline.json`:
+Write inline comments to `$REVIEW_TMPDIR/pr-review-inline.json`:
 
 ```json
 {
@@ -361,6 +368,8 @@ Map the review verdict to a GitHub review event:
 | APPROVE_WITH_SUGGESTIONS | APPROVE |
 | APPROVE | APPROVE |
 
+When `PRSMASH_APPROVAL_LINE_LIMIT` is set by automation, `post-review.sh` will downgrade `APPROVE` events to `COMMENT` for PRs whose additions + deletions are greater than or equal to that limit. The body still carries the `Approved` / `Approved with Suggestions` verdict, but includes a manual-approval banner and marker so the caller can report that a human reviewer must approve the PR manually.
+
 ## Posting Commands
 
 Use the `post-review.sh` script for all posting. It handles body comment + inline review as two separate operations, with validation and graceful fallback.
@@ -368,8 +377,8 @@ Use the `post-review.sh` script for all posting. It handles body comment + inlin
 ### Full review with inline comments
 ```bash
 bash scripts/post-review.sh \
-    --body /tmp/pr-review.md \
-    --inline /tmp/pr-review-inline.json \
+    --body $REVIEW_TMPDIR/pr-review.md \
+    --inline $REVIEW_TMPDIR/pr-review-inline.json \
     --event REQUEST_CHANGES \
     --pr 1234
 ```
@@ -377,19 +386,19 @@ bash scripts/post-review.sh \
 ### Body only (no inline comments)
 ```bash
 bash scripts/post-review.sh \
-    --body /tmp/pr-review.md --event APPROVE --pr 1234
+    --body $REVIEW_TMPDIR/pr-review.md --event APPROVE --pr 1234
 ```
 
 ### Update existing review comment
 ```bash
 bash scripts/post-review.sh \
-    --body /tmp/pr-review.md --edit-last --pr 1234
+    --body $REVIEW_TMPDIR/pr-review.md --edit-last --pr 1234
 ```
 
 ### Dry run (inspect payload without posting)
 ```bash
 bash scripts/post-review.sh \
-    --body /tmp/pr-review.md --inline /tmp/pr-review-inline.json \
+    --body $REVIEW_TMPDIR/pr-review.md --inline $REVIEW_TMPDIR/pr-review-inline.json \
     --event REQUEST_CHANGES --pr 1234 --dry-run
 ```
 

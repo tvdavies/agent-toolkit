@@ -16,15 +16,55 @@ Multi-agent pull request review that analyses code changes across six dimensions
 - `--post`: Post the review as a GitHub PR comment instead of conversational output
 - `--base BRANCH_NAME`: Override the detected base branch
 - `--headless`: Non-interactive mode for CI/automation (see Headless Mode section)
-- `--pr NUMBER`: Review a specific PR by number instead of detecting from the current branch. Uses `origin/BASE_BRANCH...origin/PR_HEAD_BRANCH` for the diff range and passes `--pr NUMBER` to `post-review.sh`.
+- `--pr NUMBER`: Review a specific PR by number instead of detecting from the current branch. The checkout must already be at the PR `headRefOid`; use the exact `baseRefOid...headRefOid` diff range and pass `--pr NUMBER` to `post-review.sh`.
 
 ## Working Directory
 
 **Stay in the current working directory for the entire review.** Do not `cd` to the repository root or any other directory. If running inside a git worktree, all git commands, file reads, and sub-agent dispatches must operate within that worktree. When launching sub-agents, explicitly tell each sub-agent to work within the current directory and not change to another location.
 
+For `--pr NUMBER` reviews, the current working directory must already be the exact PR worktree. Do not search the filesystem for another checkout if git commands fail. In headless mode, fail cleanly rather than reviewing from a guessed repository.
+
+## Review Temporary Directory
+
+All generated review artifacts MUST be written under the per-review temporary directory:
+
+```bash
+REVIEW_TMPDIR="${PR_REVIEW_TMPDIR:-${TMPDIR:-/tmp}}"
+mkdir -p "$REVIEW_TMPDIR"
+```
+
+Use these paths instead of global `/tmp` paths:
+
+- `$REVIEW_TMPDIR/pr-review.md`
+- `$REVIEW_TMPDIR/pr-review-inline.json`
+- `$REVIEW_TMPDIR/pr-prior-discussion.md`
+- `$REVIEW_TMPDIR/pr.diff`
+
+This prevents concurrent headless reviews from overwriting each other's body, inline-comment, diff, or prior-discussion files.
+
 ## Phase 1: Context Gathering
 
 Run these steps sequentially before dispatching sub-agents.
+
+### 1.0 PR Context Preflight
+
+When reviewing with `--pr NUMBER`, validate the checkout before reading files or posting anything:
+
+```bash
+git rev-parse --show-toplevel
+REVIEW_TMPDIR="${PR_REVIEW_TMPDIR:-${TMPDIR:-/tmp}}"
+mkdir -p "$REVIEW_TMPDIR"
+PR_META=$(gh pr view PR_NUMBER --json number,baseRefName,baseRefOid,headRefName,headRefOid)
+HEAD_OID=$(printf '%s' "$PR_META" | jq -r '.headRefOid')
+BASE_OID=$(printf '%s' "$PR_META" | jq -r '.baseRefOid')
+test "$(git rev-parse HEAD)" = "$HEAD_OID"
+git diff --name-only "$BASE_OID...$HEAD_OID" | sort > "$REVIEW_TMPDIR/changed-files.git"
+gh pr diff PR_NUMBER --name-only | sort > "$REVIEW_TMPDIR/changed-files.gh"
+diff -u "$REVIEW_TMPDIR/changed-files.git" "$REVIEW_TMPDIR/changed-files.gh"
+test -z "$(git status --porcelain)"
+```
+
+If any check fails in headless mode, stop without posting a review. Do not recover by changing directories or choosing another local checkout. For PR reviews, prefer exact SHA ranges such as `$BASE_OID...$HEAD_OID` over branch-name ranges.
 
 ### 1.1 Detect Base Branch
 
@@ -50,16 +90,16 @@ git fetch origin PR_HEAD_BRANCH
 
 # Diff range uses origin/ refs to ensure freshness:
 # - Default (on the branch locally): origin/BASE_BRANCH...HEAD
-# - Remote PR review (by number):    origin/BASE_BRANCH...origin/PR_HEAD_BRANCH
+# - Remote PR review (by number):    BASE_REF_OID...HEAD_REF_OID after preflight verifies HEAD
 # - Incremental (--since):           COMMIT_SHA...HEAD (or ...origin/PR_HEAD_BRANCH)
 ```
 
-Run these commands (replace RANGE with the resolved diff range):
+Run these commands (replace RANGE with the resolved diff range), and persist the full diff for sub-agents:
 ```bash
 git diff RANGE --name-only          # Changed files list
 git log RANGE --oneline             # Commit history
 git diff RANGE --stat               # Change statistics
-git diff RANGE                      # Full diff (for sub-agents)
+git diff RANGE > "$REVIEW_TMPDIR/pr.diff"  # Full diff for sub-agents to read
 ```
 
 If no changes found, inform the user and stop.
@@ -69,7 +109,7 @@ If no changes found, inform the user and stop.
 ### 1.3 Detect Repo Context
 
 Gather project context for sub-agents:
-1. Read `CLAUDE.md` if it exists (project rules and conventions)
+1. Read `AGENTS.md` if it exists, then `CLAUDE.md` if it exists (project rules and conventions)
 2. Detect package manager (pnpm, npm, yarn, bun) from lock files
 3. Detect monorepo config (turborepo.json, pnpm-workspace.yaml, nx.json)
 4. Detect test framework (jest, vitest, playwright) from config files
@@ -87,7 +127,22 @@ If a ticket ID is found, retrieve its details using this discovery order:
 
 If none of these approaches succeed, note the ticket ID in the summary but skip the ticket compliance sub-agent.
 
-**Important**: The ticket details MUST be fetched here in Phase 1, not in the sub-agent. Sub-agents cannot invoke skills. Pass the fetched ticket text (title, description, acceptance criteria) directly into Sub-agent 5's prompt.
+If the ticket belongs to a project, also fetch lightweight related project context for contradiction checks. For Linear, prefer:
+
+```bash
+linear-cli issues list --project "PROJECT_NAME" --fields identifier,title,state,description,updatedAt,completedAt,canceledAt,url --output json --compact --no-pager --quiet
+```
+
+Limit the context passed to Sub-agent 5 to the most relevant 15-20 tickets, prioritising:
+
+- Recent Done tickets, especially those completed in the last 30 days
+- In Progress, Technical Review, and To Do tickets updated recently
+- Tickets referenced by the current ticket description or comments
+- Tickets with titles/descriptions that mention the same product area, status model, navigation, terminology, or acceptance criteria
+
+Also fetch comments for the current ticket and any highly relevant related tickets when practical. The goal is not to perform a full project audit, but to give the ticket compliance sub-agent enough context to spot explicit contradictions with recent project decisions or completed scope.
+
+**Important**: The ticket details and related project context MUST be fetched here in Phase 1, not in the sub-agent. Sub-agents cannot invoke skills. Pass the fetched ticket text (title, description, acceptance criteria, comments) and related project ticket context directly into Sub-agent 5's prompt.
 
 ### 1.5 Categorise Files
 
@@ -106,7 +161,7 @@ Group changed files into categories:
 If a PR number is available (either passed via `--pr NUMBER` or detected via `gh pr view` against the current branch), fetch the existing review conversation so sub-agents can avoid re-raising things the team already discussed. **Skip this step entirely when reviewing a local branch with no associated PR.**
 
 ```bash
-bash /path/to/skill/scripts/fetch-conversation.sh --pr PR_NUMBER > /tmp/pr-prior-discussion.md
+bash /path/to/skill/scripts/fetch-conversation.sh --pr PR_NUMBER > $REVIEW_TMPDIR/pr-prior-discussion.md
 ```
 
 (Use the skill's base directory path for the script; pass `--repo OWNER/NAME` if `gh repo view` cannot infer the repo from the working directory.)
@@ -115,40 +170,58 @@ The script outputs a compact markdown document with two sections:
 - **Line-comment threads** — each thread tagged `[RESOLVED]`, `[OUTDATED]`, or `[OPEN]`, with the file:line and the truncated message chain (latest reviewer → author → ...)
 - **Issue-level discussion** — the PR's main conversation tab, one bullet per comment
 
-If the script fails (network, auth, rate limit) or returns an empty document, proceed without prior-discussion context — do not block the review. Read `/tmp/pr-prior-discussion.md` once after running the script; if it exists and is non-empty, pass its contents into every sub-agent prompt in Phase 2.
+If the script fails (network, auth, rate limit) or returns an empty document, proceed without prior-discussion context — do not block the review. Read `$REVIEW_TMPDIR/pr-prior-discussion.md` once after running the script; if it exists and is non-empty, pass its contents into every sub-agent prompt in Phase 2.
 
 ## Phase 2: Dispatch Sub-agents
 
-Launch all applicable sub-agents in a SINGLE message using the current harness's sub-agent mechanism. When a sub-agent model/profile is suggested, use the closest equivalent available in the current harness:
+Launch all applicable sub-agents in a SINGLE message. Do not create multiple prompt variations, do not deliberate about whether sub-agents might help, and do not dispatch agents one-by-one. After Phase 1 context is gathered and `references/finding-format.md` is read, immediately launch the fixed review streams below in one parallel dispatch.
 
-- **Sonnet / general-purpose / default model**: normal review agents
-- **Opus / strongest available / general-purpose**: architecture-level reasoning
-- **Haiku / Mini**: lightweight validation or straightforward checks
-- **Nano**: read-only lookup, summarisation, or cheap reconnaissance only
+Prefer the Pi `subagent` tool when available, using `tasks: [...]` parallel mode. Each task must use `agent: "delegate"` with no per-task model override, so review workers inherit the current parent model (for example Opus or GPT 5.5). These are review-only streams: give each task read-only inspection tools (`read`, `grep`, `find`, `ls`, `bash`) and explicitly forbid edits in the task prompt. If running under a Claude-style Task tool instead, use `subagent_type: "general-purpose"` and do not specify a model.
+
+When using the `pi-subagents` package, prefer these options when they are present in the active tool schema. Capture the current working directory once with `pwd` after the preflight, and use that exact path for `cwd` so every child runs in the validated checkout:
+
+```ts
+subagent({
+  tasks: [
+    { agent: "delegate", task: "...", cwd: CURRENT_WORKING_DIRECTORY, tools: ["read", "grep", "find", "ls", "bash"] },
+    // ...all other review streams use the same cwd
+  ],
+  cwd: CURRENT_WORKING_DIRECTORY,
+  agentScope: "user",
+  context: "fresh",
+  concurrency: 4,
+  clarify: false,
+  async: false,
+})
+```
+
+If a different `subagent` implementation is active and does not expose those options, omit unsupported options while preserving the core behaviour: parallel review tasks, no per-task model override, read-only/no-edit execution, and the generic delegate-style agent for each stream. `agentScope: "user"` intentionally avoids scanning repository `.agents/skills/**/SKILL.md` files as project-local executable agents.
 
 Each sub-agent receives:
+- The current working directory and an explicit instruction to stay there
 - The base branch and diff range
+- The exact path to the persisted full diff: `$REVIEW_TMPDIR/pr.diff` (do not invent a different `/tmp/pr-*.diff` path)
 - The list of changed files with categories
 - A summary of repo context (package manager, monorepo, test framework)
-- The full contents of CLAUDE.md (if it exists)
+- The full contents of `AGENTS.md` and/or `CLAUDE.md` if either exists
 - The finding format specification from `references/finding-format.md`
-- The prior-discussion summary from `/tmp/pr-prior-discussion.md` (if Phase 1.6 produced one)
+- The prior-discussion summary from `$REVIEW_TMPDIR/pr-prior-discussion.md` (if Phase 1.6 produced one)
 
-Read `references/finding-format.md` and include its contents in every sub-agent prompt. If `/tmp/pr-prior-discussion.md` exists and is non-empty, also read it and include its contents in every sub-agent prompt under a clear "Prior Discussion" heading.
+Read `references/finding-format.md` and include its contents in every sub-agent prompt. Tell each sub-agent to read exactly `$REVIEW_TMPDIR/pr.diff` rather than recomputing a different diff or using a newly invented temporary diff path. If `$REVIEW_TMPDIR/pr-prior-discussion.md` exists and is non-empty, also read it and include its contents in every sub-agent prompt under a clear "Prior Discussion" heading.
 
 ### Sub-agent 1: Standards and Conventions
 
-**Sub-agent profile:** general-purpose review agent using Sonnet, Mini, or the closest available general-purpose/default model in the current harness.
+**Sub-agent config:** use `delegate`, inherit the parent model, and restrict tools to read-only inspection (`read`, `grep`, `find`, `ls`, `bash`). Do not specify a per-task model override. Do not edit files.
 
 Prompt focus:
-- Check whether the code follows project conventions from CLAUDE.md (naming, imports, file structure, British English)
+- Check whether the code follows project conventions from AGENTS.md/CLAUDE.md (naming, imports, file structure, British English)
 - Only flag deviations that would cause real confusion or maintenance burden — not minor stylistic preferences
 - Type safety (no `any` casts, proper type usage, `type` vs `interface`)
 - Only flag issues in changed lines, not pre-existing code
 
 ### Sub-agent 2: Security and Performance
 
-**Sub-agent profile:** general-purpose review agent using Sonnet, Mini, or the closest available general-purpose/default model in the current harness.
+**Sub-agent config:** use `delegate`, inherit the parent model, and restrict tools to read-only inspection (`read`, `grep`, `find`, `ls`, `bash`). Do not specify a per-task model override. Do not edit files.
 
 Prompt focus — Security:
 - Hardcoded secrets, API keys, tokens in code or config
@@ -168,7 +241,7 @@ Security findings default to CRITICAL severity.
 
 ### Sub-agent 3: Architecture and Patterns
 
-**Sub-agent profile:** strongest available general-purpose reasoning agent — Opus, Sonnet, or the closest available general-purpose/default model in the current harness.
+**Sub-agent config:** use `delegate`, inherit the parent model, and restrict tools to read-only inspection (`read`, `grep`, `find`, `ls`, `bash`). Do not specify a per-task model override. Do not edit files.
 
 Prompt focus:
 - Assess whether the approach is sound — does the architecture make sense for what the PR is trying to do?
@@ -183,7 +256,7 @@ Scoping: The sub-agent may read unchanged files to understand context, but must 
 
 **Condition:** Only dispatch if test files changed OR new code paths were added (new functions, new endpoints, new branches).
 
-**Sub-agent profile:** general-purpose review agent using Sonnet, Mini, or the closest available general-purpose/default model in the current harness.
+**Sub-agent config:** use `delegate`, inherit the parent model, and restrict tools to read-only inspection (`read`, `grep`, `find`, `ls`, `bash`). Do not specify a per-task model override. Do not edit files.
 
 Prompt focus:
 - Are the tests sufficient to have confidence in this change?
@@ -195,7 +268,7 @@ Prompt focus:
 
 **Condition:** Only dispatch if a ticket was found and its details were retrieved.
 
-**Sub-agent profile:** general-purpose review agent using Sonnet, Mini, or the closest available general-purpose/default model in the current harness.
+**Sub-agent config:** use `delegate`, inherit the parent model, and restrict tools to read-only inspection (`read`, `grep`, `find`, `ls`, `bash`). Do not specify a per-task model override. Do not edit files.
 
 Prompt focus:
 - Coverage of all requirements listed in the ticket
@@ -203,6 +276,18 @@ Prompt focus:
 - Scope creep — flag as SUGGESTION, not as a defect
 - Missing pieces or edge cases mentioned in the ticket
 - Requirements that appear partially implemented
+- Contradictions between the current ticket/PR and related project ticket context
+
+When related project ticket context is provided, check whether the current ticket or PR appears to contradict recent completed or in-flight tickets in the same project. Focus on explicit product contracts such as status models, navigation structure, terminology, acceptance criteria, UX invariants, permissions, or lifecycle rules.
+
+Flag a contradiction only when all of these are true:
+
+- A related project ticket clearly states a conflicting requirement or invariant
+- The conflicting related ticket is recent, completed, in progress, or explicitly marked as the source of truth
+- The PR implements the conflicting behaviour, or the current ticket requires it
+- There is no explicit comment, description update, supersession note, or project note explaining that the previous decision was intentionally changed
+
+Do not flag normal design iteration, vague differences, speculative conflicts, or old cancelled tickets unless they were explicitly superseded by a more recent completed ticket that still conflicts. If you do flag a contradiction, include the related ticket identifiers and quote or summarise the conflicting requirements. Use SHOULD_FIX when the contradiction affects shipped product behaviour; otherwise use SUGGESTION for a clarification request.
 
 ### Sub-agent 6: Build Validation
 
@@ -251,7 +336,7 @@ If Cloud Build access fails (permissions, auth), fall back to the `gh pr checks`
 
 **When reviewing the current local branch (no PR number):**
 
-**Sub-agent profile:** lightweight validation agent using Haiku, Mini, or the closest available lightweight model in the current harness.
+**Sub-agent config:** use `delegate`, inherit the parent model, and restrict tools to read-only inspection (`read`, `grep`, `find`, `ls`, `bash`). Do not specify a per-task model override. Do not edit files.
 
 Run the following commands and report results:
 1. **Type check**: Detect and run the project's type-check command (`pnpm type-check`, `npx tsc --noEmit`, etc.)
@@ -289,6 +374,8 @@ These are NOT findings — do not report them:
 - **No prior thread on this file/line/topic**: raise normally.
 
 The goal is to never make the author re-defend a point they already addressed. The cost of skipping a real issue once is much lower than the cost of re-raising something the team already settled.
+
+Contextual-file verification: if a finding depends on an unchanged file outside the PR diff, verify that file from the validated PR context before reporting it. Use the isolated worktree whose HEAD passed the `--pr` preflight, or use `git show HEAD:path/to/file` / `git show "$BASE_OID:path/to/file"`. Do not cite file contents from a dirty or unrelated local branch.
 
 Follow the finding format from the specification exactly. Only report findings with confidence at or above 80. List the files you reviewed — for files with findings, include the count; files without findings need only be listed. If you find nothing noteworthy, say so clearly. Do NOT manufacture findings to justify your existence. An empty category is a good sign, not a failure.
 
@@ -370,11 +457,13 @@ Present a structured summary. The output length should match the severity of the
 
 When the user requests posting to GitHub:
 
+Before formatting GitHub output, initialise `REVIEW_TMPDIR` exactly as described in the Review Temporary Directory section and write every generated artifact there.
+
 1. Read `references/github-output.md` for the complete template, formatting rules, and inline comment format
-2. Format the synthesised findings into body markdown and write to `/tmp/pr-review.md`
-3. For each CRITICAL and SHOULD_FIX finding, format an inline comment using the inline comment template from `references/github-output.md` and collect into `/tmp/pr-review-inline.json`. SUGGESTION findings do NOT get inline comments.
+2. Format the synthesised findings into body markdown and write to `$REVIEW_TMPDIR/pr-review.md`
+3. For each CRITICAL and SHOULD_FIX finding, format an inline comment using the inline comment template from `references/github-output.md` and collect into `$REVIEW_TMPDIR/pr-review-inline.json`. SUGGESTION findings do NOT get inline comments.
 4. Map the verdict to a review event (see event mapping table in `references/github-output.md`)
-5. Post via: `bash /path/to/skill/scripts/post-review.sh --body /tmp/pr-review.md --inline /tmp/pr-review-inline.json --event EVENT --pr PR_NUMBER` (use the skill's base directory path for the script)
+5. Post via: `bash /path/to/skill/scripts/post-review.sh --body $REVIEW_TMPDIR/pr-review.md --inline $REVIEW_TMPDIR/pr-review-inline.json --event EVENT --pr PR_NUMBER` (use the skill's base directory path for the script)
 
 **Important:** Always pass `--pr PR_NUMBER` to target the correct PR explicitly. Do not rely on auto-detection from the current branch — it can target the wrong PR when running from a worktree or detached HEAD.
 

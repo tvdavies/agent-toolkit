@@ -8,14 +8,15 @@ metadata:
 
 # Slack
 
-Interact with Slack using `scripts/slack.sh` (calls Slack API directly via `SLACK_MCP_XOXC_TOKEN` / `SLACK_MCP_XOXD_TOKEN`).
+Interact with Slack using the skill-local script `scripts/slack.sh` (calls Slack API directly via `SLACK_MCP_XOXC_TOKEN` / `SLACK_MCP_XOXD_TOKEN`). When invoking it from outside this skill directory, use the absolute path `/home/tvd/.claude/skills/slack/scripts/slack.sh` or resolve paths relative to this SKILL.md file. Do not search the filesystem for the script.
 
 ## Important: Agent Conventions
 
 - Always resolve `#channel-name` or `@username` to a channel ID first using `slack.sh resolve <name>` before passing to other commands.
 - **Never guess user identities from IDs.** Always resolve user IDs to names using `slack.sh userinfo <user_id>` before attributing messages to anyone. Do not assume a user ID belongs to a particular person — look it up every time.
 - When displaying messages to the user, format them readably with timestamps, usernames, and content.
-- For sending messages, always confirm with the user before executing `slack.sh send`.
+- For sending messages, always confirm with the user before executing `slack.sh send`, unless the user explicitly asks you to send a specific message immediately.
+- For multiline Slack messages, do **not** pass literal `\n` sequences inside a normal quoted shell argument. Slack will receive backslash+n text instead of real line breaks. Use stdin with `send ... -` / `edit ... -` and a quoted heredoc, or use Bash ANSI-C quoting (`$'line 1\nline 2'`). Prefer the stdin heredoc pattern for reliability.
 - Channel IDs look like `C...` (channels), `D...` (DMs), `G...` (group DMs/private channels).
 
 ## Voice & Style Guide
@@ -158,6 +159,19 @@ Output: `timestamp | user_id | message_text`
 ```bash
 slack.sh send <channel_id> "message text"
 slack.sh send <channel_id> "reply text" <thread_ts>   # reply in thread
+
+# Preferred for multiline messages/replies. The '-' means read message text from stdin.
+slack.sh send <channel_id> - <<'EOF'
+First line
+
+Second paragraph
+EOF
+
+slack.sh send <channel_id> - <thread_ts> <<'EOF'
+Thread reply first line
+
+Thread reply second paragraph
+EOF
 ```
 Returns `{ok, channel, ts}` on success.
 
@@ -177,6 +191,13 @@ Output: `user_id  username  real_name  email`
 ### Edit a Message
 ```bash
 slack.sh edit <channel_id> <message_ts> "new text"
+
+# Preferred for multiline edits. The '-' means read replacement text from stdin.
+slack.sh edit <channel_id> <message_ts> - <<'EOF'
+First line
+
+Second paragraph
+EOF
 ```
 Edits an existing message. Can only edit messages sent by the authenticated user.
 

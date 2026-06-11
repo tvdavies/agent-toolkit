@@ -13,6 +13,11 @@
 #   --edit-last      Update the most recent comment instead of posting new
 #   --dry-run        Print what would be posted without actually posting
 #
+# Environment:
+#   PRSMASH_APPROVAL_LINE_LIMIT  When set, APPROVE events for PRs with additions
+#                                + deletions >= this value are posted as comments
+#                                so a human can approve manually.
+#
 # Dependencies: bash, gh, jq, python3
 
 set -euo pipefail
@@ -25,6 +30,14 @@ EVENT="COMMENT"
 PR_NUMBER_ARG=""
 EDIT_LAST=false
 DRY_RUN=false
+TEMP_BODY_FILE=""
+
+cleanup() {
+    if [[ -n "$TEMP_BODY_FILE" ]]; then
+        rm -f "$TEMP_BODY_FILE"
+    fi
+}
+trap cleanup EXIT
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -52,14 +65,14 @@ fi
 
 if [[ -n "$PR_NUMBER_ARG" ]]; then
     # Explicit PR number provided — look it up directly
-    PR_JSON=$(gh pr view "$PR_NUMBER_ARG" --json number,headRefOid,url 2>/dev/null || true)
+    PR_JSON=$(gh pr view "$PR_NUMBER_ARG" --json number,headRefOid,url,additions,deletions 2>/dev/null || true)
     if [[ -z "$PR_JSON" ]]; then
         echo "Error: PR #${PR_NUMBER_ARG} not found." >&2
         exit 1
     fi
 else
     # Auto-detect from current branch
-    PR_JSON=$(gh pr view --json number,headRefOid,url 2>/dev/null || true)
+    PR_JSON=$(gh pr view --json number,headRefOid,url,additions,deletions 2>/dev/null || true)
     if [[ -z "$PR_JSON" ]]; then
         echo "Error: No open PR found for the current branch." >&2
         exit 1
@@ -69,6 +82,8 @@ fi
 PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number')
 COMMIT_SHA=$(echo "$PR_JSON" | jq -r '.headRefOid')
 PR_URL=$(echo "$PR_JSON" | jq -r '.url')
+PR_ADDITIONS=$(echo "$PR_JSON" | jq -r '.additions // 0')
+PR_DELETIONS=$(echo "$PR_JSON" | jq -r '.deletions // 0')
 
 # Extract owner/repo from PR URL (https://github.com/OWNER/REPO/pull/N)
 OWNER_REPO=$(echo "$PR_URL" | sed -E 's|https://github.com/([^/]+/[^/]+)/pull/[0-9]+|\1|')
@@ -88,6 +103,40 @@ echo "PR #${PR_NUMBER} | commit ${COMMIT_SHA:0:8} | ${OWNER_REPO}"
 # review event is never submitted because there are no inline comments.
 
 BODY_CONTENT=$(cat "$BODY_FILE")
+EFFECTIVE_BODY_FILE="$BODY_FILE"
+MANUAL_APPROVAL_REQUIRED=false
+MANUAL_APPROVAL_REASON=""
+
+APPROVAL_LINE_LIMIT="${PRSMASH_APPROVAL_LINE_LIMIT:-${PRSMASH_APPROVAL_MAX_LINES:-}}"
+if [[ "$EVENT" == "APPROVE" && -n "$APPROVAL_LINE_LIMIT" ]]; then
+    if ! [[ "$APPROVAL_LINE_LIMIT" =~ ^[0-9]+$ ]] || [[ "$APPROVAL_LINE_LIMIT" -le 0 ]]; then
+        echo "Error: PRSMASH_APPROVAL_LINE_LIMIT must be a positive integer." >&2
+        exit 1
+    fi
+
+    if ! [[ "$PR_ADDITIONS" =~ ^[0-9]+$ ]] || ! [[ "$PR_DELETIONS" =~ ^[0-9]+$ ]]; then
+        echo "Error: Could not read PR additions/deletions for approval size check." >&2
+        exit 1
+    fi
+
+    PR_CHANGED_LINES=$((PR_ADDITIONS + PR_DELETIONS))
+    if [[ "$PR_CHANGED_LINES" -ge "$APPROVAL_LINE_LIMIT" ]]; then
+        MANUAL_APPROVAL_REQUIRED=true
+        MANUAL_APPROVAL_REASON="${PR_CHANGED_LINES} changed lines (${PR_ADDITIONS} additions, ${PR_DELETIONS} deletions) meets or exceeds the automated approval limit of < ${APPROVAL_LINE_LIMIT} lines."
+        EVENT="COMMENT"
+        BODY_CONTENT=$(printf '<!-- manual-approval-required source=automated-review limit=%s changed_lines=%s additions=%s deletions=%s -->\n\n> ⚠️ **Manual approval required:** %s This automated review is posting its approval verdict as a comment only; a human reviewer must approve manually.\n\n%s' \
+            "$APPROVAL_LINE_LIMIT" \
+            "$PR_CHANGED_LINES" \
+            "$PR_ADDITIONS" \
+            "$PR_DELETIONS" \
+            "$MANUAL_APPROVAL_REASON" \
+            "$BODY_CONTENT")
+        TEMP_BODY_FILE=$(mktemp)
+        printf '%s\n' "$BODY_CONTENT" > "$TEMP_BODY_FILE"
+        EFFECTIVE_BODY_FILE="$TEMP_BODY_FILE"
+    fi
+fi
+
 IS_REVIEW_EVENT=false
 if [[ "$EVENT" == "APPROVE" || "$EVENT" == "REQUEST_CHANGES" ]]; then
     IS_REVIEW_EVENT=true
@@ -99,9 +148,9 @@ if [[ "$EDIT_LAST" == true ]]; then
     if [[ "$DRY_RUN" == true ]]; then
         echo ""
         echo "=== DRY RUN: Update last comment ==="
-        echo "Body size: $(wc -c < "$BODY_FILE") bytes"
+        echo "Body size: ${#BODY_CONTENT} chars"
     else
-        gh pr comment "$PR_NUMBER" --edit-last --body-file "$BODY_FILE"
+        gh pr comment "$PR_NUMBER" --edit-last --body-file "$EFFECTIVE_BODY_FILE"
         echo "Updated existing PR comment."
     fi
     echo "Skipping inline comments (--edit-last mode)."
@@ -262,15 +311,23 @@ else
     if [[ "$DRY_RUN" == true ]]; then
         echo ""
         echo "=== DRY RUN: Comment ==="
-        echo "Body size: $(wc -c < "$BODY_FILE") bytes"
+        echo "Body size: ${#BODY_CONTENT} chars"
+        if [[ "$MANUAL_APPROVAL_REQUIRED" == true ]]; then
+            echo "Manual approval required: $MANUAL_APPROVAL_REASON"
+            echo "PRSMASH_MANUAL_APPROVAL_REQUIRED=true"
+        fi
         if [[ "$VALID_COUNT" != "0" ]]; then
             echo "Inline comments: $VALID_COUNT"
         fi
         exit 0
     fi
 
-    gh pr comment "$PR_NUMBER" --body-file "$BODY_FILE"
+    gh pr comment "$PR_NUMBER" --body-file "$EFFECTIVE_BODY_FILE"
     echo "Posted new PR comment."
+    if [[ "$MANUAL_APPROVAL_REQUIRED" == true ]]; then
+        echo "Manual approval required: $MANUAL_APPROVAL_REASON"
+        echo "PRSMASH_MANUAL_APPROVAL_REQUIRED=true"
+    fi
 
     if [[ "$VALID_COUNT" != "0" ]]; then
         REVIEW_PAYLOAD=$(jq -n \

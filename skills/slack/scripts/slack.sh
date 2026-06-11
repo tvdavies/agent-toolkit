@@ -95,9 +95,13 @@ cmd_thread() {
 }
 
 cmd_send() {
-  local channel="${1:?Usage: slack.sh send <channel_id> <text> [thread_ts]}"
-  local text="${2:?Usage: slack.sh send <channel_id> <text> [thread_ts]}"
+  local channel="${1:?Usage: slack.sh send <channel_id> <text|-> [thread_ts]}"
+  local text="${2:?Usage: slack.sh send <channel_id> <text|-> [thread_ts]}"
   local thread_ts="${3:-}"
+
+  if [ "$text" = "-" ]; then
+    text=$(cat)
+  fi
 
   local payload
   payload=$(jq -n --arg ch "$channel" --arg txt "$text" '{channel: $ch, text: $txt}')
@@ -215,9 +219,13 @@ cmd_unreads() {
 }
 
 cmd_edit() {
-  local channel="${1:?Usage: slack.sh edit <channel_id> <timestamp> <new_text>}"
-  local ts="${2:?Usage: slack.sh edit <channel_id> <timestamp> <new_text>}"
-  local text="${3:?Usage: slack.sh edit <channel_id> <timestamp> <new_text>}"
+  local channel="${1:?Usage: slack.sh edit <channel_id> <timestamp> <new_text|->}"
+  local ts="${2:?Usage: slack.sh edit <channel_id> <timestamp> <new_text|->}"
+  local text="${3:?Usage: slack.sh edit <channel_id> <timestamp> <new_text|->}"
+
+  if [ "$text" = "-" ]; then
+    text=$(cat)
+  fi
 
   local resp
   resp=$(slack_post "chat.update" -d "$(jq -n --arg ch "$channel" --arg ts "$ts" --arg txt "$text" '{channel: $ch, ts: $ts, text: $txt}')")
@@ -325,13 +333,14 @@ Commands:
   channels [type]                   List channels (public_channel,private_channel,im,mpim)
   history <channel> [limit]         Read channel messages (default: 20)
   thread <channel> <thread_ts>      Read thread replies
-  send <channel> <text> [thread_ts] Send a message (optionally in thread)
+  send <channel> <text|-> [thread_ts]
+                                    Send a message; use '-' to read text from stdin
   search <query> [count]            Search messages
   users [query]                     List or search users
   mark <channel> [ts]               Mark channel as read
   groups                            List user groups
   unreads [type]                    Show channels with unread messages
-  edit <channel> <ts> <new_text>     Edit a message
+  edit <channel> <ts> <new_text|->   Edit a message; use '-' to read text from stdin
   delete <channel> <ts>             Delete a message
   react <channel> <ts> <emoji>      Add emoji reaction to a message
   unreact <channel> <ts> <emoji>    Remove emoji reaction from a message
