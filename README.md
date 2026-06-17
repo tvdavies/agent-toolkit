@@ -9,6 +9,30 @@ git clone git@github.com:tvdavies/agent-skills.git ~/agent-skills
 ~/agent-skills/scripts/bootstrap.sh
 ```
 
+### Copy-paste install prompt for an existing Pi session
+
+Paste this into an already-running Pi session to have Pi fetch and install the toolkit for you:
+
+```text
+Install the Agent Tools toolkit from GitHub into this Pi environment.
+
+Please do the following:
+1. Clone or update https://github.com/tvdavies/agent-skills.git at ~/agent-skills. If HTTPS auth fails, retry with git@github.com:tvdavies/agent-skills.git.
+2. Run ~/agent-skills/scripts/bootstrap.sh to install dependencies, link skills, install this repo as a local Pi package, and sync third-party Pi packages.
+3. Do not overwrite existing non-symlink skill directories; if bootstrap refuses for safety, stop and explain what I need to move or back up.
+4. Show the final Pi package status, then remind me to run /reload in this Pi session.
+
+You can start with:
+
+set -euo pipefail
+if [ -d "$HOME/agent-skills/.git" ]; then
+  git -C "$HOME/agent-skills" pull --ff-only
+else
+  git clone https://github.com/tvdavies/agent-skills.git "$HOME/agent-skills" || git clone git@github.com:tvdavies/agent-skills.git "$HOME/agent-skills"
+fi
+"$HOME/agent-skills/scripts/bootstrap.sh"
+```
+
 The bootstrap script is idempotent and will:
 
 1. install this repo's npm dependencies for local extension development;
