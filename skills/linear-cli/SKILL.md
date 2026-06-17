@@ -39,6 +39,7 @@ Helper scripts are in `scripts/` within this skill directory. They accept both h
 | `triage` | Show unassigned/untriaged issues |
 | `quick-create` | Create issue with common defaults |
 | `get-issue-context` | Extract all media from an issue: screenshots, Loom video frames, transcripts |
+| `upload-attachment` | Upload a LOCAL file and attach it to an issue (handles Linear's `fileUpload` flow) |
 
 Run any script with `--help` for usage.
 
@@ -93,6 +94,28 @@ bash scripts/triage.sh TEAM
 # Quick create (use flags for options, not positional args)
 bash scripts/quick-create.sh TEAM "Title" -p 3 -a me
 ```
+
+### Step 2a: Attaching Local Files to Issues
+
+`linear-cli attachments create` can only link an **existing `--url`** — it cannot upload a
+local file. To attach a real file (markdown plan, PDF, screenshot, CSV, …) use the wrapper,
+which drives Linear's `fileUpload` GraphQL mutation:
+
+```bash
+bash scripts/upload-attachment.sh LLE-123 ./plan.md -T "Implementation plan" -s "v1"
+```
+
+Under the hood (do this manually only if the script is unavailable):
+
+1. **`fileUpload` mutation** → returns a presigned (GCS-backed) `uploadUrl`, the final
+   `uploads.linear.app` `assetUrl`, and a list of **required** `headers`
+   (e.g. `x-goog-content-length-range` locking exact byte size, and `Content-Disposition`).
+2. **`PUT` the file** to `uploadUrl` with those **exact** headers + `Content-Type` (expect HTTP 200).
+3. **`linear-cli attachments create ISSUE --title … --url <assetUrl>`** to link it.
+
+Needs `curl`, `jq`, and an API key (`LINEAR_API_KEY` or `api_key` in
+`~/.config/linear-cli/config.toml`). The mutation needs the correct byte `size` and a
+`contentType`; mismatches fail the storage `PUT`.
 
 ### Step 2b: Retrieving Visual Context from Issues
 
