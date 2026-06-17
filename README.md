@@ -18,6 +18,18 @@ The bootstrap script is idempotent and will:
 
 It refuses to overwrite existing non-symlink skill directories.
 
+To also install local Git hooks that sync the setup after future pulls:
+
+```bash
+~/agent-skills/scripts/bootstrap.sh --install-git-hooks
+```
+
+Or install only the hooks:
+
+```bash
+~/agent-skills/scripts/install-git-hooks.sh
+```
+
 ## Repository layout
 
 ```text
@@ -86,6 +98,32 @@ Install/reconcile them with:
 ```
 
 Add version pins or Git refs there if reproducibility becomes more important than easy updates.
+
+## Syncing after pulls
+
+For manual sync after pulling remote changes:
+
+```bash
+cd ~/agent-skills
+git pull
+./scripts/after-pull.sh --force
+```
+
+For automatic local sync, install Git hooks:
+
+```bash
+~/agent-skills/scripts/install-git-hooks.sh
+```
+
+The hooks run `scripts/after-pull.sh` after merge pulls and `git pull --rebase`. The sync script:
+
+- installs npm dependencies only when `package.json`, `package-lock.json`, or `node_modules` require it;
+- keeps `~/.claude/skills` and `~/.agents/skills` pointed at `~/agent-skills/skills`;
+- ensures Pi has this local checkout installed as a package;
+- runs `scripts/sync-pi-packages.sh` when `manifests/pi-packages.json` changes;
+- reminds you to run `/reload` in active Pi sessions when loaded resources changed.
+
+Git hooks cannot reload already-running Pi sessions automatically.
 
 ## Security
 

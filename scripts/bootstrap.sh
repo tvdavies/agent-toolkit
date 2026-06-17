@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+INSTALL_GIT_HOOKS=false
+if [ "${1:-}" = "--install-git-hooks" ]; then
+  INSTALL_GIT_HOOKS=true
+  shift
+fi
+
 REPO_DIR="${AGENT_TOOLS_DIR:-$HOME/agent-skills}"
 REPO_DIR="$(cd "$REPO_DIR" && pwd -P)"
 
@@ -46,5 +52,9 @@ pi install "$REPO_DIR"
 
 # Install third-party Pi packages from the manifest.
 "$REPO_DIR/scripts/sync-pi-packages.sh" --no-update
+
+if [ "$INSTALL_GIT_HOOKS" = true ]; then
+  "$REPO_DIR/scripts/install-git-hooks.sh"
+fi
 
 echo "Agent tooling bootstrap complete."
