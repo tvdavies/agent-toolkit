@@ -6,3 +6,14 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Dependencies and generated files
+node_modules/
+.env
+.env.*
+*.log
+*.local
+.credentials.json
+
+# Pi/runtime artefacts
+.pi-runs/
