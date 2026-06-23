@@ -1,9 +1,37 @@
 /**
  * Pi Dynamic Workflows extension.
  *
- * MVP: discover trusted workflow scripts, approve project scripts by content hash,
+ * Discover trusted workflow scripts, approve project scripts by content hash,
  * run workflows in the background, orchestrate isolated Pi subagents, stream compact
  * progress via status/widget, post final reports, and persist run details to disk.
+ *
+ * Three behaviours make this functionally equivalent to Claude Code's Workflow tool
+ * (see safeSendWorkflowMessage, the budget plumbing, and the session_start handler):
+ *
+ * - Wake on completion (transport, ALWAYS ON): when a background run finishes, its report
+ *   is delivered via pi.sendMessage(..., { deliverAs: "followUp", triggerTurn: true }). When
+ *   the agent is idle this triggers a fresh turn; when it is mid-stream the report rides the
+ *   tail of the current turn. The runtime checks isStreaming atomically, so there is no
+ *   idle/streaming race, and custom messages reach the LLM (convertToLlm maps them to user
+ *   content). This is the equivalent of Claude Code resuming on a task-completion
+ *   notification, and it is NOT gated on workflow mode — it fires for every run. Workflow
+ *   mode only changes how readily the agent REACHES FOR workflows (see below), exactly as
+ *   ultracode changes propensity, not the completion transport.
+ *
+ * - Shared token budget: budget.spent() pools this run's subagent output with the main
+ *   loop's output (accumulated from message_end into mainLoopOutputTokens) since the run
+ *   started; budget.remaining() is enforced — agent() throws once the per-run target
+ *   (workflow_run's `budget` param or the PI_WORKFLOW_BUDGET env var) is exhausted. Null
+ *   target => unbounded, matching Claude Code.
+ *
+ * - Guaranteed activation: session_start additively re-activates the workflow_run tool
+ *   (without clobbering other active tools) so its description + guidelines always render,
+ *   even under a --tools allowlist that would otherwise drop it.
+ *
+ * Workflow mode (/workflow-mode on, or PI_WORKFLOW_MODE) is the Pi analogue of ultracode:
+ * it injects a standing directive (buildWorkflowSystemPromptAddendum) that overrides the
+ * tool's default-to-yourself gate so substantive tasks are orchestrated by default. It is
+ * prioritisation only and never affects the wake transport.
  */
 
 import { spawn, execFile as execFileCb } from "node:child_process";
@@ -92,6 +120,10 @@ interface AgentOptions {
 	expectedOutput?: "markdown" | "json" | "text";
 	isolation?: "none" | "worktree";
 	noCache?: boolean;
+	// Progress group this agent belongs to. Lets a script attribute an agent to a named phase
+	// independently of the global phase() cursor — important inside pipeline()/parallel() stages
+	// where the global cursor races. Defaults to the run's current phase.
+	phase?: string;
 }
 
 interface AgentResult {
@@ -125,6 +157,7 @@ interface AgentRecord {
 	outputBytes?: number;
 	usage?: UsageStats;
 	cached?: boolean;
+	phase?: string;
 }
 
 interface PhaseRecord {
@@ -153,6 +186,11 @@ interface RunState {
 	error?: string;
 	runDir: string;
 	meta?: WorkflowMeta;
+	// Token budget (output tokens) for the whole run; null/undefined means unbounded.
+	budgetTotal?: number | null;
+	// mainLoopOutputTokens snapshot when the run started, so spent() counts only main-loop
+	// output produced during the run.
+	budgetBaselineOutput?: number;
 }
 
 const execFile = promisify(execFileCb);
@@ -178,6 +216,24 @@ const activeRuns = new Map<string, RunState>();
 const abortControllers = new Map<string, AbortController>();
 let lastCtx: any;
 let lastPi: ExtensionAPI | undefined;
+
+// Cumulative output tokens produced by the MAIN agent loop this session, accumulated from
+// message_end events. Combined with each run's subagent output it gives budget.spent() a
+// shared pool (main loop + workflow agents), matching Claude Code's turn-level budget.
+let mainLoopOutputTokens = 0;
+
+// Prefixed to the report when a finished background workflow is delivered back into the
+// session. The delivery WAKES the agent (triggerTurn), so the framing tells it the message
+// is an automated completion notification it should act on — not a user prompt.
+const WORKFLOW_RESULT_BANNER =
+	"[Automated background notification — NOT a user message. A workflow you launched has finished. If the task is still in progress, act on these results now (e.g. read them and launch the next phase); otherwise summarise the outcome for the user.]";
+
+function parseBudgetEnv(): number | null {
+	const raw = process.env.PI_WORKFLOW_BUDGET?.trim();
+	if (!raw) return null;
+	const n = Number(raw);
+	return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 function sha256(text: string): string {
 	return crypto.createHash("sha256").update(text).digest("hex");
@@ -296,24 +352,30 @@ async function clearWorkflowMode(): Promise<void> {
 	await fs.promises.rm(WORKFLOW_MODE_FILE, { force: true });
 }
 
-// Injected into the main agent's system prompt before each turn so it knows which saved workflows
-// and subagents are runnable, and (when mode is on) is nudged to orchestrate substantial tasks.
+// Injected into the main agent's system prompt before each turn. When workflow mode is ON this
+// carries a STANDING orchestration directive that explicitly overrides the workflow_run tool's
+// conservative default-to-yourself gate (the Pi analogue of Claude Code's ultracode mode); when
+// OFF it states the conservative default. It also lists runnable saved workflows and subagents.
 function buildWorkflowSystemPromptAddendum(cwd: string): string | null {
 	const mode = readWorkflowMode();
 	const workflows = discoverWorkflows(cwd);
 	if (!mode.enabled && workflows.length === 0) return null;
 
-	const sections: string[] = ["## Workflows (workflow_run tool)"];
+	const sections: string[] = ["## Workflow orchestration (workflow_run tool)"];
 
 	if (mode.enabled) {
 		sections.push(
-			"Workflow mode is ON. For substantive multi-step tasks that need breadth (a surface too large to cover serially), confidence (independent perspectives or adversarial verification before a risky output), or scale (more than one context can hold), prefer orchestrating with the workflow_run tool: scout the work-list inline first, then fan out. Handle trivial, mechanical, or conversational turns yourself.",
+			"Workflow mode is ON. This is a STANDING directive that OVERRIDES the workflow_run tool's default-to-yourself decision gate. For every substantive task — anything needing breadth (a surface too large to cover serially), confidence (independent perspectives or adversarial verification before a risky output), or scale (more than one context can hold) — author and run a workflow by DEFAULT instead of doing the work serially yourself. Optimise for the most thorough, correct result; token cost is not the constraint. Scout the work-list inline first (list the files, the diff, the items), then fan out; for multi-phase work run several workflows in sequence and act on each report as it arrives (the tool wakes you when each finishes). Handle only trivial, mechanical, or conversational turns inline. Prefer mode:'script' so you control the orchestration; use pipeline() by default and add an adversarial verification pass for anything risky.",
+		);
+	} else {
+		sections.push(
+			"Default to handling tasks yourself. Reach for workflow_run only when a task genuinely needs breadth, confidence, or scale that serial work cannot give. (Enable standing orchestration with /workflow-mode on.)",
 		);
 	}
 
 	const workflowLines = workflows.length
 		? workflows.map((w) => `- ${w.name} (${w.scope})`).join("\n")
-		: "- (none saved — use workflow_run mode:'script' or mode:'generate')";
+		: "- (none saved — use workflow_run mode:'script' to author one inline, or mode:'generate')";
 	sections.push(`Saved workflows (run with workflow_run mode:'saved'):\n${workflowLines}`);
 
 	try {
@@ -558,6 +620,7 @@ async function runSingleAgent(run: RunState, agentName: string, options: AgentOp
 			outputBytes: Buffer.byteLength(cached.text || "", "utf8"),
 			usage: zeroUsage(),
 			cached: true,
+			phase: options.phase ?? run.currentPhase,
 		};
 		run.agents.push(record);
 		await persistRun(run, { type: "agent_cache_hit", label: options.label, agent: agentName, cacheKey });
@@ -568,7 +631,7 @@ async function runSingleAgent(run: RunState, agentName: string, options: AgentOp
 	const agentScope = options.agentScope ?? "user";
 	const discovery = discoverAgents(options.cwd ?? run.cwd, agentScope);
 	const agent = discovery.agents.find((a) => a.name === agentName);
-	const record: AgentRecord = { label: options.label, agent: agentName, status: "running", startedAt: Date.now(), task: options.task };
+	const record: AgentRecord = { label: options.label, agent: agentName, status: "running", startedAt: Date.now(), task: options.task, phase: options.phase ?? run.currentPhase };
 	run.agents.push(record);
 	await persistRun(run, { type: "agent_start", label: options.label, agent: agentName, task: options.task, cacheKey });
 	updateUi(run);
@@ -754,6 +817,20 @@ function aggregateUsage(run: RunState): UsageStats {
 	return total;
 }
 
+// budget.spent() = output tokens spent by this run's subagents PLUS main-loop output produced
+// since the run started (a shared pool, like Claude Code). remaining() is Infinity when no
+// budget was set, otherwise max(0, total - spent).
+function workflowSpent(run: RunState): number {
+	const baseline = run.budgetBaselineOutput ?? mainLoopOutputTokens;
+	const mainLoopDelta = Math.max(0, mainLoopOutputTokens - baseline);
+	return aggregateUsage(run).output + mainLoopDelta;
+}
+
+function workflowRemaining(run: RunState): number {
+	if (run.budgetTotal == null) return Number.POSITIVE_INFINITY;
+	return Math.max(0, run.budgetTotal - workflowSpent(run));
+}
+
 async function persistRun(run: RunState, event: Record<string, unknown>): Promise<void> {
 	await fs.promises.mkdir(run.runDir, { recursive: true });
 	await appendJsonl(path.join(run.runDir, "events.jsonl"), event);
@@ -775,7 +852,9 @@ function updateUi(run: RunState): void {
 		const lines = [`Workflow ${run.name}: ${run.status}`, `Phase: ${run.currentPhase ?? "-"}`, `Agents: ${done}/${total} done, ${running} running${failed ? `, ${failed} failed` : ""}`];
 		for (const phase of run.phases.slice(-5)) {
 			const icon = phase.status === "succeeded" ? "✓" : phase.status === "running" ? "⏳" : phase.status === "failed" ? "✗" : "○";
-			lines.push(`${icon} ${phase.name}`);
+			const inPhase = run.agents.filter((a) => a.phase === phase.name);
+			const phaseDone = inPhase.filter((a) => a.status !== "running").length;
+			lines.push(`${icon} ${phase.name}${inPhase.length ? ` (${phaseDone}/${inPhase.length})` : ""}`);
 		}
 		lastCtx.ui.setWidget(EXTENSION_KEY, lines);
 	} catch {
@@ -795,9 +874,16 @@ async function clearUiIfNoActive(): Promise<void> {
 	}
 }
 
+// Deliver the final workflow report back into the session AND wake the agent to act on it.
+// triggerTurn:true triggers a fresh turn when the agent is idle; deliverAs:"followUp" makes it
+// ride the tail of an in-flight turn instead (the runtime checks isStreaming atomically, so
+// there is no idle/streaming race). Custom messages are surfaced to the LLM as user content,
+// so the woken agent sees the report. This is what lets it chain workflow phases the way
+// Claude Code resumes on a task-completion notification, rather than fire-and-forget.
 function safeSendWorkflowMessage(pi: ExtensionAPI, content: string): void {
+	const framed = `${WORKFLOW_RESULT_BANNER}\n\n${content}`;
 	try {
-		pi.sendMessage({ customType: "workflow-result", display: true, content }, { deliverAs: "followUp", triggerTurn: false });
+		pi.sendMessage({ customType: "workflow-result", display: true, content: framed }, { deliverAs: "followUp", triggerTurn: true });
 	} catch {
 		// In print mode or after session replacement the extension API may be stale.
 		// The final report remains available in the persisted run state.
@@ -940,6 +1026,9 @@ function createWorkflowGlobals(
 		if (controller.signal.aborted) return null;
 		engine.agentCount.n++;
 		if (engine.agentCount.n > MAX_AGENTS_PER_RUN) throw new Error(`Workflow exceeded the per-run agent limit (${MAX_AGENTS_PER_RUN}).`);
+		if (run.budgetTotal != null && workflowRemaining(run) <= 0) {
+			throw new Error(`Workflow exhausted its token budget (${run.budgetTotal} output tokens; spent ${workflowSpent(run)}). Gate loops on budget.remaining() to stop before this throws.`);
+		}
 		const label = typeof opts.label === "string" && opts.label.trim() ? opts.label.trim() : `agent-${++engine.labelSeq.n}`;
 		const options: AgentOptions = {
 			label,
@@ -948,6 +1037,7 @@ function createWorkflowGlobals(
 			thinking: mapEffort(opts.effort),
 			expectedOutput: opts.schema !== undefined ? "json" : "text",
 			isolation: opts.isolation === "worktree" ? "worktree" : "none",
+			phase: typeof opts.phase === "string" && opts.phase.trim() ? opts.phase.trim() : run.currentPhase,
 		};
 		await engine.semaphore.acquire();
 		let result: AgentResult;
@@ -963,7 +1053,7 @@ function createWorkflowGlobals(
 
 	return {
 		args,
-		budget: { total: null, spent: () => aggregateUsage(run).output, remaining: () => Number.POSITIVE_INFINITY },
+		budget: { total: run.budgetTotal ?? null, spent: () => workflowSpent(run), remaining: () => workflowRemaining(run) },
 		agent: runAgent,
 		async parallel(thunks) {
 			if (!Array.isArray(thunks)) throw new Error("parallel(thunks) requires an array of functions.");
@@ -1009,7 +1099,7 @@ function createWorkflowGlobals(
 	};
 }
 
-async function startRun(pi: ExtensionAPI, workflowFile: WorkflowFile, args: string, ctx: any, options?: { reuseFrom?: RunState }): Promise<RunState> {
+async function startRun(pi: ExtensionAPI, workflowFile: WorkflowFile, args: string, ctx: any, options?: { reuseFrom?: RunState; budget?: number | null }): Promise<RunState> {
 	lastCtx = ctx;
 	lastPi = pi;
 	const source = await fs.promises.readFile(workflowFile.path, "utf8");
@@ -1018,7 +1108,8 @@ async function startRun(pi: ExtensionAPI, workflowFile: WorkflowFile, args: stri
 	const id = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
 	const runDir = path.join(runBaseDir(ctx.cwd), id);
 	const inheritedCache = options?.reuseFrom?.hash === workflowFile.hash && options.reuseFrom.args === args ? options.reuseFrom.agentCache : undefined;
-	const run: RunState = { id, name, workflowPath: workflowFile.path, scope: workflowFile.scope, hash: workflowFile.hash, cwd: ctx.cwd, args, status: "pending", startedAt: Date.now(), phases: [], agents: [], agentCache: inheritedCache ? { ...inheritedCache } : {}, runDir, meta: compiled.meta };
+	const budgetTotal = options?.budget != null && Number.isFinite(options.budget) && options.budget > 0 ? options.budget : parseBudgetEnv();
+	const run: RunState = { id, name, workflowPath: workflowFile.path, scope: workflowFile.scope, hash: workflowFile.hash, cwd: ctx.cwd, args, status: "pending", startedAt: Date.now(), phases: [], agents: [], agentCache: inheritedCache ? { ...inheritedCache } : {}, runDir, meta: compiled.meta, budgetTotal, budgetBaselineOutput: mainLoopOutputTokens };
 	const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "";
 	const knownAgents = new Set<string>(safeDiscoverAgentNames(ctx.cwd));
 	await fs.promises.mkdir(runDir, { recursive: true });
@@ -1045,7 +1136,8 @@ async function startRun(pi: ExtensionAPI, workflowFile: WorkflowFile, args: stri
 			run.endedAt = Date.now();
 			await persistRun(run, { type: "run_end", status: run.status, reportBytes: Buffer.byteLength(run.report, "utf8") });
 			const usage = aggregateUsage(run);
-			safeSendWorkflowMessage(pi, `# Workflow complete: ${run.name}\n\n${run.report}\n\n---\nRun: ${run.id}\nAgents: ${run.agents.length}\nUsage: ${usage.turns} turns, $${usage.cost.toFixed(4)}\nDetails: ${run.runDir}`);
+			const budgetNote = run.budgetTotal != null ? ` (budget ${workflowSpent(run)}/${run.budgetTotal} output tokens)` : "";
+			safeSendWorkflowMessage(pi, `# Workflow complete: ${run.name}\n\n${run.report}\n\n---\nRun: ${run.id}\nAgents: ${run.agents.length}\nUsage: ${usage.turns} turns, ${usage.output} output tokens${budgetNote}, $${usage.cost.toFixed(4)}\nDetails: ${run.runDir}`);
 		} catch (error: any) {
 			run.status = controller.signal.aborted ? "cancelled" : "failed";
 			closeOpenPhase(run, run.status);
@@ -1159,7 +1251,7 @@ function workflowRunDetails(run: RunState, agentLabel?: string): string {
 		].join("\n");
 	}
 	const phaseLines = run.phases.length ? run.phases.map((p) => `- ${p.name}: ${p.status} (${formatDuration((p.endedAt ?? Date.now()) - p.startedAt)})`).join("\n") : "(none)";
-	const agentLines = run.agents.length ? run.agents.map((a) => `- ${a.label} (${a.agent}): ${a.status}${a.cached ? " cached" : ""} ${a.usage ? `$${a.usage.cost.toFixed(4)}` : ""}`).join("\n") : "(none)";
+	const agentLines = run.agents.length ? run.agents.map((a) => `- ${a.label} (${a.agent})${a.phase ? ` [${a.phase}]` : ""}: ${a.status}${a.cached ? " cached" : ""} ${a.usage ? `$${a.usage.cost.toFixed(4)}` : ""}`).join("\n") : "(none)";
 	return [
 		`Workflow: ${run.name}`,
 		`Run: ${run.id}`,
@@ -1180,39 +1272,63 @@ function workflowRunDetails(run: RunState, agentLabel?: string): string {
 	].join("\n");
 }
 
-const FLOW_GENERATOR_SYSTEM_PROMPT = `You generate workflow scripts for a deterministic multi-agent orchestrator. The script fans work out across many bounded-concurrency subagents.
-
-Return exactly one JavaScript module, no prose, no code fence.
+// The authoring contract for a workflow script. Shared by BOTH the inline-authoring path
+// (folded into the workflow_run tool description, so the orchestrating agent sees it whenever
+// it writes a mode:'script' workflow) AND the generate-mode system prompt — so a hand-written
+// script and a generated one obey exactly the same rules and patterns.
+const WORKFLOW_AUTHORING_GUIDE = `A workflow script is plain JavaScript (NOT TypeScript — no type annotations, interfaces, or generics; they fail to parse). It ONLY orchestrates: every repository, shell, file, and web action happens inside agent() subagents, never in the script body.
 
 Required shape:
-- Begin with: export const meta = { name, description, phases } — a PURE object literal (no variables, calls, or interpolation). name is stable kebab-case; phases is an array of { title } in run order.
-- After meta, write the orchestration body directly using the injected globals. Top-level await and a top-level return are allowed; the value you return becomes the workflow report (return a markdown string, or an object that will be rendered as JSON).
-- The script only ORCHESTRATES; all repository, tool, and web work happens inside agent() subagents.
+- Begin with: export const meta = { name, description, phases } — a PURE object literal (no variables, function calls, spreads, or template interpolation). name is stable kebab-case; description is one line; phases is an array of { title } in run order.
+- After meta, write the orchestration body directly using the injected globals. Top-level await and a top-level return are allowed; the value you return becomes the report (return a markdown string, or an object that is rendered as JSON).
 
-Injected globals (do not import anything):
-- agent(prompt, opts?) -> Promise<string | object | null>. opts: { label, phase, schema, model, effort, agentType, isolation }. With a schema (a JSON Schema object) it returns the parsed JSON value; otherwise the agent's final text. Returns null if the agent fails.
-- parallel(thunks) -> Promise<any[]>. Runs an array of () => Promise thunks concurrently and awaits them all (a barrier). A failed thunk becomes null.
-- pipeline(items, stage1, stage2, ...) -> Promise<any[]>. Runs each item through all stages independently with NO barrier between stages; each stage receives (prevResult, originalItem, index).
+Injected globals (do NOT import anything — these are already in scope):
+- agent(prompt, opts?) -> Promise<string | object | null>. Spawns ONE bounded-concurrency subagent. opts: { label, phase, schema, model, effort, agentType, isolation }. With a JSON-Schema 'schema' it returns the parsed JSON value; otherwise the agent's final text. Returns null if the agent fails (filter results with .filter(Boolean)).
+- parallel(thunks) -> Promise<any[]>. Runs an array of () => Promise thunks concurrently and awaits them ALL (a barrier). A failed thunk becomes null. Use ONLY when you genuinely need every result together.
+- pipeline(items, stage1, stage2, ...) -> Promise<any[]>. Runs each item through all stages independently with NO barrier between stages; each stage receives (prevResult, originalItem, index). Wall-clock is the slowest single item, not the sum of stages. THIS IS THE DEFAULT for multi-stage work.
 - phase(title) -> mark the start of a named phase (use titles from meta.phases).
-- log(message) -> emit progress.
-- args -> the parsed workflow arguments.
-- budget -> { total, spent(), remaining() } (total is null unless a token budget was set).
+- log(message) -> emit a progress line.
+- args -> the parsed workflow arguments (a JSON value, or undefined).
+- budget -> { total, spent(), remaining() }. total is the caller's output-token target (null when none was set). spent() = output tokens spent so far across this run's subagents AND the main loop. remaining() = max(0, total - spent()) or Infinity. Once exhausted, further agent() calls THROW — so gate loops on it: while (budget.total && budget.remaining() > 50000) { ... }.
 - workflow(nameOrRef, args?) -> run a saved workflow by name (or { scriptPath }) inline as a sub-step and return its result. Nesting is one level only.
 
-agentType selects the subagent: default "delegate" (general-purpose, inherits project context and the parent model); specialists "scout" (fast read-only recon), "researcher" (web research), "reviewer" (critique/verification), "planner", "oracle". Prefer delegate unless a specialist clearly fits. effort maps to thinking depth (low|medium|high|xhigh|max). isolation:"worktree" gives a file-mutating agent its own git worktree.
+agentType selects the subagent (these are real Pi subagents): default "delegate" (general-purpose, inherits project context and the parent model). Specialists: "scout" (fast read-only recon), "researcher" (web/docs research), "planner" (read-and-plan, no edits), "reviewer" (critique/verification), "worker" (implementation/edits), "oracle" (second opinion / challenge assumptions), "context-builder". Claude-style aliases also map (general-purpose/general->delegate, explore/search->scout, code-reviewer/review->reviewer, plan->planner, research->researcher). Prefer delegate unless a specialist clearly fits. effort maps to thinking depth (low|medium|high|xhigh|max). isolation:"worktree" gives a file-mutating agent its own git worktree.
 
 Orchestration patterns — pick what the task needs:
-- Pipeline by default: pipeline(items, (prev, item) => agent("find ... " + item), (found) => agent("Verify this finding: " + found, { agentType: "reviewer" })). Each item flows through its stages independently; wall-clock is the slowest single item, not the sum of stages.
+- Pipeline by default: pipeline(items, (prev, item) => agent("find ... " + item), (found) => agent("Verify this finding: " + found, { agentType: "reviewer" })). Each item flows through its stages independently; verification of item A overlaps discovery of item B.
 - Barrier only when a stage needs the whole set: collect with await parallel([...]) before the next stage ONLY to dedup/merge across items, early-exit on a zero count, or compare items. Otherwise keep stages inside pipeline.
 - Adversarial verify: for audits, research, plans, or risky outputs, add a verification phase that spawns independent skeptics (or distinct lenses such as correctness, security, reproduction) prompted to REFUTE each finding; keep only findings that survive a majority, defaulting to rejection when uncertain.
 - Judge panel: for design or decision tasks, generate N independent attempts from different angles, score with parallel judges, synthesize from the winner.
 - Loop until dry: for unknown-size discovery, keep spawning finders until K consecutive rounds surface nothing new (dedup against everything seen). Never silently cap at top-N; if you must cap, log() what was dropped.
+- Loop until budget: while (budget.total && budget.remaining() > 50000) { ... } to scale depth to the caller's token target.
 
 Scale to the goal: a quick check needs a few agents and one verification pass; "thorough", "comprehensive", or "audit" needs a larger finder pool, a 3-5 way adversarial pass, and a final synthesis stage.
 
-Hard constraints:
-- import nothing; only export const meta.
-- do not use require, process, fetch, eval, dynamic import, Date.now(), Math.random(), or argless new Date(). Vary agent prompts and labels by index instead of relying on randomness.`;
+Hard constraints (the script is validated and REJECTED if violated):
+- import nothing; only 'export const meta' may be exported.
+- do not use require, process, fetch, eval, Function, dynamic import(), Date.now(), Math.random(), or argless new Date() (they break deterministic replay). Vary agent prompts and labels by index instead of relying on randomness; pass timestamps via args.
+- a single parallel()/pipeline() call accepts at most 4096 items; concurrency is capped automatically.`;
+
+// Always-present description for the workflow_run tool. Folds in the authoring contract so the
+// orchestrating agent is fully scaffolded when it writes a script inline (mode:'script') —
+// instead of only seeing the contract in generate mode.
+const WORKFLOW_RUN_DESCRIPTION = `Run a multi-subagent workflow in the background. A workflow decomposes a task across many bounded-concurrency Pi subagents for one of three reasons: BREADTH (cover a surface too large to read serially), CONFIDENCE (independent perspectives or adversarial verification before a risky output), or SCALE (more work than one agent's context can hold) — e.g. broad codebase audits, large migrations, cross-checked research, exhaustive multi-dimension reviews.
+
+Modes:
+- 'script' (preferred for one-offs): you author the orchestration inline as a JavaScript workflow script (see the authoring contract below). You control the structure.
+- 'saved': run a known workflow by name.
+- 'generate': a script is written from a natural-language goal and a human approves it.
+
+Background + wake semantics: this tool returns IMMEDIATELY with a run id. The workflow runs in the background; when it finishes its report is delivered back into this session and WAKES you (an idle agent gets a fresh turn; an in-flight turn gets the report appended to its tail) so you can read the results and launch the next phase — exactly like resuming on a task-completion notification. Do NOT block waiting on it, and do NOT re-run the same workflow to "check" on it; inspect progress with /workflows or /workflow-show. For multi-phase work (understand -> design -> implement -> review), run several workflows in sequence, acting on each report as it arrives.
+
+Decision gate: a workflow spends real tokens across many agents. Reach for it when breadth, confidence, or scale genuinely change the outcome; for anything a single agent can finish inline in this session, do it directly — UNLESS workflow mode is on, in which case orchestrate substantive tasks by default (the standing workflow-mode directive overrides this gate). Either way: scout the work-list inline first (list the files, the diff, the items), THEN fan out.
+
+--- Workflow script authoring contract (modes 'script' and 'generate') ---
+${WORKFLOW_AUTHORING_GUIDE}`;
+
+const FLOW_GENERATOR_SYSTEM_PROMPT = `You generate workflow scripts for a deterministic multi-agent orchestrator that fans work out across many bounded-concurrency subagents. Return exactly ONE JavaScript module, no prose, no code fence.
+
+${WORKFLOW_AUTHORING_GUIDE}`;
 
 function extractGeneratedScript(text: string): string {
 	const fence = text.match(/```(?:ts|typescript|js|javascript)?\s*([\s\S]*?)```/i);
@@ -1295,9 +1411,10 @@ const WorkflowRunParams = Type.Object({
 	mode: StringEnum(["saved", "generate", "script"] as const, { description: "Run a saved workflow, generate one from a goal, or run a provided script." }),
 	name: Type.Optional(Type.String({ description: "Workflow name for saved mode" })),
 	goal: Type.Optional(Type.String({ description: "Natural-language goal for generate mode" })),
-	script: Type.Optional(Type.String({ description: "Workflow TypeScript source for script mode" })),
+	script: Type.Optional(Type.String({ description: "Workflow JavaScript source for script mode (plain JS, not TypeScript; see the tool description's authoring contract)" })),
 	args: Type.Optional(Type.String({ description: "Raw workflow arguments" })),
 	save: Type.Optional(Type.Boolean({ description: "Save generated/script workflow to the user workflow directory before running", default: false })),
+	budget: Type.Optional(Type.Number({ description: "Optional output-token target for the whole run. When set, budget.remaining() drives the script's loops and agent() throws once exhausted. Falls back to the PI_WORKFLOW_BUDGET env var." })),
 	requireApproval: Type.Optional(Type.Boolean({ default: true })),
 });
 
@@ -1306,11 +1423,34 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		lastCtx = ctx;
+		mainLoopOutputTokens = 0;
+		// Registered tools auto-activate on a normal startup, but a --tools allowlist (or another
+		// extension narrowing the active set) can drop workflow_run, which silently hides its
+		// description + guidelines. Defensively re-add it without clobbering other active tools.
+		try {
+			const active = pi.getActiveTools();
+			if (!active.includes("workflow_run")) pi.setActiveTools([...new Set([...active, "workflow_run"])]);
+		} catch {
+			// Best-effort: if the host narrowed tools deliberately or the API is unavailable, skip.
+		}
 		const interrupted = listPersistedRuns(ctx.cwd).filter((r) => r.status === "running" || r.status === "pending");
 		for (const run of interrupted) {
 			run.status = "interrupted";
 			run.endedAt = Date.now();
 			await persistRun(run, { type: "run_interrupted", reason: "session_start" });
+		}
+	});
+
+	// Accumulate the MAIN agent loop's output tokens so a workflow's budget.spent() reflects a
+	// shared pool (main loop + its subagents), matching Claude Code's turn-level budget.
+	pi.on("message_end", async (event) => {
+		try {
+			const msg = (event as { message?: { role?: string; usage?: { output?: number } } }).message;
+			if (msg?.role === "assistant" && typeof msg.usage?.output === "number") {
+				mainLoopOutputTokens += msg.usage.output;
+			}
+		} catch {
+			// Budget accounting is best-effort; never disrupt the turn.
 		}
 	});
 
@@ -1425,8 +1565,8 @@ export default function (pi: ExtensionAPI) {
 				else if (detail.startsWith("Check patch: ")) ctx.ui.notify(await applyWorkflowPatch(run, detail.slice("Check patch: ".length), ctx.cwd, true), "info");
 				else if (detail.startsWith("Apply patch: ")) ctx.ui.notify(await applyWorkflowPatch(run, detail.slice("Apply patch: ".length), ctx.cwd, false), "info");
 				else if (detail === "Stop run") abortControllers.get(run.id)?.abort();
-				else if (detail === "Rerun fresh") await startRun(pi, { name: run.name, path: path.join(run.runDir, "script.ts"), scope: "user", hash: run.hash }, run.args, ctx);
-				else if (detail === "Rerun with cache reuse") await startRun(pi, { name: run.name, path: path.join(run.runDir, "script.ts"), scope: "user", hash: run.hash }, run.args, ctx, { reuseFrom: run });
+				else if (detail === "Rerun fresh") await startRun(pi, { name: run.name, path: path.join(run.runDir, "script.ts"), scope: "user", hash: run.hash }, run.args, ctx, { budget: run.budgetTotal ?? undefined });
+				else if (detail === "Rerun with cache reuse") await startRun(pi, { name: run.name, path: path.join(run.runDir, "script.ts"), scope: "user", hash: run.hash }, run.args, ctx, { reuseFrom: run, budget: run.budgetTotal ?? undefined });
 				else if (detail === "Save script to user workflows") {
 					await fs.promises.mkdir(USER_WORKFLOW_DIR, { recursive: true });
 					const target = path.join(USER_WORKFLOW_DIR, `${safeName(run.name)}.ts`);
@@ -1567,7 +1707,7 @@ export default function (pi: ExtensionAPI) {
 			const source = await fs.promises.readFile(scriptPath, "utf8");
 			const wf: WorkflowFile = { name: prior.name, path: scriptPath, scope: "user", hash: sha256(source) };
 			const reuseFrom = mode === "reuse" ? prior : undefined;
-			const next = await startRun(pi, wf, prior.args, ctx, { reuseFrom });
+			const next = await startRun(pi, wf, prior.args, ctx, { reuseFrom, budget: prior.budgetTotal ?? undefined });
 			ctx.ui.notify(`Rerunning workflow ${next.name} (${next.id})${reuseFrom ? " with cache reuse" : ""}.`, "info");
 		},
 	});
@@ -1630,22 +1770,16 @@ return "## Smoke test results\\n\\n" + results.map((r, i) => "### agent " + (i +
 	pi.registerTool({
 		name: "workflow_run",
 		label: "Workflow Run",
-		description:
-			"Run a multi-subagent workflow in the background. A workflow decomposes a task across many bounded-concurrency Pi subagents for breadth (cover a large surface in parallel), confidence (independent perspectives and adversarial verification before a risky output), or scale (more work than one agent's context can hold) — e.g. broad codebase audits, large migrations, cross-checked research, exhaustive multi-dimension reviews. Modes: 'saved' runs a known workflow by name, 'script' runs an orchestration script you author inline (Claude Code workflow format: `export const meta` + agent/pipeline/parallel/phase globals), 'generate' writes a script from a natural-language goal. Returns immediately with a run id; the final report arrives later as a follow-up message. Prefer doing the work yourself for anything a single agent can finish in this session — launch a workflow only when fan-out, independent verification, or scale genuinely change the outcome.",
+		description: WORKFLOW_RUN_DESCRIPTION,
 		parameters: WorkflowRunParams,
 		promptSnippet:
-			"Background multi-agent orchestration (saved/script/generated) for breadth, independent verification, or scale — audits, migrations, cross-checked research, exhaustive reviews; not for work one agent can finish inline.",
+			"Run a background multi-agent workflow (script/saved/generate) for breadth, independent verification, or scale — audits, migrations, cross-checked research, exhaustive reviews. Returns a run id and wakes you with the report when it finishes.",
 		promptGuidelines: [
-			"Decision gate: default to handling tasks yourself. Reach for workflow_run only when the task needs breadth (a surface too large to cover serially), confidence (independent perspectives or adversarial verification before a risky output), or scale (more than one context can hold). If a single agent can finish it in this session, do it directly — do not launch a workflow merely because a task could be parallelised.",
-			"Scout, then orchestrate: discover the work-list inline first (list the files, the diff, the items), then launch a workflow to fan out over it. You don't need to know the shape before the task — only before the orchestration step.",
-			"Scale to the ask: 'find any bugs' → a few finders and one verification pass; 'thoroughly audit' or 'be comprehensive' → a larger finder pool, a 3-5 way adversarial verification pass, then a synthesis stage.",
-			"Mode choice: use mode:'saved' for a known workflow by name; mode:'script' when you can author the orchestration directly (preferred for one-offs — you control the structure); mode:'generate' when you want a script written from a goal and a human can approve it.",
-			"Background semantics: workflow_run returns a run id and the report arrives later as a follow-up. Don't block waiting on it and don't re-run the same workflow to 'check' on it — inspect progress with /workflows or /workflow-show.",
-			"Author pipelines by default: structure multi-stage work as pipeline(items, item => agent('...'), found => agent('Verify this', { agentType: 'reviewer' })). Each item flows through all its stages independently with bounded concurrency — no barrier between stages.",
-			"Use a barrier only when a stage needs the whole set at once (dedup/merge across items, a zero-count early exit, or cross-item comparison): collect with await parallel([...]) before the next stage. Otherwise keep stages inside pipeline.",
-			"Verify adversarially: for audits, research, plans, or risky outputs, add a verification stage that spawns independent skeptics (or distinct lenses — correctness, security, reproduction) prompted to refute each finding, and keep only those that survive a majority.",
-			"Converge, don't truncate: for unknown-size discovery, loop until K consecutive rounds find nothing new rather than capping at top-N; if you must cap, log() what was dropped. End by returning the report value (a markdown string or an object).",
-			"Agents and cost: use stable unique labels and bounded concurrency. Default agent is 'delegate'; use 'reviewer' for verification, 'researcher' for web research, 'scout' for fast read-only recon. Workflows spend real tokens across many agents — scope them to what the request justifies.",
+			"workflow_run fans a task out across many bounded-concurrency subagents and reports back asynchronously; it WAKES you when done (idle -> new turn; streaming -> appended to the turn's tail), so you can read the results and chain the next phase. Do not block on it or re-run it to check progress (use /workflows).",
+			"Decision gate: reach for it when a task needs breadth (too large to cover serially), confidence (independent or adversarial verification), or scale (more than one context can hold). For work a single agent can finish inline, do it directly — UNLESS workflow mode is on, in which case orchestrate substantive tasks by default. Scout the work-list inline first, then fan out.",
+			"Prefer mode:'script' for one-offs — author the orchestration directly (the full authoring contract is in this tool's description). Use pipeline() by default; use a barrier (parallel) only when a stage needs the whole set (dedup/merge, zero-count early exit, cross-item compare).",
+			"Verify adversarially for audits/research/plans/risky outputs: spawn independent skeptics or distinct lenses (correctness, security, reproduction) prompted to refute each finding, keep only those that survive a majority. Converge (loop until dry / until budget) rather than silently capping at top-N.",
+			"Scale to the ask: a quick check = a few finders + one verification pass; 'thorough'/'comprehensive'/'audit' = a larger finder pool, a 3-5 way adversarial pass, then a synthesis stage. Pass a token budget for large runs; gate loops on budget.remaining().",
 		],
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			let wf: WorkflowFile | undefined;
@@ -1685,7 +1819,7 @@ return "## Smoke test results\\n\\n" + results.map((r, i) => "### agent " + (i +
 				const ok = await ctx.ui.confirm("Run generated workflow?", `Workflow: ${wf.name}\nPath: ${wf.path}\n\nGenerated/script workflows run with your permissions. Only continue if you trust the script.`);
 				if (!ok) return { content: [{ type: "text", text: "Workflow not approved." }], isError: true };
 			}
-			const run = await startRun(pi, wf, params.args ?? "", ctx);
+			const run = await startRun(pi, wf, params.args ?? "", ctx, { budget: params.budget });
 			return { content: [{ type: "text", text: `Started workflow ${run.name} (${run.id}). Details: ${run.runDir}` }], details: run };
 		},
 	});
