@@ -3,6 +3,7 @@
     "git:github.com/joelhooks/pi-skill-interpolation",
     "npm:@diegopetrucci/pi-openai-fast",
     "npm:pi-interactive-shell",
-    "npm:pi-subagents"
+    "npm:pi-subagents",
+    "npm:pi-token-speed"
   ]
 }
