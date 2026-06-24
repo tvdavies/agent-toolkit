@@ -9,6 +9,8 @@ Thumbs.db
 
 # Dependencies and generated files
 node_modules/
+# Bun is used for local dev/tests; package-lock.json is the canonical install lock.
+bun.lock
 .env
 .env.*
 *.log

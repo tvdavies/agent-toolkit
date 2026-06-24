@@ -8,6 +8,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
+import { recordDecision } from "./lib/decisions";
+import { notify } from "./lib/notify";
 
 const GOAL_SET_TYPE = "goal-set";
 const GOAL_STATUS_TYPE = "goal-status";
@@ -462,6 +464,16 @@ Goal metadata:
 				};
 			}
 			const updated = setStatus(params.status, params.summary);
+			if (updated) {
+				const summary = `Goal ${params.status}: ${updated.objective}${params.summary ? ` — ${params.summary.trim()}` : ""}`;
+				if (params.status === "blocked") {
+					// A blocked goal is the headless escalation notice: record + push
+					// (rate-limited) through the notify channel.
+					notify({ summary, kind: "escalate", source: "goal", detail: { goalId: updated.id } });
+				} else {
+					recordDecision({ kind: "goal-complete", summary, source: "goal", detail: { goalId: updated.id } });
+				}
+			}
 			return {
 				content: [{ type: "text", text: updated ? goalSummary(updated) : "No goal is set." }],
 				details: { ok: true, goal: updated ?? null },
