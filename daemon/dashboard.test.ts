@@ -21,7 +21,7 @@ beforeEach(async () => {
 	dash = new Dashboard({
 		enqueue: (t) => enqueued.push(t),
 		statusPath: join(dir, "status.json"),
-		cronJobs: () => [{ id: "heartbeat", schedule: "*/30 * * * *", description: "Heartbeat" }],
+		cronJobs: () => [{ id: "heartbeat", schedule: "*/5 * * * *", description: "Heartbeat" }],
 		port: 0,
 	});
 	port = await dash.start();

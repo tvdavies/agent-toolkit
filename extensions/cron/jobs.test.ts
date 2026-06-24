@@ -17,7 +17,7 @@ describe("CronJobStore", () => {
 	it("starts empty and seeds the default heartbeat job", () => {
 		expect(store.list()).toEqual([]);
 		expect(store.seedDefaults()).toEqual(["heartbeat"]);
-		expect(store.get("heartbeat")?.schedule).toBe("*/30 * * * *");
+		expect(store.get("heartbeat")?.schedule).toBe("*/5 * * * *");
 		// Seeding again is a no-op.
 		expect(store.seedDefaults()).toEqual([]);
 	});

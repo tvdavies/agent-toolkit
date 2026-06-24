@@ -35,10 +35,10 @@ export function defaultJobs(): CronJob[] {
 	return [
 		{
 			id: "heartbeat",
-			schedule: "*/30 * * * *",
+			schedule: "*/5 * * * *",
 			text: buildHeartbeatPrompt(),
 			source: "cron:heartbeat",
-			description: "Heartbeat check (every 30 min)",
+			description: "Heartbeat check (every 5 min)",
 		},
 	];
 }

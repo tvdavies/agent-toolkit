@@ -66,7 +66,7 @@ Bundled example workflow patterns currently include `auth-audit`, `codebase-audi
   the daemon forwards to the resident agent. The prompt text lives in the jobs
   store, so cron lines stay quoting-free. Installation is deferred — `/cron print`
   renders the crontab for you to apply with `crontab <file>`.
-- The default cron job is the **heartbeat** (every 30 min). When it runs,
+- The default cron job is the **heartbeat** (every 5 min). When it runs,
   `heartbeat/` injects `HEARTBEAT.md` + the silence rule, lists already-handled
   items so nothing is re-flagged, and escalates only what needs attention.
 
