@@ -18,6 +18,8 @@ const cfg: ProvisionConfig = {
 	envFile: "/home/tom/.config/agent-toolkit/serve.env",
 	model: "anthropic/claude-opus-4-8",
 	user: "tom",
+	nodeBinDir: "/home/tom/.nvm/v24/bin",
+	piBin: "/home/tom/.nvm/v24/bin/pi",
 };
 
 describe("renderEnvFile", () => {
@@ -26,6 +28,8 @@ describe("renderEnvFile", () => {
 		expect(out).toContain("export AGENT_TOOLKIT_STATE_DIR=/home/tom/.local/state/agent-toolkit");
 		expect(out).toContain("export AGENT_TOOLKIT_BRAIN_ROOT=/home/tom/.local/share/agent-toolkit/brain");
 		expect(out).toContain("export AGENT_TOOLKIT_MODEL=anthropic/claude-opus-4-8");
+		expect(out).toContain("export PATH=/home/tom/.nvm/v24/bin:$PATH");
+		expect(out).toContain("export AGENT_TOOLKIT_PI_BIN=/home/tom/.nvm/v24/bin/pi");
 		expect(out).toContain("# export SLACK_APP_TOKEN=");
 	});
 });

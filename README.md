@@ -4,10 +4,26 @@ Personal agent toolkit shared across machines: Agent Skills, custom Pi extension
 
 ## Fresh machine setup
 
+One command does the lot — package setup, the resident-agent daemon as a
+`systemd --user` service, a heartbeat timer, and lingering:
+
 ```bash
 git clone git@github.com:tvdavies/agent-toolkit.git ~/agent-toolkit
-~/agent-toolkit/scripts/bootstrap.sh
+~/agent-toolkit/scripts/install.sh
 ```
+
+Or extensions only, with no background services:
+
+```bash
+~/agent-toolkit/scripts/install.sh --no-service     # then /reload in Pi
+```
+
+`install.sh` is idempotent and re-runnable. It needs no secrets to start; add
+Slack tokens or a spend cap to `~/.config/agent-toolkit/serve.env` (kept
+`chmod 600`) afterwards and `systemctl --user restart agent-toolkit.service`.
+The autonomous system is documented in [`docs/architecture.md`](docs/architecture.md)
+and [`bin/README.md`](bin/README.md). The lower-level `scripts/bootstrap.sh`
+does just the package setup (no services).
 
 ### Copy-paste install prompt for an existing Pi session
 

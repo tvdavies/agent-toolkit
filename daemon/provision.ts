@@ -27,15 +27,24 @@ export type ProvisionConfig = {
 	model?: string;
 	/** Service user (for documentation of enable-linger). */
 	user?: string;
+	/** Bin dir to prepend to PATH so the service finds node/pi (e.g. an nvm dir). */
+	nodeBinDir?: string;
+	/** Absolute path to the pi binary, for AGENT_TOOLKIT_PI_BIN under systemd. */
+	piBin?: string;
 };
 
 const MEMORY_MAX = "8G";
 
 /** Environment exports written to the per-instance env file (no secrets here). */
 export function renderEnvFile(cfg: ProvisionConfig): string {
-	return [
+	const lines = [
 		`# ${cfg.instance} environment — sourced by the launcher.`,
 		`# Mode 0600, owned by the service user. Put real secrets below the marker.`,
+	];
+	// Make node/pi resolvable under systemd (PATH is minimal there).
+	if (cfg.nodeBinDir) lines.push(`export PATH=${cfg.nodeBinDir}:$PATH`);
+	if (cfg.piBin) lines.push(`export AGENT_TOOLKIT_PI_BIN=${cfg.piBin}`);
+	lines.push(
 		`export AGENT_TOOLKIT_STATE_DIR=${cfg.stateDir}`,
 		`export AGENT_TOOLKIT_BRAIN_ROOT=${cfg.brainRoot}`,
 		`export AGENT_TOOLKIT_SESSION_DIR=${cfg.sessionDir}`,
@@ -44,8 +53,12 @@ export function renderEnvFile(cfg: ProvisionConfig): string {
 		`# --- secrets (Phase 3+) ---`,
 		`# export SLACK_APP_TOKEN=xapp-...`,
 		`# export SLACK_BOT_TOKEN=xoxb-...`,
+		`# export SLACK_ALLOWED_USERS=U0123,U4567`,
+		`# export SLACK_NOTIFY_CHANNEL=...`,
+		`# export AGENT_TOOLKIT_DAILY_CAP_USD=20`,
 		``,
-	].join("\n");
+	);
+	return lines.join("\n");
 }
 
 /** Launcher script: verify env-file permissions, source it, exec the daemon. */

@@ -18,7 +18,7 @@
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { CronJobStore } from "../extensions/cron/jobs.ts";
 import { recordDecision, stateDir } from "../extensions/lib/decisions.ts";
 import { notify } from "../extensions/lib/notify.ts";
@@ -63,6 +63,10 @@ function provisionConfig(): ProvisionConfig {
 		envFile: join(homedir(), ".config", instance, "serve.env"),
 		model,
 		user: process.env.USER,
+		// Bake node/pi paths into the env file so the service works under systemd
+		// (where PATH is minimal). Assumes node + pi share a bin dir (nvm/volta/asdf).
+		nodeBinDir: dirname(process.execPath),
+		piBin: process.env.AGENT_TOOLKIT_PI_BIN ?? join(dirname(process.execPath), "pi"),
 	};
 }
 
@@ -255,7 +259,10 @@ function runDaemon(): void {
 		`[toolkit-daemon] started (instance=${instance}, slack=${slack ? "on" : "off"}, webhook=${webhook ? "on" : "off"}, dashboard=on, spendCap=${dailyCapUsd > 0 ? `$${dailyCapUsd}` : "off"})`,
 	);
 
+	let shuttingDown = false;
 	const shutdown = async () => {
+		if (shuttingDown) return;
+		shuttingDown = true;
 		console.error("[toolkit-daemon] shutting down…");
 		if (spendTimer) clearInterval(spendTimer);
 		notifyWatcher?.stop();
