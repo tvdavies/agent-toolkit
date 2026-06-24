@@ -12,10 +12,16 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { FileInbox } from "../daemon/inbox.ts";
 import { CronJobStore } from "../extensions/cron/jobs.ts";
+import {
+	type GateVerdict,
+	type HeartbeatGateState,
+	parseHoursWindow,
+	shouldRunHeartbeat,
+} from "../extensions/heartbeat/schedule-gate.ts";
 import { stateDir } from "../extensions/lib/decisions.ts";
 
 type Args = {
@@ -68,6 +74,52 @@ function createTaduTask(text: string): string | undefined {
 	}
 }
 
+function readJson(path: string): unknown {
+	if (!existsSync(path)) return null;
+	try {
+		return JSON.parse(readFileSync(path, "utf8"));
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Minimum minutes between heartbeats. Explicit env wins; otherwise default to
+ * hourly when the daemon detected an Anthropic/Claude model (mirrors OpenClaw's
+ * subscription back-off), else 30 minutes.
+ */
+function heartbeatMinIntervalMin(): number {
+	const env = Number(process.env.AGENT_TOOLKIT_HEARTBEAT_MIN_MINUTES);
+	if (Number.isFinite(env) && env >= 0) return Math.floor(env); // 0 disables gating
+	const authMode = (readJson(join(stateDir(), "agent-state.json")) as { authMode?: string } | null)?.authMode;
+	return authMode === "anthropic" ? 60 : 30;
+}
+
+/** Gate a heartbeat: enforce the min interval + optional active-hours window. */
+function heartbeatGate(): GateVerdict {
+	const state = (readJson(join(stateDir(), "heartbeat-gate.json")) as HeartbeatGateState | null) ?? {
+		lastRunMs: 0,
+	};
+	return shouldRunHeartbeat(
+		state,
+		{
+			minIntervalMin: heartbeatMinIntervalMin(),
+			activeHours: parseHoursWindow(process.env.AGENT_TOOLKIT_HEARTBEAT_HOURS),
+		},
+		new Date(),
+	);
+}
+
+function recordHeartbeatRun(now: number): void {
+	const path = join(stateDir(), "heartbeat-gate.json");
+	try {
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, JSON.stringify({ lastRunMs: now }), "utf8");
+	} catch {
+		// best-effort
+	}
+}
+
 /** Resolve a cron job's prompt from the store and queue it (no TADU task). */
 function runCronJob(id: string): void {
 	const store = new CronJobStore();
@@ -80,8 +132,17 @@ function runCronJob(id: string): void {
 		console.error(`unknown cron job: ${id}`);
 		process.exit(1);
 	}
+	// The heartbeat enforces its own effective cadence regardless of the timer.
+	if (id === "heartbeat") {
+		const verdict = heartbeatGate();
+		if (!verdict.run) {
+			console.log(`heartbeat skipped (${verdict.reason})`);
+			return;
+		}
+	}
 	const inbox = new FileInbox(join(stateDir(), "inbox.jsonl"));
 	const trigger = inbox.append({ text: job.text, source: job.source ?? `cron:${id}` });
+	if (id === "heartbeat") recordHeartbeatRun(Date.now());
 	console.log(`queued cron job ${id} as trigger ${trigger.id}`);
 }
 

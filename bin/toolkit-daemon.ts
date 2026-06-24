@@ -23,6 +23,7 @@ import { CronJobStore } from "../extensions/cron/jobs.ts";
 import { recordDecision, stateDir } from "../extensions/lib/decisions.ts";
 import { notify } from "../extensions/lib/notify.ts";
 import { brainRoot } from "../extensions/lib/paths.ts";
+import { INITIAL_RUNS_STATE, recordRun, type RunsState } from "../extensions/lib/runs.ts";
 import { applyCumulativeCost, INITIAL_SPEND_STATE, type SpendState } from "../extensions/lib/spend.ts";
 import { Dashboard } from "../daemon/dashboard.ts";
 import { checkEnvFileSecurity } from "../daemon/env-secure.ts";
@@ -42,6 +43,14 @@ import { WebhookServer } from "../daemon/webhook-server.ts";
 
 function csv(value: string | undefined): string[] {
 	return (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+/** Heuristic: is the resident model an Anthropic/Claude one (subscription back-off)? */
+function isAnthropicModel(model: { id?: string; provider?: string } | null | undefined): boolean {
+	if (!model) return false;
+	const provider = (model.provider ?? "").toLowerCase();
+	const id = (model.id ?? "").toLowerCase();
+	return provider.includes("anthropic") || id.includes("claude");
 }
 
 const repoDir = join(import.meta.dirname, "..");
@@ -165,10 +174,16 @@ function runDaemon(): void {
 		};
 	}
 
-	// Spend cap: when configured, pause forwarding once the daily cap is hit.
+	// Cost/usage guards: pause forwarding once a daily cap is hit. The USD cap
+	// suits per-token billing; the runs/day cap is the guard for subscription
+	// auth (where cost reads ~$0). Either may pause; both reset daily.
 	let currentClient: RpcClient | undefined;
-	let paused = false;
+	let spendPaused = false;
+	let runsPaused = false;
 	const dailyCapUsd = Number(process.env.AGENT_TOOLKIT_DAILY_CAP_USD ?? 0);
+	const maxRunsPerDay = Number(process.env.AGENT_TOOLKIT_MAX_RUNS_PER_DAY ?? 0);
+	const runsPath = join(state, "runs-state.json");
+	let runsState: RunsState = (readJson(runsPath) as RunsState | null) ?? INITIAL_RUNS_STATE;
 
 	const supervisor = new Supervisor({
 		instance,
@@ -178,15 +193,28 @@ function runDaemon(): void {
 			currentClient = new RpcClient({ command: piBin, args: piArgs, cwd: repoDir, logger: (m) => console.error(m) });
 			return currentClient;
 		},
-		onForward: (trigger) =>
+		onForward: (trigger) => {
 			recordDecision({
 				kind: "trigger",
 				summary: `Forwarded trigger: ${trigger.text.slice(0, 100)}`,
 				source: trigger.source,
 				detail: trigger.taduTask ? { taduTask: trigger.taduTask } : undefined,
-			}),
+			});
+			if (maxRunsPerDay > 0) {
+				const result = recordRun(runsState, { maxPerDay: maxRunsPerDay }, Date.now());
+				runsState = result.state;
+				writeJson(runsPath, runsState);
+				runsPaused = result.overCap;
+				if (result.justCrossed) {
+					notify(
+						{ summary: `Daily run cap (${maxRunsPerDay}) reached; pausing autonomous forwarding until tomorrow.`, kind: "escalate", source: "runs" },
+						{ force: true },
+					);
+				}
+			}
+		},
 		onReply,
-		gate: () => paused,
+		gate: () => spendPaused || runsPaused,
 	});
 	supervisor.start();
 
@@ -202,7 +230,7 @@ function runDaemon(): void {
 			const result = applyCumulativeCost(spendState, cost, { dailyCapUsd }, Date.now());
 			spendState = result.state;
 			writeJson(spendPath, spendState);
-			paused = result.overCap;
+			spendPaused = result.overCap;
 			if (result.justCrossed) {
 				notify(
 					{ summary: `Daily spend cap $${dailyCapUsd} reached; pausing autonomous work until tomorrow.`, kind: "escalate", source: "spend" },
@@ -211,6 +239,22 @@ function runDaemon(): void {
 			}
 		}, 60_000);
 	}
+
+	// Detect the resident model so the heartbeat can back off on subscription auth.
+	const pollAgentState = async () => {
+		if (!currentClient) return;
+		const resp = (await currentClient.request({ type: "get_state" })) as
+			| { data?: { model?: { id?: string; provider?: string } | null } }
+			| undefined;
+		const model = resp?.data?.model ?? null;
+		writeJson(join(state, "agent-state.json"), {
+			authMode: isAnthropicModel(model) ? "anthropic" : "other",
+			model: model ? { id: model.id, provider: model.provider } : null,
+			ts: new Date().toISOString(),
+		});
+	};
+	const stateTimer = setInterval(() => void pollAgentState(), 60_000);
+	const initialStateTimer = setTimeout(() => void pollAgentState(), 8000);
 
 	// Webhook listener (only when a secret is configured).
 	const webhook =
@@ -256,7 +300,7 @@ function runDaemon(): void {
 	void dashboard.start();
 
 	console.error(
-		`[toolkit-daemon] started (instance=${instance}, slack=${slack ? "on" : "off"}, webhook=${webhook ? "on" : "off"}, dashboard=on, spendCap=${dailyCapUsd > 0 ? `$${dailyCapUsd}` : "off"})`,
+		`[toolkit-daemon] started (instance=${instance}, slack=${slack ? "on" : "off"}, webhook=${webhook ? "on" : "off"}, dashboard=on, spendCap=${dailyCapUsd > 0 ? `$${dailyCapUsd}` : "off"}, runsCap=${maxRunsPerDay > 0 ? maxRunsPerDay : "off"})`,
 	);
 
 	let shuttingDown = false;
@@ -265,6 +309,8 @@ function runDaemon(): void {
 		shuttingDown = true;
 		console.error("[toolkit-daemon] shutting down…");
 		if (spendTimer) clearInterval(spendTimer);
+		clearInterval(stateTimer);
+		clearTimeout(initialStateTimer);
 		notifyWatcher?.stop();
 		await dashboard.stop();
 		await supervisor.stop();

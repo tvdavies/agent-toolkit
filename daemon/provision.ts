@@ -55,7 +55,12 @@ export function renderEnvFile(cfg: ProvisionConfig): string {
 		`# export SLACK_BOT_TOKEN=xoxb-...`,
 		`# export SLACK_ALLOWED_USERS=U0123,U4567`,
 		`# export SLACK_NOTIFY_CHANNEL=...`,
-		`# export AGENT_TOOLKIT_DAILY_CAP_USD=20`,
+		``,
+		`# --- guards ---`,
+		`# export AGENT_TOOLKIT_DAILY_CAP_USD=20             # per-token billing guard`,
+		`# export AGENT_TOOLKIT_MAX_RUNS_PER_DAY=200         # subscription guard (USD cap reads ~$0)`,
+		`# export AGENT_TOOLKIT_HEARTBEAT_MIN_MINUTES=60     # effective cadence (auto 60 on Claude, else 30)`,
+		`# export AGENT_TOOLKIT_HEARTBEAT_HOURS=07:00-23:00  # only heartbeat in this window`,
 		``,
 	);
 	return lines.join("\n");

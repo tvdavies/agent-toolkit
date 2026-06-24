@@ -16,7 +16,7 @@ Custom Pi extensions bundled by the root `agent-toolkit` Pi package.
 - `guardrails/` — the safety floor for autonomous operation: blocks destructive/banned tool calls (pi has no tool-approval prompts) via the `tool_call` hook, with autonomy levels (`high`/`balanced`/`conservative`) and `/guard`.
 - `observe/` — the in-terminal oversight surface: `/status` renders a single pane (daemon, goal, schedule, workflows, brain, TADU, recent decisions) over the decision spine.
 - `cron/` — durable scheduling via the user's crontab: `/cron` manages a job set (default: the heartbeat) and renders a managed block that runs `toolkit-trigger --cron-job <id>`. Install is deferred (`/cron print` renders the crontab to apply).
-- `heartbeat/` — the scheduled check-in loop: detects the heartbeat trigger and injects `HEARTBEAT.md` + the silence rule, suppresses already-handled items, and escalates only what needs attention via `heartbeat_note`. Adds `/heartbeat`.
+- `heartbeat/` — the scheduled check-in loop: detects the heartbeat trigger and injects `HEARTBEAT.md` + the silence rule, suppresses already-handled items, and escalates only what needs attention via `heartbeat_note`. Adds `/heartbeat`. The effective cadence is gated to `max(timer, min-interval)` — hourly by default on Claude subscription auth, 30 min otherwise — inside an optional quiet-hours window, so a fast timer can't over-run it.
 - `lib/` — shared modules used by several extensions (the `decisions` audit spine and `paths`). It has no `index.ts`, so Pi never loads it as an extension.
 - `openai-fast.json` — provider/model configuration retained with the extension set.
 
@@ -66,7 +66,7 @@ Bundled example workflow patterns currently include `auth-audit`, `codebase-audi
   the daemon forwards to the resident agent. The prompt text lives in the jobs
   store, so cron lines stay quoting-free. Installation is deferred — `/cron print`
   renders the crontab for you to apply with `crontab <file>`.
-- The default cron job is the **heartbeat** (every 5 min). When it runs,
+- The default cron job is the **heartbeat** (every 30 min). When it runs,
   `heartbeat/` injects `HEARTBEAT.md` + the silence rule, lists already-handled
   items so nothing is re-flagged, and escalates only what needs attention.
 

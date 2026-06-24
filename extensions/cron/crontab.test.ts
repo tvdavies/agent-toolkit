@@ -20,7 +20,7 @@ const ctx: CronRenderContext = {
 
 const heartbeat: CronJob = {
 	id: "heartbeat",
-	schedule: "*/5 * * * *",
+	schedule: "*/30 * * * *",
 	text: "[heartbeat] do the thing",
 	description: "Heartbeat check",
 };
@@ -42,7 +42,7 @@ describe("renderManagedBlock", () => {
 		expect(block).toContain(MANAGED_BEGIN);
 		expect(block).toContain(MANAGED_END);
 		expect(block).toContain("# job:heartbeat — Heartbeat check");
-		expect(block).toContain("*/5 * * * * flock -n");
+		expect(block).toContain("*/30 * * * * flock -n");
 	});
 });
 
@@ -65,7 +65,7 @@ describe("replaceManagedBlock", () => {
 		);
 		const out = replaceManagedBlock(existing, updated);
 		expect(out).toContain("*/15 * * * * flock");
-		expect(out).not.toContain("*/5 * * * * flock");
+		expect(out).not.toContain("*/30 * * * * flock");
 		expect(out).toContain("/usr/bin/backup.sh");
 		// Splicing the same block twice yields the same result.
 		expect(replaceManagedBlock(out, updated)).toBe(out);

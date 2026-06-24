@@ -96,8 +96,15 @@ group/world accessible.
 
 Oversight (Phase 4): `AGENT_TOOLKIT_DASHBOARD_PORT` (default 8788),
 `AGENT_TOOLKIT_DASHBOARD_TOKEN` (optional bearer), `SLACK_NOTIFY_CHANNEL`
-(where the notify push channel is delivered), `AGENT_TOOLKIT_DAILY_CAP_USD`
-(daily spend cap; unset/0 disables).
+(where the notify push channel is delivered).
+
+Cadence & guards: `AGENT_TOOLKIT_HEARTBEAT_MIN_MINUTES` (effective heartbeat
+cadence regardless of the timer; auto-defaults to 60 on Claude subscription auth,
+else 30; `0` disables), `AGENT_TOOLKIT_HEARTBEAT_HOURS` (`HH:MM-HH:MM` active
+window, e.g. `07:00-23:00`), `AGENT_TOOLKIT_MAX_RUNS_PER_DAY` (subscription-safe
+runs/day cap — the relevant guard when cost is billed to a subscription),
+`AGENT_TOOLKIT_DAILY_CAP_USD` (per-token spend cap). Either cap pauses forwarding
+when hit; both reset daily.
 
 ## Tests
 

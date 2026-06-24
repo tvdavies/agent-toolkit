@@ -77,10 +77,13 @@ recoverable actions) and reports. The floor:
 - **Guardrails** (`tool_call` hook) block destructive/banned ops even though pi has no approval prompts (`rm -rf /`, `sudo`, force-push to protected branches, prod deploy,
   DB drops, `curl|bash`, …). Autonomy levels (`high`/`balanced`/`conservative`)
   soften the "confirm" tier.
-- **Spend cap** — the daemon polls `get_session_stats`, and once the daily cap
-  is hit it pauses trigger forwarding and escalates once.
-- **Heartbeat silence rule** — scheduled check-ins escalate only what needs
-  attention; routine outcomes are logged, already-handled items suppressed.
+- **Cost/usage guards** — a USD daily cap (per-token billing) and a runs/day cap
+  (subscription auth, where cost reads ~$0); either pauses forwarding once hit,
+  resets daily, and escalates once. The daemon detects the model via `get_state`.
+- **Heartbeat cadence + silence** — the effective cadence is `max(timer, min)`
+  (auto-hourly on Claude subscription auth) within optional quiet hours, gated in
+  `toolkit-trigger`; check-ins escalate only what needs attention, suppressing
+  already-handled items.
 - **Completion audit** — `goal.ts` requires evidence before "complete"; a
   blocked goal escalates.
 
