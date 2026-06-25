@@ -22,6 +22,8 @@ import { getTask, listTasks, readConfig, readEvents } from "../extensions/lib/ta
 export type DashboardOptions = {
 	/** Queue a control trigger (e.g. "do X") from the browser. */
 	enqueue: (text: string) => void;
+	/** Answer a blocked worker's needs_human question (ref = task id or run id). */
+	answer?: (ref: string, text: string) => void;
 	/** Path to daemon-status.json. */
 	statusPath: string;
 	/** Current cron jobs (id/schedule/description), for the schedules panel. */
@@ -136,6 +138,11 @@ export class Dashboard {
 				}
 				if (path === "/api/ack" && typeof data.id === "string") {
 					return this.json(res, 200, { ok: ackNotice(data.id) });
+				}
+				if (path === "/api/answer" && typeof data.ref === "string" && data.ref.trim() && typeof data.text === "string" && data.text.trim()) {
+					this.o.answer?.(data.ref.trim(), data.text.trim());
+					if (typeof data.id === "string") ackNotice(data.id); // clear the escalation once answered
+					return this.json(res, 200, { ok: true });
 				}
 				return this.json(res, 400, { error: "bad request" });
 			});
@@ -380,9 +387,23 @@ function refresh(){
     var nb=document.getElementById("notices"); nb.innerHTML="";
     (n.notices||[]).filter(function(x){return !x.acked;}).slice(0,20).forEach(function(x){
       var d=row("<span class='esc'>!</span> "+esc(x.summary)+" ");
-      var b=document.createElement("button"); b.className="act"; b.textContent="ack";
-      b.onclick=function(){ fetch(q("/api/ack"),{method:"POST",headers:Object.assign({"content-type":"application/json"},auth),body:JSON.stringify({id:x.id})}).then(refresh); };
-      d.appendChild(b); nb.appendChild(d);
+      var dt=x.detail||{};
+      if(dt.needsHuman){
+        // A blocked worker is waiting on YOU — answer it to resume that exact session.
+        var ref=dt.taskId||dt.runId;
+        var inp=document.createElement("input"); inp.placeholder="your answer for "+esc(ref)+"…"; inp.style.margin="4px 0";
+        var ab=document.createElement("button"); ab.className="act"; ab.textContent="answer";
+        ab.onclick=function(){
+          if(!inp.value.trim()) return;
+          fetch(q("/api/answer"),{method:"POST",headers:Object.assign({"content-type":"application/json"},auth),body:JSON.stringify({ref:ref,text:inp.value.trim(),id:x.id})}).then(refresh);
+        };
+        d.appendChild(inp); d.appendChild(ab);
+      } else {
+        var b=document.createElement("button"); b.className="act"; b.textContent="ack";
+        b.onclick=function(){ fetch(q("/api/ack"),{method:"POST",headers:Object.assign({"content-type":"application/json"},auth),body:JSON.stringify({id:x.id})}).then(refresh); };
+        d.appendChild(b);
+      }
+      nb.appendChild(d);
     });
     if(!nb.children.length) nb.appendChild(row("<span class='muted'>nothing needs you</span>"));
   });

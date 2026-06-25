@@ -14,8 +14,17 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** Written by a worker via the `park` tool; consumed by the pool at turn end. */
-export type ParkRequest = { runId: string; dueAt: number; prompt: string; reason?: string };
+/** Written by a worker via the `park`/`needs_human` tools; consumed by the pool. */
+export type ParkRequest = {
+	runId: string;
+	dueAt: number;
+	prompt: string;
+	reason?: string;
+	/** Set by needs_human: the pool pushes the question and waits for an answer
+	 *  (woken by a human reply, not just the dueAt safety timer). */
+	awaitingAnswer?: boolean;
+	question?: string;
+};
 
 /** The pool's durable record of a dormant session awaiting resume. */
 export type ParkedEntry = {
@@ -28,7 +37,13 @@ export type ParkedEntry = {
 	resumes: number;
 	/** Carried so a long-running loop (e.g. drive-pr) keeps its timeout on resume. */
 	timeoutMs?: number;
+	/** Waiting on a human answer (needs_human) rather than just the dueAt timer. */
+	awaitingAnswer?: boolean;
+	question?: string;
 };
+
+/** A human's answer to a needs_human question, keyed by task id or run id. */
+export type WorkerAnswer = { ref: string; answer: string; ts: string };
 
 export const MIN_PARK_SECONDS = 30;
 export const MAX_PARK_SECONDS = 3600;
@@ -95,4 +110,39 @@ export function readAllParked(stateDir: string): ParkedEntry[] {
 		}
 	}
 	return out;
+}
+
+// --- human answers to needs_human questions -------------------------------
+const answersDir = (stateDir: string) => join(stateDir, "worker-answers");
+const refSlug = (ref: string) => ref.replace(/[^\w.-]/g, "_").slice(0, 120);
+const answerPath = (stateDir: string, ref: string) => join(answersDir(stateDir), `${refSlug(ref)}.json`);
+
+/** Record a human's answer, keyed by a task id or run id (the CLI/dashboard write this). */
+export function writeAnswer(stateDir: string, ref: string, answer: string, ts: string): void {
+	mkdirSync(answersDir(stateDir), { recursive: true });
+	writeFileSync(answerPath(stateDir, ref), JSON.stringify({ ref, answer, ts } satisfies WorkerAnswer), "utf8");
+}
+
+/** All pending answers (the pool matches these against parked needs_human entries). */
+export function readAnswers(stateDir: string): WorkerAnswer[] {
+	const dir = answersDir(stateDir);
+	if (!existsSync(dir)) return [];
+	const out: WorkerAnswer[] = [];
+	for (const file of readdirSync(dir)) {
+		if (!file.endsWith(".json")) continue;
+		try {
+			out.push(JSON.parse(readFileSync(join(dir, file), "utf8")) as WorkerAnswer);
+		} catch {
+			// skip a corrupt record
+		}
+	}
+	return out;
+}
+
+export function clearAnswer(stateDir: string, ref: string): void {
+	try {
+		rmSync(answerPath(stateDir, ref), { force: true });
+	} catch {
+		// best-effort
+	}
 }

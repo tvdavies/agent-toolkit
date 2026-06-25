@@ -25,6 +25,7 @@ import {
 } from "../extensions/heartbeat/schedule-gate.ts";
 import { stateDir } from "../extensions/lib/decisions.ts";
 import { buildDrivePrPrompt } from "../extensions/lib/drive-pr.ts";
+import { writeAnswer } from "../extensions/lib/park.ts";
 import { taduRoot, workspaceExists } from "../extensions/lib/tadu.ts";
 
 const repoDir = join(import.meta.dirname, "..");
@@ -36,6 +37,7 @@ type Args = {
 	cronJob?: string;
 	drivePr?: string;
 	repo?: string;
+	answerRef?: string;
 	text: string;
 };
 
@@ -49,6 +51,7 @@ function parseArgs(argv: string[]): Args {
 		else if (arg === "--cron-job") out.cronJob = argv[++i];
 		else if (arg === "--drive-pr") out.drivePr = argv[++i];
 		else if (arg === "--repo") out.repo = argv[++i];
+		else if (arg === "--answer") out.answerRef = argv[++i];
 		else if (arg === "--no-tadu") out.noTadu = true;
 		else if (arg) rest.push(arg);
 	}
@@ -144,6 +147,17 @@ function main(): void {
 	const args = parseArgs(process.argv.slice(2));
 	if (args.cronJob) {
 		runCronJob(args.cronJob);
+		return;
+	}
+	// Answer a blocked worker's needs_human question: the daemon resumes that exact
+	// session with this answer injected. ref = the task id (e.g. TASK-12) or run id.
+	if (args.answerRef) {
+		if (args.text === "") {
+			console.error('Usage: toolkit-trigger --answer <task-id|run-id> "<your answer>"');
+			process.exit(1);
+		}
+		writeAnswer(stateDir(), args.answerRef, args.text, new Date().toISOString());
+		console.log(`answer recorded for ${args.answerRef}; the worker will resume shortly.`);
 		return;
 	}
 	// Drive-to-green (Part B): dispatch an autonomous worker that loops a PR to

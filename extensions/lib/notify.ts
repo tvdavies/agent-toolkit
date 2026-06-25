@@ -32,6 +32,8 @@ export type Notice = {
 	kind: string;
 	source?: string;
 	acked?: boolean;
+	/** Structured payload (e.g. { needsHuman, runId, taskId }) so a surface can act on it. */
+	detail?: Record<string, unknown>;
 };
 
 export type NotifyInput = {
@@ -81,6 +83,7 @@ export function notify(input: NotifyInput, options: NotifyOptions = {}): { pushe
 		kind: input.kind ?? "escalate",
 		source: input.source,
 		acked: false,
+		...(input.detail ? { detail: input.detail } : {}),
 	};
 	try {
 		const path = notifyPath();

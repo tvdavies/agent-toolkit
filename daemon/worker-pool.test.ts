@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeParkRequest } from "../extensions/lib/park";
+import { readAnswers, writeAnswer, writeParkRequest } from "../extensions/lib/park";
 import type { Trigger } from "./inbox";
 import type { TaduControl } from "./tadu-control";
 import { type PoolDecision, type WorkerPoolOptions, WorkerPool, type WorkerRunner } from "./worker-pool";
@@ -17,6 +17,7 @@ let moves: Array<[string, string]>;
 let comments: Array<[string, string]>;
 let decisions: PoolDecision[];
 let escalations: string[];
+let needsHuman: Array<{ question: string; runId: string; taskId?: string }>;
 let ids: number;
 let stateDir: string;
 let clock: number;
@@ -56,6 +57,7 @@ function pool(maxConcurrent: number, extra: Partial<WorkerPoolOptions> = {}): Wo
 		parkPollMs: 0, // tests drive checkParked() manually
 		onDecision: (d) => decisions.push(d),
 		onEscalate: (s) => escalations.push(s),
+		onNeedsHuman: (info) => needsHuman.push(info),
 		...extra,
 	});
 }
@@ -66,6 +68,7 @@ beforeEach(() => {
 	comments = [];
 	decisions = [];
 	escalations = [];
+	needsHuman = [];
 	ids = 0;
 	clock = 1_000_000;
 	stateDir = mkdtempSync(join(tmpdir(), "pool-"));
@@ -275,6 +278,70 @@ describe("WorkerPool", () => {
 		await flush();
 		expect(pendings[1]?.spec.id).toBe(spec.id); // resumed the same run
 		expect(pendings[1]?.spec.resume).toBe(true);
+	});
+
+	it("blocks on needs_human: pushes the question, parks, and resumes when answered (by task id)", async () => {
+		const p = pool(1);
+		p.dispatch(trig("TASK-1"));
+		const spec = pendings[0]?.spec as WorkerSpec;
+		writeParkRequest(stateDir, {
+			runId: spec.id,
+			dueAt: clock + 86_400_000, // safety timer far out
+			prompt: "fallback",
+			reason: "awaiting human answer",
+			awaitingAnswer: true,
+			question: "Keep the /v1 endpoint or drop it?",
+		});
+		pendings[0]?.resolve(okResult(spec));
+		await flush();
+
+		// Pushed the question + blocked + awaiting (NOT a timer park).
+		expect(needsHuman).toHaveLength(1);
+		expect(needsHuman[0]).toMatchObject({ runId: spec.id, taskId: "TASK-1", question: "Keep the /v1 endpoint or drop it?" });
+		expect(moves).toContainEqual(["TASK-1", "blocked"]);
+		expect(p.parkedCount()).toBe(1);
+		expect(decisions.some((d) => d.kind === "needs-human")).toBe(true);
+
+		// The timer must NOT resume it (due far in the future).
+		p.checkParked();
+		await flush();
+		expect(p.activeCount()).toBe(0);
+
+		// Human answers by TASK id → resumes that exact session with the answer.
+		writeAnswer(stateDir, "TASK-1", "Drop it.", "t");
+		p.checkAnswers();
+		await flush();
+		expect(p.activeCount()).toBe(1);
+		expect(pendings[1]?.spec.id).toBe(spec.id);
+		expect(pendings[1]?.spec.resume).toBe(true);
+		expect(pendings[1]?.spec.prompt).toContain("Drop it.");
+		expect(moves).toContainEqual(["TASK-1", "in-progress"]); // back to the active lane
+		expect(readAnswers(stateDir)).toEqual([]); // answer consumed
+	});
+
+	it("resumes a task-less needs-human worker answered by run id", async () => {
+		const p = pool(1);
+		p.dispatch(trig(undefined));
+		const spec = pendings[0]?.spec as WorkerSpec;
+		writeParkRequest(stateDir, { runId: spec.id, dueAt: clock + 86_400_000, prompt: "f", awaitingAnswer: true, question: "q" });
+		pendings[0]?.resolve(okResult(spec));
+		await flush();
+		expect(p.parkedCount()).toBe(1);
+
+		writeAnswer(stateDir, spec.id, "go ahead", "t"); // answer by run id
+		p.checkAnswers();
+		await flush();
+		expect(pendings[1]?.spec.id).toBe(spec.id);
+		expect(pendings[1]?.spec.prompt).toContain("go ahead");
+	});
+
+	it("drops a stale answer that matches no parked worker", async () => {
+		const p = pool(1);
+		writeAnswer(stateDir, "TASK-999", "nobody waiting", "t");
+		p.checkAnswers();
+		await flush();
+		expect(p.activeCount()).toBe(0);
+		expect(readAnswers(stateDir)).toEqual([]); // consumed/dropped, no resume
 	});
 
 	it("hands off (does not fail) a park loop that exceeds maxResumes", async () => {

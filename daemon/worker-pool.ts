@@ -22,9 +22,11 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { isDrivePrPrompt } from "../extensions/lib/drive-pr.ts";
 import {
+	clearAnswer,
 	clearParkRequest,
 	type ParkedEntry,
 	readAllParked,
+	readAnswers,
 	readParkRequest,
 	removeParked,
 	writeParked,
@@ -77,6 +79,8 @@ export type WorkerPoolOptions = {
 	onDecision?: (d: PoolDecision) => void;
 	/** Push an escalation when a delegated task fails. */
 	onEscalate?: (summary: string) => void;
+	/** Push a needs-human question (carries the run/task id so a reply can resume it). */
+	onNeedsHuman?: (info: { question: string; runId: string; taskId?: string }) => void;
 	/** Run-id factory (injected in tests). */
 	newId?: () => string;
 	/** Injected clock (defaults to Date.now), for testable park scheduling. */
@@ -90,7 +94,7 @@ export type WorkerPoolOptions = {
 	logger?: (message: string) => void;
 };
 
-type Optional = "model" | "timeoutMs" | "onDecision" | "onEscalate" | "logger" | "guardrailsPath" | "toolExtensions" | "worktree";
+type Optional = "model" | "timeoutMs" | "onDecision" | "onEscalate" | "onNeedsHuman" | "logger" | "guardrailsPath" | "toolExtensions" | "worktree";
 
 type FreshItem = { kind: "fresh"; trigger: Trigger };
 type ResumeItem = { kind: "resume"; entry: ParkedEntry; prepared?: PreparedWorktree };
@@ -134,6 +138,7 @@ export class WorkerPool {
 			worktree: options.worktree,
 			onDecision: options.onDecision,
 			onEscalate: options.onEscalate,
+			onNeedsHuman: options.onNeedsHuman,
 			logger: options.logger,
 		};
 	}
@@ -203,6 +208,42 @@ export class WorkerPool {
 		this.pump();
 	}
 
+	/** Resume any needs-human session that has received a human answer. Public for tests. */
+	checkAnswers(): void {
+		if (this.stopping) return;
+		for (const answer of readAnswers(this.o.stateDir)) {
+			let match: ParkedState | undefined;
+			for (const p of this.parked.values()) {
+				if (p.entry.awaitingAnswer && (p.entry.taskId === answer.ref || p.entry.runId === answer.ref)) {
+					match = p;
+					break;
+				}
+			}
+			// Consume the answer either way (a no-match is a stale/typo ref — dropped).
+			clearAnswer(this.o.stateDir, answer.ref);
+			if (!match) continue;
+			const { entry, prepared } = match;
+			this.parked.delete(entry.runId);
+			removeParked(this.o.stateDir, entry.runId);
+			const resumePrompt =
+				`The human answered your question${entry.question ? ` ("${entry.question}")` : ""}:\n\n${answer.answer}\n\n` +
+				`Continue from where you left off, taking this answer into account.`;
+			this.queue.push({
+				kind: "resume",
+				entry: { ...entry, prompt: resumePrompt, awaitingAnswer: false, question: undefined },
+				prepared,
+			});
+			if (entry.taskId) this.o.tadu.comment(entry.taskId, `Human answered — resuming: ${answer.answer.slice(0, 300)}`);
+			this.o.onDecision?.({
+				kind: "answered",
+				summary: `Worker ${entry.runId} resumed with a human answer${entry.taskId ? ` (${entry.taskId})` : ""}.`,
+				detail: entry.taskId ? { taduTask: entry.taskId } : { worker: entry.runId },
+			});
+			this.o.logger?.(`[pool] worker ${entry.runId} resumed with human answer`);
+		}
+		this.pump();
+	}
+
 	/** Kill any active workers and drop the queue, bounded so shutdown never wedges. */
 	async stop(): Promise<void> {
 		this.stopping = true;
@@ -220,7 +261,10 @@ export class WorkerPool {
 
 	private ensureParkTimer(): void {
 		if (this.parkTimer || this.o.parkPollMs <= 0 || this.stopping) return;
-		this.parkTimer = setInterval(() => this.checkParked(), this.o.parkPollMs);
+		this.parkTimer = setInterval(() => {
+			this.checkParked();
+			this.checkAnswers();
+		}, this.o.parkPollMs);
 	}
 
 	private pump(): void {
@@ -276,7 +320,11 @@ export class WorkerPool {
 			});
 			this.o.logger?.(`[pool] worker ${id} started (active ${this.active.size + 1}/${this.o.maxConcurrent}, queued ${this.queue.length})`);
 		} else {
-			if (taskId) this.o.tadu.comment(taskId, `Worker ${id} resumed (cycle ${resumes}).`);
+			// Back to the active lane (a needs-human resume was sitting in "blocked").
+			if (taskId) {
+				this.o.tadu.move(taskId, this.o.startStatus);
+				this.o.tadu.comment(taskId, `Worker ${id} resumed (cycle ${resumes}).`);
+			}
 			this.o.onDecision?.({
 				kind: "worker-resume",
 				summary: `Resumed worker ${id}${taskId ? ` (${taskId})` : ""} — cycle ${resumes}.`,
@@ -320,17 +368,36 @@ export class WorkerPool {
 				reason: req.reason,
 				resumes: resumes + 1,
 				timeoutMs: spec.timeoutMs,
+				awaitingAnswer: req.awaitingAnswer,
+				question: req.question,
 			};
 			this.parked.set(spec.id, { entry, prepared });
 			writeParked(this.o.stateDir, entry);
-			const when = new Date(entry.dueAt).toISOString();
-			if (taskId) this.o.tadu.comment(taskId, `Parked until ${when}${entry.reason ? ` (${entry.reason})` : ""}.`);
-			this.o.onDecision?.({
-				kind: "park",
-				summary: `Worker ${spec.id} parked until ${when}${entry.reason ? `: ${entry.reason}` : ""}.`,
-				detail: taskId ? { taduTask: taskId } : { worker: spec.id },
-			});
-			this.o.logger?.(`[pool] worker ${spec.id} parked until ${when} (cycle ${entry.resumes})`);
+			if (req.awaitingAnswer) {
+				// Blocked on a human decision: surface it on the board, PUSH the
+				// question, and wait for an answer (woken by the reply, not the timer).
+				const question = req.question ?? "(no question given)";
+				if (taskId) {
+					this.o.tadu.move(taskId, this.o.failureStatus); // "blocked" lane while awaiting
+					this.o.tadu.comment(taskId, `Blocked — needs a human decision:\n${question}`);
+				}
+				this.o.onNeedsHuman?.({ question, runId: spec.id, taskId });
+				this.o.onDecision?.({
+					kind: "needs-human",
+					summary: `Worker ${spec.id} needs a human answer${taskId ? ` (${taskId})` : ""}: ${question.slice(0, 120)}`,
+					detail: { runId: spec.id, ...(taskId ? { taduTask: taskId } : {}) },
+				});
+				this.o.logger?.(`[pool] worker ${spec.id} blocked, awaiting human answer (reply with: --answer ${taskId ?? spec.id})`);
+			} else {
+				const when = new Date(entry.dueAt).toISOString();
+				if (taskId) this.o.tadu.comment(taskId, `Parked until ${when}${entry.reason ? ` (${entry.reason})` : ""}.`);
+				this.o.onDecision?.({
+					kind: "park",
+					summary: `Worker ${spec.id} parked until ${when}${entry.reason ? `: ${entry.reason}` : ""}.`,
+					detail: taskId ? { taduTask: taskId } : { worker: spec.id },
+				});
+				this.o.logger?.(`[pool] worker ${spec.id} parked until ${when} (cycle ${entry.resumes})`);
+			}
 			this.ensureParkTimer();
 			return;
 		}

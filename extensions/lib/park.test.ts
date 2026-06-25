@@ -4,11 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	clampParkSeconds,
+	clearAnswer,
 	clearParkRequest,
 	DEFAULT_PARK_SECONDS,
 	readAllParked,
+	readAnswers,
 	readParkRequest,
 	removeParked,
+	writeAnswer,
 	writeParked,
 	writeParkRequest,
 } from "./park";
@@ -57,5 +60,21 @@ describe("parked entries (durable)", () => {
 	it("returns empty when nothing is parked", () => {
 		expect(readAllParked(dir)).toEqual([]);
 		expect(existsSync(join(dir, "worker-parked"))).toBe(false);
+	});
+});
+
+describe("human answers", () => {
+	it("writes, reads, and clears an answer keyed by a ref", () => {
+		writeAnswer(dir, "TASK-12", "keep the v1 endpoint", "2026-06-25T00:00:00Z");
+		const all = readAnswers(dir);
+		expect(all).toHaveLength(1);
+		expect(all[0]).toMatchObject({ ref: "TASK-12", answer: "keep the v1 endpoint" });
+		clearAnswer(dir, "TASK-12");
+		expect(readAnswers(dir)).toEqual([]);
+	});
+
+	it("sanitises the ref for the filename but preserves it in the record", () => {
+		writeAnswer(dir, "owner/name#5", "go", "t");
+		expect(readAnswers(dir)[0]?.ref).toBe("owner/name#5");
 	});
 });

@@ -25,6 +25,7 @@ import { notify } from "../extensions/lib/notify.ts";
 import { brainRoot } from "../extensions/lib/paths.ts";
 import { INITIAL_RUNS_STATE, recordRun, type RunsState } from "../extensions/lib/runs.ts";
 import { applyCumulativeCost, INITIAL_SPEND_STATE, type SpendState } from "../extensions/lib/spend.ts";
+import { writeAnswer } from "../extensions/lib/park.ts";
 import { ensureWorkspace, listTasks, taduRoot } from "../extensions/lib/tadu.ts";
 import { taduControl } from "../daemon/tadu-control.ts";
 import { parseHoursWindow, resolveMinIntervalMinutes } from "../extensions/heartbeat/schedule-gate.ts";
@@ -249,6 +250,16 @@ function runDaemon(): void {
 		onEscalate: (summary) => {
 			notify({ summary, kind: "escalate", source: "worker" });
 		},
+		onNeedsHuman: ({ question, runId, taskId }) => {
+			// Push the question now; the detail carries the ref so the dashboard reply
+			// box (and a Slack reply) can resume the exact worker.
+			notify({
+				summary: `Needs your decision${taskId ? ` (${taskId})` : ""}: ${question}`,
+				kind: "escalate",
+				source: "needs-human",
+				detail: { needsHuman: true, runId, taskId },
+			});
+		},
 		logger: (m) => console.error(m),
 	});
 
@@ -380,6 +391,7 @@ function runDaemon(): void {
 	// Oversight dashboard (loopback).
 	const dashboard = new Dashboard({
 		enqueue: (text) => inbox.append({ text, source: "dashboard" }),
+		answer: (ref, text) => writeAnswer(state, ref, text, new Date().toISOString()),
 		statusPath,
 		sessionsDir: sessionDir,
 		workerSessionsDir,
