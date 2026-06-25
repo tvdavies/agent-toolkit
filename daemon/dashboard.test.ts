@@ -28,6 +28,8 @@ beforeEach(async () => {
 		enqueue: (t) => enqueued.push(t),
 		moveTask: (id, to) => moved.push([id, to]),
 		commentTask: (id, text) => commented.push([id, text]),
+		workerStats: () => ({ active: 1, queued: 0, parked: 2, awaiting: 1 }),
+		taskActivity: () => ({ "TASK-1": { state: "running", runId: "w-abc" } }),
 		statusPath: join(dir, "status.json"),
 		cronJobs: () => [{ id: "heartbeat", schedule: "*/30 * * * *", description: "Heartbeat" }],
 		port: 0,
@@ -64,6 +66,11 @@ describe("Dashboard", () => {
 
 		const cron = (await (await fetch(url("/api/cron"))).json()) as any;
 		expect(cron.jobs[0].id).toBe("heartbeat");
+
+		// Live activity surfaces in the header counts and on the board.
+		expect(status.workers).toMatchObject({ active: 1, parked: 2, awaiting: 1 });
+		const tasks = (await (await fetch(url("/api/tasks"))).json()) as any;
+		expect(tasks.activity["TASK-1"]).toMatchObject({ state: "running", runId: "w-abc" });
 	});
 
 	it("queues a trigger and acks a notice via control endpoints", async () => {

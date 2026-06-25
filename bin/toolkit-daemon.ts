@@ -411,7 +411,8 @@ function runDaemon(): void {
 		statusPath,
 		sessionsDir: sessionDir,
 		workerSessionsDir,
-		workerStats: () => ({ active: workerPool.activeCount(), queued: workerPool.queuedCount() }),
+		workerStats: () => workerPool.stats(),
+		taskActivity: () => workerPool.activitySnapshot(),
 		cronJobs: () =>
 			new CronJobStore().list().map((j) => {
 				// The heartbeat's real cadence is the systemd timer period gated by the

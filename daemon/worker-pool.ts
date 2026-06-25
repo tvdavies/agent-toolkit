@@ -52,6 +52,12 @@ export type WorktreeProvider = (baseCwd: string, id: string) => PreparedWorktree
  *  means and the board renders as an activity badge. */
 export type TaskControlState = "running" | "queued" | "parked" | "awaiting-human" | "none";
 
+/** A task's live activity plus the worker run behind it (for board badges + deep links). */
+export type TaskActivity = { state: TaskControlState; runId?: string };
+
+/** Pool counts for the oversight header. */
+export type PoolStats = { active: number; queued: number; parked: number; awaiting: number };
+
 export type PoolDecision = {
 	kind: string;
 	summary: string;
@@ -207,6 +213,31 @@ export class WorkerPool {
 	}
 	parkedCount(): number {
 		return this.parked.size;
+	}
+
+	/** Live activity for every task the pool is tracking, for the board's badges. A
+	 *  task absent from the map is "none" (no worker — the lane stands alone). */
+	activitySnapshot(): Record<string, TaskActivity> {
+		const out: Record<string, TaskActivity> = {};
+		// Seed every in-flight task as queued, then let running/parked override — so a
+		// task that is neither running nor parked is correctly reported as queued.
+		for (const id of this.inFlightTasks) out[id] = { state: "queued" };
+		for (const [taskId, runId] of this.runningByTask) out[taskId] = { state: "running", runId };
+		for (const p of this.parked.values()) {
+			if (p.entry.taskId) out[p.entry.taskId] = { state: p.entry.awaitingAnswer ? "awaiting-human" : "parked", runId: p.entry.runId };
+		}
+		return out;
+	}
+
+	/** Counts for the oversight header (parked split from awaiting-human). */
+	stats(): PoolStats {
+		let parked = 0;
+		let awaiting = 0;
+		for (const p of this.parked.values()) {
+			if (p.entry.awaitingAnswer) awaiting += 1;
+			else parked += 1;
+		}
+		return { active: this.active.size, queued: this.queue.length, parked, awaiting };
 	}
 
 	/** A task's live activity, from the pool's own state (the truth for "now"). The

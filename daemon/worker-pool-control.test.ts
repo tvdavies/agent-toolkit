@@ -103,6 +103,46 @@ describe("taskState", () => {
 	});
 });
 
+describe("activitySnapshot, stats, wasManaged (live board)", () => {
+	it("reports per-task activity with the worker run id", () => {
+		const p = pool(1);
+		p.dispatch(trig("TASK-1")); // running
+		p.dispatch(trig("TASK-2")); // queued
+		const snap = p.activitySnapshot();
+		expect(snap["TASK-1"]?.state).toBe("running");
+		expect(snap["TASK-1"]?.runId).toBeTruthy();
+		expect(snap["TASK-2"]?.state).toBe("queued");
+		expect(snap["TASK-9"]).toBeUndefined(); // unknown task = no activity (none)
+	});
+
+	it("counts active/queued/parked/awaiting", async () => {
+		const p = pool(1);
+		p.dispatch(trig("TASK-1"));
+		p.dispatch(trig("TASK-2"));
+		let s = p.stats();
+		expect(s).toMatchObject({ active: 1, queued: 1, parked: 0, awaiting: 0 });
+
+		// Park TASK-1 → TASK-2 promotes to running; parked count reflects the dormant one.
+		const spec = pendings[0]!.spec;
+		writeParkRequest(stateDir, { runId: spec.id, dueAt: clock + 60_000, prompt: "x" });
+		pendings[0]!.resolve(okResult(spec));
+		await flush();
+		s = p.stats();
+		expect(s.parked).toBe(1);
+		expect(p.activitySnapshot()["TASK-1"]?.state).toBe("parked");
+	});
+
+	it("clears activity when a task finishes", async () => {
+		const p = pool(1);
+		p.dispatch(trig("TASK-1"));
+		expect(p.activitySnapshot()["TASK-1"]?.state).toBe("running");
+		pendings[0]!.resolve(okResult(pendings[0]!.spec));
+		await flush();
+		expect(p.taskState("TASK-1")).toBe("none");
+		expect(p.activitySnapshot()["TASK-1"]).toBeUndefined();
+	});
+});
+
 describe("stopTask", () => {
 	it("kills a running worker and suppresses the failed→blocked lifecycle", async () => {
 		const p = pool(1);

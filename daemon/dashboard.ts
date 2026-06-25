@@ -37,7 +37,9 @@ export type DashboardOptions = {
 	/** Worker session directory; its episodes are tagged "worker". */
 	workerSessionsDir?: string;
 	/** Live worker-pool counts for the overview. */
-	workerStats?: () => { active: number; queued: number };
+	workerStats?: () => { active: number; queued: number; parked?: number; awaiting?: number };
+	/** Live per-task activity (taskId → {state, runId}) for the board's badges. */
+	taskActivity?: () => Record<string, { state: string; runId?: string }>;
 	token?: string;
 	host?: string;
 	port?: number;
@@ -145,13 +147,21 @@ export class Dashboard {
 					return this.json(res, 200, { episode: this.getEpisode(url.searchParams.get("id") ?? "") ?? null });
 				case "/api/tasks": {
 					const config = readConfig();
-					return this.json(res, 200, { lanes: config.statuses, terminal: config.terminal, tasks: listTasks() });
+					// activity = the truth for "now" (from the pool); the lane is the durable
+					// record. The board renders both so a stale lane is visible, not trusted.
+					return this.json(res, 200, {
+						lanes: config.statuses,
+						terminal: config.terminal,
+						tasks: listTasks(),
+						activity: this.o.taskActivity?.() ?? {},
+					});
 				}
 				case "/api/task": {
 					const id = url.searchParams.get("id") ?? "";
 					return this.json(res, 200, {
 						task: getTask(id) ?? null,
 						events: readEvents(500).filter((e) => e.task === id).slice(-30),
+						activity: this.o.taskActivity?.()[id] ?? { state: "none" },
 					});
 				}
 			}
@@ -356,6 +366,12 @@ const HTML = `<!doctype html>
   .lane { flex: 0 0 220px; border-radius: 6px; padding: 2px; } .lane h3 { font-size: 11px; color: #8b93a7; text-transform: uppercase; margin: 0 0 6px; }
   .lane.drop { background: #161d2c; outline: 1px dashed #2a3145; }
   .card[draggable] { cursor: grab; }
+  .abadge { font-size: 10px; padding: 0 5px; border-radius: 9px; margin-left: 4px; white-space: nowrap; }
+  .abadge.run { background: #16302a; color: #9ece6a; }
+  .abadge.park { background: #1a2740; color: #7aa2f7; }
+  .abadge.wait { background: #3a1f29; color: #f7768e; }
+  .abadge.queue { background: #232733; color: #8b93a7; }
+  .abadge.stale { background: #322a16; color: #e0af68; }
   .card { background: #161922; border: 1px solid #232733; border-radius: 6px; padding: 7px 8px; margin-bottom: 6px; cursor: pointer; }
   .card:hover { border-color: #2a3145; } .card .id { color: #7aa2f7; font-size: 11px; }
   a.link { color: #7aa2f7; cursor: pointer; }
@@ -429,7 +445,8 @@ function refresh(){
   api("/api/status").then(function(s){
     var st=s.status||{};
     var w=s.workers||{active:0,queued:0};
-    document.getElementById("status").textContent=(st.healthy?"● running":"○ down")+" · "+w.active+" workers/"+w.queued+" queued · "+s.counts.decisions+" decisions · "+s.counts.notices+" unacked";
+    var extra=((w.parked||0)?(" · "+w.parked+" parked"):"")+((w.awaiting||0)?(" · "+w.awaiting+" awaiting"):"");
+    document.getElementById("status").textContent=(st.healthy?"● running":"○ down")+" · "+w.active+" workers/"+w.queued+" queued"+extra+" · "+s.counts.decisions+" decisions · "+s.counts.notices+" unacked";
   }).catch(function(){ document.getElementById("status").textContent="error"; });
   api("/api/notices").then(function(n){
     var nb=document.getElementById("notices"); nb.innerHTML="";
@@ -509,9 +526,21 @@ function loadEpisode(id){
 
 // ---- Board ----
 var BOARD_LANES=[];
+var START_LANE="in-progress";
+// Map a task's live activity (from the pool) to a board badge. A task in the
+// in-progress lane with NO worker is a stale lane — surfaced, never hidden.
+function activityBadge(state, lane){
+  if(state==="running") return "<span class='abadge run'>● running</span>";
+  if(state==="parked") return "<span class='abadge park'>◷ parked</span>";
+  if(state==="awaiting-human") return "<span class='abadge wait'>⚠ needs you</span>";
+  if(state==="queued") return "<span class='abadge queue'>… queued</span>";
+  if(lane===START_LANE) return "<span class='abadge stale'>○ no worker</span>"; // drift
+  return "";
+}
 function loadBoard(){
   api("/api/tasks").then(function(r){
     BOARD_LANES=r.lanes||[];
+    var act=r.activity||{};
     var lanes=document.getElementById("lanes"); lanes.innerHTML="";
     var byStatus={}; (r.tasks||[]).forEach(function(tk){ (byStatus[tk.status]=byStatus[tk.status]||[]).push(tk); });
     (r.lanes||[]).forEach(function(st){
@@ -528,7 +557,10 @@ function loadBoard(){
       (byStatus[st]||[]).forEach(function(tk){
         var card=document.createElement("div"); card.className="card"; card.draggable=true;
         var labels=(tk.labels||[]).map(function(l){return "<span class='badge'>"+esc(l)+"</span>";}).join(" ");
-        card.innerHTML="<div class='id'>"+esc(tk.id)+"</div>"+esc(tk.title)+"<div>"+labels+"</div>";
+        var a=act[tk.id]||{state:"none"};
+        var badge=activityBadge(a.state, tk.status);
+        card.innerHTML="<div class='id'>"+esc(tk.id)+(badge?(" "+badge):"")+"</div>"+esc(tk.title)+"<div>"+labels+"</div>";
+        if(a.runId) card.title="worker "+a.runId;
         card.ondragstart=function(e){ e.dataTransfer.setData("text/plain", tk.id); e.dataTransfer.effectAllowed="move"; };
         card.onclick=function(){ loadTask(tk.id); };
         lane.appendChild(card);
@@ -550,7 +582,9 @@ function loadTask(id){
     box.style.display="block";
     if(!tk){ b.innerHTML="<span class='muted'>not found</span>"; return; }
     b.innerHTML="";
-    var head=el("<div><div class='id k'>"+esc(tk.id)+"</div><div style='font-size:14px;color:#fff;margin:4px 0'>"+esc(tk.title)+"</div></div>");
+    var a=r.activity||{state:"none"};
+    var badge=activityBadge(a.state, tk.status);
+    var head=el("<div><div class='id k'>"+esc(tk.id)+(badge?(" "+badge):"")+(a.runId?(" <span class='muted'>"+esc(a.runId)+"</span>"):"")+"</div><div style='font-size:14px;color:#fff;margin:4px 0'>"+esc(tk.title)+"</div></div>");
     // Lane selector — a keyboard-accessible alternative to drag-and-drop.
     var mv=document.createElement("div"); mv.style.margin="6px 0"; mv.innerHTML="<span class='muted'>lane </span>";
     var sel=document.createElement("select");
