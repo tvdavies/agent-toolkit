@@ -33,11 +33,12 @@ Run the bundled script:
 
     bash ~/.claude/skills/address-pr-feedback/scripts/fetch-pr-blockers.sh <pr-number>
 
-It prints one JSON document with four sections:
+It prints one JSON document with five sections:
 - `pr` — number, title, base/head refs, `mergeable`, `mergeStateStatus`, `isDraft`, `url`
 - `threads` — unresolved review threads, each with comment bodies, authors, paths, line numbers, the GraphQL `id` (for resolving) and the first comment's `databaseId` (for replying)
 - `reviews` — reviews currently in `CHANGES_REQUESTED` state
 - `checks` — failing / cancelled / timed-out checks with links
+- `pending` — checks still running (pending / in-progress / queued / expected), so an empty `checks` is not mistaken for "all green" while CI is still in flight
 
 Read every thread comment and every failing check log before triaging — do not skim. For check failures, fetch the log with `gh run view <run-id> --log-failed` (run id is in the check link) so the triage decision is based on the actual error, not the check name.
 
