@@ -62,7 +62,7 @@ export function renderEnvFile(cfg: ProvisionConfig): string {
 		`# --- guards ---`,
 		`# export AGENT_TOOLKIT_DAILY_CAP_USD=20             # per-token billing guard`,
 		`# export AGENT_TOOLKIT_MAX_RUNS_PER_DAY=200         # subscription guard (USD cap reads ~$0)`,
-		`# export AGENT_TOOLKIT_HEARTBEAT_MIN_MINUTES=60     # effective cadence (auto 60 on Claude, else 30)`,
+		`# export AGENT_TOOLKIT_HEARTBEAT_MIN_MINUTES=30     # min minutes between heartbeats (auto 60 on subscription auth, else 30; set to override)`,
 		`# export AGENT_TOOLKIT_HEARTBEAT_HOURS=07:00-23:00  # only heartbeat in this window`,
 		``,
 	);

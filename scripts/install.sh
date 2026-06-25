@@ -86,6 +86,9 @@ EOF
 Description=Agent Toolkit heartbeat every 30 min
 [Timer]
 OnCalendar=*:0/30
+# Fire on the dot — the gate's min-interval is the cadence control, so timer
+# jitter must not nudge a tick across the interval boundary.
+AccuracySec=1s
 Persistent=true
 [Install]
 WantedBy=timers.target

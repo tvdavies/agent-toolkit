@@ -26,6 +26,7 @@ import { brainRoot } from "../extensions/lib/paths.ts";
 import { INITIAL_RUNS_STATE, recordRun, type RunsState } from "../extensions/lib/runs.ts";
 import { applyCumulativeCost, INITIAL_SPEND_STATE, type SpendState } from "../extensions/lib/spend.ts";
 import { ensureWorkspace, taduRoot } from "../extensions/lib/tadu.ts";
+import { resolveMinIntervalMinutes } from "../extensions/heartbeat/schedule-gate.ts";
 import { Dashboard } from "../daemon/dashboard.ts";
 import { checkEnvFileSecurity } from "../daemon/env-secure.ts";
 import { FileInbox } from "../daemon/inbox.ts";
@@ -303,7 +304,24 @@ function runDaemon(): void {
 		statusPath,
 		sessionsDir: sessionDir,
 		cronJobs: () =>
-			new CronJobStore().list().map((j) => ({ id: j.id, schedule: j.schedule, description: j.description })),
+			new CronJobStore().list().map((j) => {
+				// The heartbeat's real cadence is the systemd timer period gated by the
+				// min-interval (which the gate skips ticks to honour), not the stored
+				// cron string alone. Surface that effective interval so the dashboard
+				// can't drift from reality the way a stale stored schedule can.
+				if (j.id === "heartbeat") {
+					const authMode = (readJson(join(state, "agent-state.json")) as { authMode?: string } | null)?.authMode;
+					const minInterval = resolveMinIntervalMinutes(process.env.AGENT_TOOLKIT_HEARTBEAT_MIN_MINUTES, authMode);
+					const timerMin = Number(/^\*\/(\d+)/.exec(j.schedule)?.[1] ?? 30);
+					const effective = minInterval <= 0 ? timerMin : timerMin * Math.ceil(minInterval / timerMin);
+					return {
+						id: j.id,
+						schedule: `every ${effective} min`,
+						description: `timer ${timerMin}m · gate min-interval ${minInterval}m`,
+					};
+				}
+				return { id: j.id, schedule: j.schedule, description: j.description };
+			}),
 		token: process.env.AGENT_TOOLKIT_DASHBOARD_TOKEN,
 		port: Number(process.env.AGENT_TOOLKIT_DASHBOARD_PORT ?? 8788),
 		logger: (m) => console.error(m),

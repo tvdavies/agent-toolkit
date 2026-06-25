@@ -15,7 +15,7 @@ describe("resolveMinIntervalMinutes", () => {
 });
 
 // Local-time constructor + local getters → tz-independent assertions.
-const at = (h: number, m = 0) => new Date(2026, 5, 24, h, m, 0);
+const at = (h: number, m = 0, s = 0, ms = 0) => new Date(2026, 5, 24, h, m, s, ms);
 
 describe("parseHoursWindow", () => {
 	it("parses HH:MM-HH:MM", () => {
@@ -42,6 +42,26 @@ describe("shouldRunHeartbeat", () => {
 		const v = shouldRunHeartbeat(state, cfg, at(8, 30));
 		expect(v.run).toBe(false);
 		expect(v.reason).toBe("min-interval");
+	});
+
+	it("runs at a tick a hair under the interval (grace tolerance)", () => {
+		// A 30-min timer with a 60-min gate lands the 60-min tick a few hundred ms
+		// short of the boundary; without grace it would skip and drift to 90 min.
+		const state = { lastRunMs: at(8, 0, 0, 500).getTime() }; // stamped 500ms after the 08:00 tick
+		expect(shouldRunHeartbeat(state, cfg, at(9, 0, 0, 200)).run).toBe(true);
+	});
+
+	it("does not admit a genuinely-early (half-interval) tick", () => {
+		// The intermediate 30-min tick on a 60-min gate must still skip.
+		const state = { lastRunMs: at(8, 0).getTime() };
+		expect(shouldRunHeartbeat(state, cfg, at(8, 30, 0, 200)).run).toBe(false);
+	});
+
+	it("keeps a clean cadence when the interval equals the timer period", () => {
+		// 30-min gate on a 30-min timer: every tick should run, not every other one.
+		const c = { minIntervalMin: 30 };
+		const state = { lastRunMs: at(8, 0, 0, 500).getTime() };
+		expect(shouldRunHeartbeat(state, c, at(8, 30, 0, 200)).run).toBe(true);
 	});
 
 	it("skips outside the active-hours window", () => {
