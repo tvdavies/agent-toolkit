@@ -22,6 +22,7 @@ import { recordDecision, stateDir } from "../lib/decisions.ts";
 import { notify } from "../lib/notify.ts";
 import { HandledStore } from "./handled.ts";
 import { buildHeartbeatPrompt, isHeartbeatPrompt } from "./protocol.ts";
+import { isInHoursWindow, parseHoursWindow } from "./schedule-gate.ts";
 
 const DEFAULT_HEARTBEAT = `# Heartbeat checklist
 
@@ -32,6 +33,9 @@ so keep them conservative.
 - Stay silent when everything is fine. Escalate (heartbeat_note with attention: true)
   only when something needs the user's attention, a check failed or was blocked, or
   you took a notable action. Record routine outcomes with heartbeat_note and finish.
+- Honour quiet hours: when the run context says quiet hours are in effect, send no
+  outward or routine messages — keep working, record the outcome, and escalate only
+  what is genuinely urgent and cannot wait until the window ends.
 
 ## Checks
 1. If a durable /goal is active, make concrete progress on it.
@@ -96,16 +100,28 @@ function recentLog(limit: number): string[] {
 	}
 }
 
+/** Current quiet-hours (do-not-disturb) status, stated plainly so the agent need
+ *  not reason about timezone/clock. Undefined when no window is configured. */
+function quietHoursStatus(now: Date = new Date()): string | undefined {
+	const spec = process.env.AGENT_TOOLKIT_QUIET_HOURS;
+	const window = parseHoursWindow(spec);
+	if (!window || !spec) return undefined;
+	const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+	return isInHoursWindow(now, window)
+		? `QUIET HOURS IN EFFECT (${spec}; local time ${hhmm}). Do-not-disturb: keep working, but send NO outward or routine messages this run — including any Slack greeting. Record routine outcomes via heartbeat_note (no attention). Use heartbeat_note(attention=true) ONLY for something genuinely urgent that cannot wait until the window ends.`
+		: `Quiet hours not in effect (${spec}; local time ${hhmm}).`;
+}
+
 function buildAddendum(): string {
 	const handled = new HandledStore(handledPath()).list();
 	const lines = [
 		"# Heartbeat run",
 		"This is a scheduled heartbeat. Work the checklist below.",
 		"SILENCE RULE: produce no user-facing report when everything is fine. Escalate via heartbeat_note(attention=true) only when something needs the user's attention, a check failed, or you took a notable action. Record routine outcomes via heartbeat_note and finish.",
-		"",
-		"## Checklist (HEARTBEAT.md)",
-		readHeartbeatChecklist().trim(),
 	];
+	const quiet = quietHoursStatus();
+	if (quiet) lines.push(quiet);
+	lines.push("", "## Checklist (HEARTBEAT.md)", readHeartbeatChecklist().trim());
 	if (handled.length > 0) {
 		lines.push("", "## Already handled (do not re-flag)");
 		for (const entry of handled) lines.push(`- ${entry.key}${entry.note ? ` — ${entry.note}` : ""}`);
