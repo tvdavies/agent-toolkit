@@ -29,7 +29,7 @@ export type TaduTask = {
 };
 
 export type TaduConfig = { statuses: string[]; terminal: string[] };
-export type TaduComment = { file: string; ts?: string; text: string };
+export type TaduComment = { file: string; ts?: string; text: string; actor?: string };
 export type TaduEvent = { seq: number; time: string; type: string; task?: string; actor?: string; data?: unknown };
 
 export function taduRoot(): string {
@@ -145,7 +145,14 @@ function readComments(taskDir: string): TaduComment[] {
 		.sort()
 		.map((file) => {
 			const { fm, body } = parseFrontmatter(readFileSync(join(dir, file), "utf8"));
-			return { file, ts: fm.created_at ? String(fm.created_at) : undefined, text: body.trim() || readFileSync(join(dir, file), "utf8").trim() };
+			return {
+				file,
+				ts: fm.created_at ? String(fm.created_at) : undefined,
+				// `author` carries TADU_ACTOR (agent:toolkit vs the git user) — the control
+				// loop uses it to tell the human's comment from the agent's own.
+				actor: fm.author ? String(fm.author) : undefined,
+				text: body.trim() || readFileSync(join(dir, file), "utf8").trim(),
+			};
 		});
 }
 

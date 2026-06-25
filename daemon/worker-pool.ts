@@ -47,6 +47,11 @@ export type WorkerRunner = (spec: WorkerSpec) => WorkerHandle;
 /** Prepare an isolated worktree for a run (the pool stays git-agnostic + testable). */
 export type WorktreeProvider = (baseCwd: string, id: string) => PreparedWorktree;
 
+/** A task's live activity, derived from the pool's own state — the truth for what
+ *  is happening "now", which the control plane reads to decide what a human action
+ *  means and the board renders as an activity badge. */
+export type TaskControlState = "running" | "queued" | "parked" | "awaiting-human" | "none";
+
 export type PoolDecision = {
 	kind: string;
 	summary: string;
@@ -113,6 +118,10 @@ export class WorkerPool {
 	private readonly inFlightTasks = new Set<string>();
 	/** Dormant sessions awaiting resume, keyed by run id. */
 	private readonly parked = new Map<string, ParkedState>();
+	/** Tasks with a live worker process right now, taskId → run id (for taskState/stopTask). */
+	private readonly runningByTask = new Map<string, string>();
+	/** Run ids a human deliberately stopped — finish() suppresses their lifecycle. */
+	private readonly cancelled = new Set<string>();
 	private parkTimer: ReturnType<typeof setInterval> | undefined;
 	private stopping = false;
 
@@ -198,6 +207,74 @@ export class WorkerPool {
 	}
 	parkedCount(): number {
 		return this.parked.size;
+	}
+
+	/** A task's live activity, from the pool's own state (the truth for "now"). The
+	 *  states are mutually exclusive: one task is at most one in-flight unit. */
+	taskState(taskId: string): TaskControlState {
+		for (const p of this.parked.values()) {
+			if (p.entry.taskId === taskId) return p.entry.awaitingAnswer ? "awaiting-human" : "parked";
+		}
+		if (this.runningByTask.has(taskId)) return "running";
+		if (this.inFlightTasks.has(taskId)) return "queued"; // in flight but neither running nor parked
+		return "none";
+	}
+
+	/**
+	 * Human override: stop ALL work for a task — kill a running worker, drop it from
+	 * the queue, un-park a dormant session — WITHOUT the normal failure lifecycle (no
+	 * "blocked"/escalation; the human already owns the lane). Returns whether anything
+	 * was actually stopped. Used by the control loop when a card is dragged to a
+	 * terminal/blocked lane.
+	 */
+	stopTask(taskId: string, reason: string): boolean {
+		let acted = false;
+		// Running: mark cancelled so finish() suppresses the lifecycle, then kill. The
+		// in-flight/running bookkeeping is released when finish() runs on its death.
+		const runId = this.runningByTask.get(taskId);
+		if (runId) {
+			this.cancelled.add(runId);
+			this.active.get(runId)?.kill();
+			acted = true;
+		}
+		// Queued (not yet started): drop any item for this task.
+		for (let i = this.queue.length - 1; i >= 0; i -= 1) {
+			const item = this.queue[i];
+			const itemTask = item?.kind === "fresh" ? item.trigger.taduTask : item?.entry.taskId;
+			if (itemTask === taskId) {
+				this.queue.splice(i, 1);
+				acted = true;
+			}
+		}
+		// Parked (dormant, no process): finalise its worktree first — a parked or
+		// awaiting-human worker has usually already produced commits/edits, so preserve
+		// (and surface) them rather than orphan a worktree + branch on disk.
+		for (const [pid, p] of [...this.parked.entries()]) {
+			if (p.entry.taskId === taskId) {
+				const wt = p.prepared?.isolated ? p.prepared.finalize() : undefined;
+				if (wt?.changed) {
+					this.o.tadu.comment(taskId, `Worker ${pid} stopped while parked — changes left in worktree ${wt.path} (branch ${wt.branch}).`);
+				}
+				this.parked.delete(pid);
+				removeParked(this.o.stateDir, pid);
+				clearParkRequest(this.o.stateDir, pid);
+				clearAnswer(this.o.stateDir, pid);
+				acted = true;
+			}
+		}
+		clearAnswer(this.o.stateDir, taskId);
+		// If no running worker will call finish(), release the task now.
+		if (!runId) this.inFlightTasks.delete(taskId);
+		if (acted) {
+			this.o.onDecision?.({
+				kind: "control-stop",
+				summary: `Stopped work on ${taskId} (${reason}).`,
+				source: "control-plane",
+				detail: { taduTask: taskId },
+			});
+			this.o.logger?.(`[pool] stopTask ${taskId}: ${reason}`);
+		}
+		return acted;
 	}
 
 	/** Resume any parked sessions now due. Public so tests can drive it. */
@@ -352,6 +429,7 @@ export class WorkerPool {
 
 		const handle = this.o.runner(spec);
 		this.active.set(id, handle);
+		if (taskId) this.runningByTask.set(taskId, id);
 		handle.done
 			.then((result) => this.finish(spec, result, prepared, resumes))
 			.catch(() =>
@@ -364,12 +442,33 @@ export class WorkerPool {
 			)
 			.finally(() => {
 				this.active.delete(id);
+				// Clear running only if this run still owns it (a fast re-dispatch could
+				// have re-registered the task under a new run id).
+				if (taskId && this.runningByTask.get(taskId) === id) this.runningByTask.delete(taskId);
 				this.pump();
 			});
 	}
 
 	private finish(spec: WorkerSpec, result: WorkerResult, prepared: PreparedWorktree | undefined, resumes: number): void {
 		const taskId = spec.taskId;
+
+		// CANCELLED: a human stopped this task (drag to blocked/backlog/done). Suppress
+		// the normal lifecycle — no lane move, no failure escalation; the human owns the
+		// lane now — but still finalise the worktree so in-progress changes are not lost.
+		if (this.cancelled.has(spec.id)) {
+			this.cancelled.delete(spec.id);
+			clearParkRequest(this.o.stateDir, spec.id);
+			removeParked(this.o.stateDir, spec.id);
+			this.parked.delete(spec.id);
+			const wt = prepared?.isolated ? prepared.finalize() : undefined;
+			if (taskId && wt?.changed) {
+				this.o.tadu.comment(taskId, `Worker ${spec.id} stopped — changes left in worktree ${wt.path} (branch ${wt.branch}).`);
+			}
+			if (taskId) this.inFlightTasks.delete(taskId);
+			this.o.logger?.(`[pool] worker ${spec.id} cancelled by human${taskId ? ` (${taskId})` : ""}`);
+			return;
+		}
+
 		const req = readParkRequest(this.o.stateDir, spec.id);
 
 		// PARK: the worker asked to wait. Keep the task in flight but dormant; free

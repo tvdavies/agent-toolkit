@@ -24,6 +24,10 @@ export type DashboardOptions = {
 	enqueue: (text: string) => void;
 	/** Answer a blocked worker's needs_human question (ref = task id or run id). */
 	answer?: (ref: string, text: string) => void;
+	/** Move a task to a lane as the HUMAN actor (a board drag → the control loop reacts). */
+	moveTask?: (id: string, to: string) => void;
+	/** Comment on a task as the HUMAN actor (steer / answer / instruct). */
+	commentTask?: (id: string, text: string) => void;
 	/** Path to daemon-status.json. */
 	statusPath: string;
 	/** Current cron jobs (id/schedule/description), for the schedules panel. */
@@ -81,6 +85,30 @@ export class Dashboard {
 		return header === this.o.token || url.searchParams.get("token") === this.o.token;
 	}
 
+	/**
+	 * Defeat browser-based CSRF on the loopback control plane (binding 127.0.0.1 does
+	 * NOT stop a website the operator visits from POSTing here). Two checks, either of
+	 * which a cross-site attacker cannot satisfy without a CORS preflight the server
+	 * never approves:
+	 *  1. content-type must be application/json — a cross-site HTML form can only send
+	 *     text/plain | urlencoded | multipart as a no-preflight "simple request".
+	 *  2. any Origin the browser attaches must be loopback (our own app); a real site's
+	 *     Origin is its own host. Non-browser clients (curl) send no Origin — allowed.
+	 */
+	private sameSite(req: IncomingMessage): boolean {
+		if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? ""))) return false;
+		const origin = req.headers.origin;
+		if (origin) {
+			try {
+				const host = new URL(origin).hostname;
+				if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") return false;
+			} catch {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	private handle(req: IncomingMessage, res: ServerResponse): void {
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const path = url.pathname;
@@ -130,6 +158,8 @@ export class Dashboard {
 		}
 
 		if (req.method === "POST") {
+			// CSRF guard: state-changing requests must be same-site JSON.
+			if (!this.sameSite(req)) return this.json(res, 403, { error: "forbidden" });
 			return this.readBody(req, (body) => {
 				const data = parseJson(body) ?? {};
 				if (path === "/api/trigger" && typeof data.text === "string" && data.text.trim()) {
@@ -142,6 +172,21 @@ export class Dashboard {
 				if (path === "/api/answer" && typeof data.ref === "string" && data.ref.trim() && typeof data.text === "string" && data.text.trim()) {
 					this.o.answer?.(data.ref.trim(), data.text.trim());
 					if (typeof data.id === "string") ackNotice(data.id); // clear the escalation once answered
+					return this.json(res, 200, { ok: true });
+				}
+				if (path === "/api/task/move" && typeof data.id === "string" && data.id.trim() && typeof data.to === "string") {
+					const id = data.id.trim();
+					// Defence in depth: a flag-like id must never reach the tadu CLI; and a
+					// move must target a REAL lane, never an arbitrary status.
+					if (id.startsWith("-")) return this.json(res, 400, { error: "bad id" });
+					if (!readConfig().statuses.includes(data.to)) return this.json(res, 400, { error: "unknown lane" });
+					this.o.moveTask?.(id, data.to);
+					return this.json(res, 200, { ok: true });
+				}
+				if (path === "/api/task/comment" && typeof data.id === "string" && data.id.trim() && typeof data.text === "string" && data.text.trim()) {
+					const id = data.id.trim();
+					if (id.startsWith("-")) return this.json(res, 400, { error: "bad id" });
+					this.o.commentTask?.(id, data.text.trim());
 					return this.json(res, 200, { ok: true });
 				}
 				return this.json(res, 400, { error: "bad request" });
@@ -308,7 +353,9 @@ const HTML = `<!doctype html>
   details { margin: 4px 0; } summary { cursor: pointer; color: #8b93a7; }
   .turn { border-left: 2px solid #232733; padding-left: 10px; margin: 8px 0; }
   .lanes { display: flex; gap: 10px; overflow-x: auto; }
-  .lane { flex: 0 0 220px; } .lane h3 { font-size: 11px; color: #8b93a7; text-transform: uppercase; margin: 0 0 6px; }
+  .lane { flex: 0 0 220px; border-radius: 6px; padding: 2px; } .lane h3 { font-size: 11px; color: #8b93a7; text-transform: uppercase; margin: 0 0 6px; }
+  .lane.drop { background: #161d2c; outline: 1px dashed #2a3145; }
+  .card[draggable] { cursor: grab; }
   .card { background: #161922; border: 1px solid #232733; border-radius: 6px; padding: 7px 8px; margin-bottom: 6px; cursor: pointer; }
   .card:hover { border-color: #2a3145; } .card .id { color: #7aa2f7; font-size: 11px; }
   a.link { color: #7aa2f7; cursor: pointer; }
@@ -362,6 +409,7 @@ var token = location.hash.slice(1);
 var auth = token ? { Authorization: "Bearer " + token } : {};
 function q(p){ return p + (token ? (p.indexOf("?")>=0?"&":"?") + "token=" + encodeURIComponent(token) : ""); }
 function api(p){ return fetch(q(p), { headers: auth }).then(function(r){ return r.json(); }); }
+function post(p, body){ return fetch(q(p), { method:"POST", headers:Object.assign({"content-type":"application/json"},auth), body:JSON.stringify(body) }).then(function(r){ return r.json(); }); }
 function esc(s){ return String(s==null?"":s).replace(/[&<>]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c]; }); }
 function clk(iso){ return iso ? esc(String(iso).slice(11,19)) : ""; }
 function el(html){ var d=document.createElement("div"); d.innerHTML=html; return d.firstElementChild; }
@@ -460,17 +508,28 @@ function loadEpisode(id){
 }
 
 // ---- Board ----
+var BOARD_LANES=[];
 function loadBoard(){
   api("/api/tasks").then(function(r){
+    BOARD_LANES=r.lanes||[];
     var lanes=document.getElementById("lanes"); lanes.innerHTML="";
     var byStatus={}; (r.tasks||[]).forEach(function(tk){ (byStatus[tk.status]=byStatus[tk.status]||[]).push(tk); });
     (r.lanes||[]).forEach(function(st){
-      var lane=document.createElement("div"); lane.className="lane";
+      var lane=document.createElement("div"); lane.className="lane"; lane.dataset.lane=st;
       lane.innerHTML="<h3>"+esc(st)+" <span class='muted'>"+((byStatus[st]||[]).length)+"</span></h3>";
+      // Drop target: dragging a card here moves the task to this lane (as the human).
+      lane.ondragover=function(e){ e.preventDefault(); lane.classList.add("drop"); };
+      lane.ondragleave=function(){ lane.classList.remove("drop"); };
+      lane.ondrop=function(e){
+        e.preventDefault(); lane.classList.remove("drop");
+        var id=e.dataTransfer.getData("text/plain");
+        if(id) moveTask(id, st);
+      };
       (byStatus[st]||[]).forEach(function(tk){
-        var card=document.createElement("div"); card.className="card";
+        var card=document.createElement("div"); card.className="card"; card.draggable=true;
         var labels=(tk.labels||[]).map(function(l){return "<span class='badge'>"+esc(l)+"</span>";}).join(" ");
         card.innerHTML="<div class='id'>"+esc(tk.id)+"</div>"+esc(tk.title)+"<div>"+labels+"</div>";
+        card.ondragstart=function(e){ e.dataTransfer.setData("text/plain", tk.id); e.dataTransfer.effectAllowed="move"; };
         card.onclick=function(){ loadTask(tk.id); };
         lane.appendChild(card);
       });
@@ -479,19 +538,43 @@ function loadBoard(){
     if(!(r.tasks||[]).length) lanes.innerHTML="<div class='muted'>no tasks yet — triggers create them once a workspace exists</div>";
   });
 }
+function moveTask(id, to){
+  // Optimistic: reload the board after the move; the control loop reacts server-side.
+  post("/api/task/move", { id:id, to:to }).then(function(){ loadBoard(); if(SEL_TASK===id) loadTask(id); });
+}
+var SEL_TASK=null;
 function loadTask(id){
+  SEL_TASK=id;
   api("/api/task?id="+encodeURIComponent(id)).then(function(r){
     var box=document.getElementById("task-detail"); var b=document.getElementById("task-body"); var tk=r.task;
     box.style.display="block";
     if(!tk){ b.innerHTML="<span class='muted'>not found</span>"; return; }
-    var h="<div class='id k'>"+esc(tk.id)+" · "+esc(tk.status)+"</div><div style='font-size:14px;color:#fff;margin:4px 0'>"+esc(tk.title)+"</div>";
-    if(tk.description) h+="<pre>"+esc(tk.description)+"</pre>";
-    h+="<h2 style='margin-top:10px'>comments</h2>";
-    (tk.comments||[]).forEach(function(c){ h+="<div class='row'><span class='muted'>"+clk(c.ts)+"</span> "+esc(c.text)+"</div>"; });
-    if(!(tk.comments||[]).length) h+="<div class='muted'>no comments</div>";
-    h+="<h2 style='margin-top:10px'>events</h2>";
-    (r.events||[]).slice().reverse().forEach(function(ev){ h+="<div class='row'><span class='muted'>"+clk(ev.time)+"</span> "+esc(ev.type)+"</div>"; });
-    b.innerHTML=h;
+    b.innerHTML="";
+    var head=el("<div><div class='id k'>"+esc(tk.id)+"</div><div style='font-size:14px;color:#fff;margin:4px 0'>"+esc(tk.title)+"</div></div>");
+    // Lane selector — a keyboard-accessible alternative to drag-and-drop.
+    var mv=document.createElement("div"); mv.style.margin="6px 0"; mv.innerHTML="<span class='muted'>lane </span>";
+    var sel=document.createElement("select");
+    (BOARD_LANES.length?BOARD_LANES:[tk.status]).forEach(function(st){
+      var op=document.createElement("option"); op.value=st; op.textContent=st; if(st===tk.status) op.selected=true; sel.appendChild(op);
+    });
+    sel.onchange=function(){ if(sel.value!==tk.status) moveTask(tk.id, sel.value); };
+    mv.appendChild(sel); head.appendChild(mv);
+    b.appendChild(head);
+    if(tk.description){ var pd=document.createElement("pre"); pd.textContent=tk.description; b.appendChild(pd); }
+
+    b.appendChild(el("<h2 style='margin-top:10px'>comments</h2>"));
+    (tk.comments||[]).forEach(function(c){ b.appendChild(row("<span class='muted'>"+clk(c.ts)+"</span> "+esc(c.text))); });
+    if(!(tk.comments||[]).length) b.appendChild(el("<div class='muted'>no comments</div>"));
+    // Comment box — a comment steers/answers/instructs the agent (control loop).
+    var cf=document.createElement("form"); cf.style.marginTop="8px";
+    var ci=document.createElement("input"); ci.placeholder="comment (answers a block, or instructs the agent)…"; ci.autocomplete="off";
+    var cb=document.createElement("button"); cb.className="act"; cb.textContent="comment";
+    cf.appendChild(ci); cf.appendChild(cb);
+    cf.onsubmit=function(e){ e.preventDefault(); if(!ci.value.trim()) return; post("/api/task/comment", { id:tk.id, text:ci.value.trim() }).then(function(){ ci.value=""; loadTask(tk.id); }); };
+    b.appendChild(cf);
+
+    b.appendChild(el("<h2 style='margin-top:10px'>events</h2>"));
+    (r.events||[]).slice().reverse().forEach(function(ev){ b.appendChild(row("<span class='muted'>"+clk(ev.time)+"</span> "+esc(ev.type)+(ev.actor?(" <span class='muted'>"+esc(ev.actor)+"</span>"):""))); });
   });
 }
 

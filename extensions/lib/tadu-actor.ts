@@ -63,3 +63,22 @@ export function isHumanControlEvent(event: TaduEvent): boolean {
 export function agentTaduEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 	return { ...env, TADU_ACTOR: AGENT_ACTOR };
 }
+
+/**
+ * Stamp an environment so a spawned `tadu` write is attributed to the human — the
+ * write side of the control plane (a board drag or comment from the dashboard).
+ *
+ * The board handler runs *inside* the daemon, which must never export the agent
+ * actor globally; but to be robust against a stray inherited `TADU_ACTOR=agent`,
+ * this strips an agent value so the write falls back to the git user (a real human
+ * identity such as "Tom Davies"). Any non-agent value is left intact. The only
+ * guarantee the watch loop needs is "not the agent", which this assures.
+ */
+export function humanTaduEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	if (env.TADU_ACTOR !== AGENT_ACTOR) return { ...env };
+	const out: NodeJS.ProcessEnv = {};
+	for (const [key, value] of Object.entries(env)) {
+		if (key !== "TADU_ACTOR") out[key] = value;
+	}
+	return out;
+}

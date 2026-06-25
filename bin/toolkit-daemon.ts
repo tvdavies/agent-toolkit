@@ -16,6 +16,7 @@
  * AGENT_TOOLKIT_PI_BIN.
  */
 
+import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -26,8 +27,10 @@ import { brainRoot } from "../extensions/lib/paths.ts";
 import { INITIAL_RUNS_STATE, recordRun, type RunsState } from "../extensions/lib/runs.ts";
 import { applyCumulativeCost, INITIAL_SPEND_STATE, type SpendState } from "../extensions/lib/spend.ts";
 import { writeAnswer } from "../extensions/lib/park.ts";
-import { ensureWorkspace, listTasks, taduRoot, workspaceExists } from "../extensions/lib/tadu.ts";
-import { taduControl } from "../daemon/tadu-control.ts";
+import { agentTaduEnv } from "../extensions/lib/tadu-actor.ts";
+import { ensureWorkspace, getTask, listTasks, readConfig, taduRoot, workspaceExists } from "../extensions/lib/tadu.ts";
+import { humanTaduControl, taduControl } from "../daemon/tadu-control.ts";
+import { ControlLoop } from "../daemon/control-loop.ts";
 import { parseHoursWindow, resolveMinIntervalMinutes } from "../extensions/heartbeat/schedule-gate.ts";
 import { Dashboard } from "../daemon/dashboard.ts";
 import { checkEnvFileSecurity } from "../daemon/env-secure.ts";
@@ -274,7 +277,10 @@ function runDaemon(): void {
 		statusPath,
 		inbox,
 		createClient: () => {
-			currentClient = new RpcClient({ command: piBin, args: piArgs, cwd: repoDir, logger: (m) => console.error(m) });
+			// Stamp the resident orchestrator's env so ITS tadu writes (a lane move /
+			// comment from the agent) are attributed to the agent, never mistaken for
+			// human board input by the watch loop. (Same process env otherwise.)
+			currentClient = new RpcClient({ command: piBin, args: piArgs, cwd: repoDir, env: agentTaduEnv(), logger: (m) => console.error(m) });
 			return currentClient;
 		},
 		delegate: (trigger) => classifyTrigger(trigger) === "worker",
@@ -394,10 +400,14 @@ function runDaemon(): void {
 		notifyWatcher.start();
 	}
 
-	// Oversight dashboard (loopback).
+	// Oversight dashboard (loopback). Board drags/comments are written as the HUMAN
+	// actor so the watcher reacts to them (the daemon's own writes are the agent).
+	const humanControl = humanTaduControl();
 	const dashboard = new Dashboard({
 		enqueue: (text) => inbox.append({ text, source: "dashboard" }),
 		answer: (ref, text) => writeAnswer(state, ref, text, new Date().toISOString()),
+		moveTask: (id, to) => humanControl.move(id, to),
+		commentTask: (id, text) => humanControl.comment(id, text),
 		statusPath,
 		sessionsDir: sessionDir,
 		workerSessionsDir,
@@ -427,24 +437,39 @@ function runDaemon(): void {
 	});
 	dashboard.start().catch((e) => console.error(`[dashboard] failed to start: ${e}`));
 
-	// Control-plane watcher: observe the human acting on the board (lane drags,
-	// comments) live via `tadu watch`. The actor model splits the agent's own
-	// writes from the human's; for now a human control event is only recorded as a
-	// decision (no reaction yet — the control loop is the next phase). Started only
-	// when the workspace exists, so a missing `tadu` binary doesn't hot-loop.
+	// Control plane: the board is bidirectional. The human's drags/comments become
+	// agent actions (start / answer / stop), the agent's own writes are ignored
+	// (the actor model is the echo-loop guard). Dispatch goes through the same run
+	// accounting as autonomous work so a human-started task still counts against the
+	// daily cap.
+	const controlLoop = new ControlLoop({
+		getTask: (id) => getTask(id),
+		taskState: (id) => workerPool.taskState(id),
+		config: () => readConfig(),
+		dispatch: (taskId, text) => {
+			// Honour the same daily cap as autonomous work: a board action must not spawn
+			// workers once the spend/runs cap has tripped (the cap exists to bound exactly
+			// this — billable worker sessions).
+			if (spendPaused || runsPaused) {
+				recordDecision({ kind: "gated", summary: `Daily cap reached; not dispatching ${taskId} from the board.`, source: "control-plane", detail: { taduTask: taskId } });
+				return;
+			}
+			accountRun();
+			workerPool.dispatch({ id: randomUUID(), text, source: "control-plane", taduTask: taskId });
+		},
+		answer: (ref, text) => writeAnswer(state, ref, text, new Date().toISOString()),
+		stopTask: (taskId, reason) => workerPool.stopTask(taskId, reason),
+		onDecision: (d) => recordDecision(d),
+		logger: (m) => console.error(m),
+	});
+
+	// Watcher: stream the human's board actions live via `tadu watch` and drive the
+	// control loop. Started only when the workspace exists, so a missing `tadu`
+	// binary doesn't hot-loop.
 	const taduWatcher = workspaceExists()
 		? new TaduWatcher({
 				cwd: taduRoot(),
-				onHumanEvent: (event) => {
-					const verb = event.type === "task.moved" ? "moved" : "commented on";
-					const lane = (event.data as { to?: string } | undefined)?.to;
-					recordDecision({
-						kind: "trigger",
-						summary: `Human ${verb} ${event.task ?? "a task"}${lane ? ` → ${lane}` : ""} (actor ${event.actor ?? "unknown"})`,
-						source: "control-plane",
-						detail: { taduTask: event.task, eventType: event.type, actor: event.actor, ...(lane ? { lane } : {}) },
-					});
-				},
+				onHumanEvent: (event) => controlLoop.handle(event),
 				logger: (m) => console.error(m),
 			})
 		: undefined;
