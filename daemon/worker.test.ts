@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runWorker, type WorkerSpec, workerArgs } from "./worker";
+import { runWorker, type WorkerSpec, workerArgs, workerEnv } from "./worker";
 
 let dir: string;
 
@@ -41,6 +41,29 @@ describe("workerArgs", () => {
 		]);
 		expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "openai/gpt-5.5"]);
 		expect(args[args.length - 1]).toBe("do the task"); // prompt is last
+	});
+});
+
+describe("workerEnv", () => {
+	it("strips daemon secrets but keeps PATH/HOME/provider keys/config", () => {
+		const env = workerEnv({
+			PATH: "/bin",
+			HOME: "/home/x",
+			ANTHROPIC_API_KEY: "k",
+			AGENT_TOOLKIT_STATE_DIR: "/s",
+			SLACK_BOT_TOKEN: "s",
+			WEBHOOK_SECRET: "w",
+			SLACK_SIGNING_SECRET: "ss",
+			AGENT_TOOLKIT_DASHBOARD_TOKEN: "d",
+		});
+		expect(env.PATH).toBe("/bin");
+		expect(env.HOME).toBe("/home/x");
+		expect(env.ANTHROPIC_API_KEY).toBe("k");
+		expect(env.AGENT_TOOLKIT_STATE_DIR).toBe("/s");
+		expect(env.SLACK_BOT_TOKEN).toBeUndefined();
+		expect(env.WEBHOOK_SECRET).toBeUndefined();
+		expect(env.SLACK_SIGNING_SECRET).toBeUndefined();
+		expect(env.AGENT_TOOLKIT_DASHBOARD_TOKEN).toBeUndefined();
 	});
 });
 

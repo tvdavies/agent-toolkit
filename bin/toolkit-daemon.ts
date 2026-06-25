@@ -25,7 +25,8 @@ import { notify } from "../extensions/lib/notify.ts";
 import { brainRoot } from "../extensions/lib/paths.ts";
 import { INITIAL_RUNS_STATE, recordRun, type RunsState } from "../extensions/lib/runs.ts";
 import { applyCumulativeCost, INITIAL_SPEND_STATE, type SpendState } from "../extensions/lib/spend.ts";
-import { ensureWorkspace, taduRoot } from "../extensions/lib/tadu.ts";
+import { ensureWorkspace, listTasks, taduRoot } from "../extensions/lib/tadu.ts";
+import { taduControl } from "../daemon/tadu-control.ts";
 import { parseHoursWindow, resolveMinIntervalMinutes } from "../extensions/heartbeat/schedule-gate.ts";
 import { Dashboard } from "../daemon/dashboard.ts";
 import { checkEnvFileSecurity } from "../daemon/env-secure.ts";
@@ -198,6 +199,22 @@ function runDaemon(): void {
 	const runsPath = join(state, "runs-state.json");
 	let runsState: RunsState = (readJson(runsPath) as RunsState | null) ?? INITIAL_RUNS_STATE;
 
+	// Count one autonomous run against the daily cap. Applies to BOTH the resident
+	// forward path and worker delegation, so workers cannot run unbounded.
+	const accountRun = (): void => {
+		if (maxRunsPerDay <= 0) return;
+		const result = recordRun(runsState, { maxPerDay: maxRunsPerDay }, Date.now());
+		runsState = result.state;
+		writeJson(runsPath, runsState);
+		runsPaused = result.overCap;
+		if (result.justCrossed) {
+			notify(
+				{ summary: `Daily run cap (${maxRunsPerDay}) reached; pausing autonomous work until tomorrow.`, kind: "escalate", source: "runs" },
+				{ force: true },
+			);
+		}
+	};
+
 	// Worker fleet: discrete tracked work is delegated to a bounded pool of
 	// `pi -p` worker sessions so the resident orchestrator never blocks on a long
 	// task and independent tasks run concurrently. Workers write their sessions to
@@ -226,7 +243,10 @@ function runDaemon(): void {
 			return currentClient;
 		},
 		delegate: (trigger) => classifyTrigger(trigger) === "worker",
-		dispatchWorker: (trigger) => workerPool.dispatch(trigger),
+		dispatchWorker: (trigger) => {
+			accountRun();
+			workerPool.dispatch(trigger);
+		},
 		onForward: (trigger) => {
 			recordDecision({
 				kind: "trigger",
@@ -234,22 +254,32 @@ function runDaemon(): void {
 				source: trigger.source,
 				detail: trigger.taduTask ? { taduTask: trigger.taduTask } : undefined,
 			});
-			if (maxRunsPerDay > 0) {
-				const result = recordRun(runsState, { maxPerDay: maxRunsPerDay }, Date.now());
-				runsState = result.state;
-				writeJson(runsPath, runsState);
-				runsPaused = result.overCap;
-				if (result.justCrossed) {
-					notify(
-						{ summary: `Daily run cap (${maxRunsPerDay}) reached; pausing autonomous forwarding until tomorrow.`, kind: "escalate", source: "runs" },
-						{ force: true },
-					);
-				}
-			}
+			accountRun();
 		},
 		onReply,
 		gate: () => spendPaused || runsPaused,
 	});
+
+	// Reconcile orphaned work: any task still in-progress at boot had its worker
+	// killed with the previous daemon (the pool's active set is in-memory only).
+	// Move it to blocked and log it so it is not an invisible zombie on the board.
+	try {
+		const control = taduControl();
+		for (const task of listTasks()) {
+			if (task.status !== "in-progress") continue;
+			control.move(task.id, "blocked");
+			control.comment(task.id, "Worker did not finish (daemon restarted); moved to blocked for review.");
+			recordDecision({
+				kind: "escalate",
+				summary: `Task ${task.id} was orphaned by a daemon restart; moved to blocked.`,
+				source: "fleet",
+				detail: { taduTask: task.id },
+			});
+		}
+	} catch {
+		// best-effort; reconcile must never block startup
+	}
+
 	supervisor.start();
 
 	let spendTimer: ReturnType<typeof setInterval> | undefined;
@@ -370,8 +400,10 @@ function runDaemon(): void {
 		clearTimeout(initialStateTimer);
 		notifyWatcher?.stop();
 		await dashboard.stop();
-		await workerPool.stop();
+		// Stop the supervisor first so the inbox poll can't dispatch into a pool
+		// that is shutting down; then drain/kill the workers (bounded).
 		await supervisor.stop();
+		await workerPool.stop();
 		slack?.stop();
 		await webhook?.stop();
 		process.exit(0);

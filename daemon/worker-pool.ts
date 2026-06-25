@@ -32,6 +32,10 @@ export type WorkerPoolOptions = {
 	piBin: string;
 	model?: string;
 	timeoutMs?: number;
+	/** Max queued (not-yet-started) triggers; excess is dropped + escalated. */
+	maxQueue?: number;
+	/** Upper bound on how long stop() waits for workers to die. */
+	stopTimeoutMs?: number;
 	/** Spawn a worker; defaults to the real `pi -p` runner. */
 	runner?: WorkerRunner;
 	/** TADU lifecycle surface; defaults to the `tadu` CLI. */
@@ -55,6 +59,9 @@ export class WorkerPool {
 		Pick<WorkerPoolOptions, "model" | "timeoutMs" | "onDecision" | "onEscalate" | "logger">;
 	private readonly queue: Trigger[] = [];
 	private readonly active = new Map<string, WorkerHandle>();
+	/** TADU tasks currently queued or running, so a task is never double-dispatched. */
+	private readonly inFlightTasks = new Set<string>();
+	private stopping = false;
 
 	constructor(options: WorkerPoolOptions) {
 		this.o = {
@@ -68,6 +75,8 @@ export class WorkerPool {
 			successStatus: options.successStatus ?? "in-review",
 			failureStatus: options.failureStatus ?? "blocked",
 			newId: options.newId ?? (() => `w-${randomUUID().slice(0, 8)}`),
+			maxQueue: Math.max(1, options.maxQueue ?? 200),
+			stopTimeoutMs: options.stopTimeoutMs ?? 6000,
 			model: options.model,
 			timeoutMs: options.timeoutMs,
 			onDecision: options.onDecision,
@@ -78,6 +87,22 @@ export class WorkerPool {
 
 	/** Queue a trigger and start it if there is spare capacity. */
 	dispatch(trigger: Trigger): void {
+		if (this.stopping) return;
+		const taskId = trigger.taduTask;
+		// Coalesce: never run the same task twice concurrently (re-dispatch / inbox
+		// replay must not drag a running or finished task backwards).
+		if (taskId && this.inFlightTasks.has(taskId)) {
+			this.o.logger?.(`[pool] task ${taskId} already in flight; skipping duplicate`);
+			return;
+		}
+		// Bound the backlog so a burst cannot grow memory or pending work without limit.
+		if (this.queue.length >= this.o.maxQueue) {
+			const summary = `Worker queue full (${this.o.maxQueue}); dropped: ${trigger.text.slice(0, 80)}`;
+			this.o.onDecision?.({ kind: "escalate", summary, source: trigger.source });
+			this.o.onEscalate?.(summary);
+			return;
+		}
+		if (taskId) this.inFlightTasks.add(taskId);
 		this.queue.push(trigger);
 		this.pump();
 	}
@@ -89,15 +114,20 @@ export class WorkerPool {
 		return this.queue.length;
 	}
 
-	/** Kill any active workers and drop the queue. */
+	/** Kill any active workers and drop the queue, bounded so shutdown never wedges. */
 	async stop(): Promise<void> {
+		this.stopping = true;
 		this.queue.length = 0;
 		const handles = [...this.active.values()];
 		for (const h of handles) h.kill();
-		await Promise.allSettled(handles.map((h) => h.done));
+		await Promise.race([
+			Promise.allSettled(handles.map((h) => h.done)),
+			new Promise((resolve) => setTimeout(resolve, this.o.stopTimeoutMs)),
+		]);
 	}
 
 	private pump(): void {
+		if (this.stopping) return;
 		while (this.active.size < this.o.maxConcurrent && this.queue.length > 0) {
 			const trigger = this.queue.shift();
 			if (trigger) this.start(trigger);
@@ -147,6 +177,7 @@ export class WorkerPool {
 			)
 			.finally(() => {
 				this.active.delete(id);
+				if (taskId) this.inFlightTasks.delete(taskId);
 				this.pump();
 			});
 	}

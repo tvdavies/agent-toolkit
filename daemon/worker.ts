@@ -77,7 +77,10 @@ export function runWorker(spec: WorkerSpec, spawn: SpawnFn = nodeSpawn): WorkerH
 	const child: ChildProcess = spawn(spec.piBin, workerArgs(spec), {
 		cwd: spec.cwd,
 		stdio: ["ignore", "pipe", "pipe"],
-		env: process.env,
+		// Curated env: a worker has no business holding the daemon's Slack/webhook
+		// secrets or the dashboard token. Provider keys + PATH/HOME (where pi keeps
+		// its auth) are kept so the run still works.
+		env: workerEnv(),
 		// Own process group, so a timeout/stop kills the worker AND any tool
 		// subprocesses it spawned (otherwise a grandchild can hold the output pipe
 		// open and `close` never fires).
@@ -109,10 +112,16 @@ export function runWorker(spec: WorkerSpec, spawn: SpawnFn = nodeSpawn): WorkerH
 		if (err.length < MAX_CAPTURE) err += chunk.toString("utf8");
 	});
 
+	// SIGTERM now, SIGKILL the whole group if it has not closed shortly after — so
+	// neither a timeout nor an operator stop can wedge on an unresponsive child.
+	const requestStop = (): void => {
+		killGroup("SIGTERM");
+		if (!hardKillTimer) hardKillTimer = setTimeout(() => killGroup("SIGKILL"), 3000);
+	};
+
 	const timer = setTimeout(() => {
 		timedOut = true;
-		killGroup("SIGTERM");
-		hardKillTimer = setTimeout(() => killGroup("SIGKILL"), 3000);
+		requestStop();
 	}, spec.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
 	const done = new Promise<WorkerResult>((resolve) => {
@@ -137,5 +146,15 @@ export function runWorker(spec: WorkerSpec, spawn: SpawnFn = nodeSpawn): WorkerH
 		child.on("close", (code, signal) => finish(code, signal));
 	});
 
-	return { id: spec.id, kill: () => killGroup("SIGTERM"), done };
+	return { id: spec.id, kill: requestStop, done };
+}
+
+/** Daemon env minus the secrets/tokens a worker must never see. */
+export function workerEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	const denied = /^SLACK_|^WEBHOOK_|SIGNING_SECRET|DASHBOARD_TOKEN/;
+	const out: NodeJS.ProcessEnv = {};
+	for (const [key, value] of Object.entries(env)) {
+		if (!denied.test(key)) out[key] = value;
+	}
+	return out;
 }

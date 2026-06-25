@@ -107,6 +107,69 @@ describe("WorkerPool", () => {
 		expect(decisions.some((d) => d.kind === "delegate")).toBe(true);
 	});
 
+	it("coalesces a duplicate dispatch of the same task", () => {
+		const p = pool(2);
+		p.dispatch(trig("TASK-1"));
+		p.dispatch(trig("TASK-1")); // same task, must not double-run
+		expect(p.activeCount()).toBe(1);
+		expect(pendings).toHaveLength(1);
+	});
+
+	it("allows a task to be dispatched again once it has finished", async () => {
+		const p = pool(1);
+		p.dispatch(trig("TASK-1"));
+		pendings[0]?.resolve(okResult(pendings[0].spec));
+		await flush();
+		p.dispatch(trig("TASK-1")); // now free to run again
+		expect(p.activeCount()).toBe(1);
+		expect(pendings).toHaveLength(2);
+	});
+
+	it("drops and escalates when the queue is full", () => {
+		const p = new WorkerPool({
+			maxConcurrent: 1,
+			maxQueue: 1,
+			sessionDir: "/tmp/s",
+			cwd: "/tmp/c",
+			piBin: "pi",
+			runner,
+			tadu,
+			newId: () => `w${++ids}`,
+			onDecision: (d) => decisions.push(d),
+			onEscalate: (s) => escalations.push(s),
+		});
+		p.dispatch(trig("TASK-1")); // active
+		p.dispatch(trig("TASK-2")); // queued (fills the queue)
+		p.dispatch(trig("TASK-3")); // dropped
+		expect(p.activeCount()).toBe(1);
+		expect(p.queuedCount()).toBe(1);
+		expect(escalations.some((s) => s.includes("queue full"))).toBe(true);
+	});
+
+	it("stop() resolves even if a worker never closes", async () => {
+		const p = new WorkerPool({
+			maxConcurrent: 1,
+			stopTimeoutMs: 50,
+			sessionDir: "/tmp/s",
+			cwd: "/tmp/c",
+			piBin: "pi",
+			runner, // its done never resolves unless we resolve it
+			tadu,
+			newId: () => `w${++ids}`,
+		});
+		p.dispatch(trig("TASK-1"));
+		await p.stop(); // must not hang despite the unresolved worker
+		expect(pendings[0]?.killed).toBe(true);
+	});
+
+	it("ignores dispatch after stop", async () => {
+		const p = pool(1);
+		await p.stop();
+		p.dispatch(trig("TASK-1"));
+		expect(p.activeCount()).toBe(0);
+		expect(pendings).toHaveLength(0);
+	});
+
 	it("drains the whole queue as workers finish", async () => {
 		const p = pool(1);
 		for (let i = 1; i <= 3; i += 1) p.dispatch(trig(`TASK-${i}`));
