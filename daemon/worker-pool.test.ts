@@ -341,7 +341,32 @@ describe("WorkerPool", () => {
 		p.checkAnswers();
 		await flush();
 		expect(p.activeCount()).toBe(0);
-		expect(readAnswers(stateDir)).toEqual([]); // consumed/dropped, no resume
+		expect(readAnswers(stateDir)).toEqual([]); // stale (invalid ts) consumed/dropped, no resume
+	});
+
+	it("honours needs_human even when the resume budget is exhausted", async () => {
+		const p = pool(1, { maxResumes: 1 });
+		// Exhaust the budget with one timer park + resume.
+		p.dispatch(trig("TASK-7"));
+		let spec = pendings[0]?.spec as WorkerSpec;
+		writeParkRequest(stateDir, { runId: spec.id, dueAt: clock, prompt: "again", reason: "ci" });
+		pendings[0]?.resolve(okResult(spec));
+		await flush();
+		p.checkParked();
+		await flush();
+		expect(pendings).toHaveLength(2);
+
+		// The resumed worker (now at maxResumes) hits a real blocker.
+		spec = pendings[1]?.spec as WorkerSpec;
+		writeParkRequest(stateDir, { runId: spec.id, dueAt: clock + 86_400_000, prompt: "f", awaitingAnswer: true, question: "decide?" });
+		pendings[1]?.resolve(okResult(spec));
+		await flush();
+
+		// Must park-for-answer + push — NOT be swallowed as loop-exhausted / in-review.
+		expect(needsHuman.some((n) => n.taskId === "TASK-7")).toBe(true);
+		expect(moves).toContainEqual(["TASK-7", "blocked"]);
+		expect(moves).not.toContainEqual(["TASK-7", "in-review"]);
+		expect(p.parkedCount()).toBe(1);
 	});
 
 	it("hands off (does not fail) a park loop that exceeds maxResumes", async () => {

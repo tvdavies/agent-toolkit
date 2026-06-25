@@ -257,7 +257,7 @@ function runDaemon(): void {
 			// (the worker is parked after one needs_human call until it is answered).
 			notify(
 				{
-					summary: `Needs your decision${taskId ? ` (${taskId})` : ""}: ${question}`,
+					summary: `Needs your decision${taskId ? ` (${taskId})` : ` (reply: --answer ${runId})`}: ${question}`,
 					kind: "escalate",
 					source: "needs-human",
 					detail: { needsHuman: true, runId, taskId },

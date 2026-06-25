@@ -34,6 +34,9 @@ import {
 
 /** Drive-to-green and similar loops do real fix work per cycle; give them headroom. */
 const LONG_RUN_TIMEOUT_MS = 45 * 60_000;
+/** Keep an unmatched human answer this long (the worker may not have parked yet)
+ *  before treating it as stale/typo and dropping it. */
+const ANSWER_TTL_MS = 60 * 60_000;
 import type { Trigger } from "./inbox.ts";
 import { taduControl, type TaduControl } from "./tadu-control.ts";
 import { runWorker, type WorkerHandle, type WorkerResult, type WorkerSpec } from "./worker.ts";
@@ -173,6 +176,9 @@ export class WorkerPool {
 		if (this.parked.size) {
 			this.o.logger?.(`[pool] re-armed ${this.parked.size} parked session(s) from disk`);
 			this.ensureParkTimer();
+			// Consume any answer that arrived while the daemon was down BEFORE the
+			// safety timer can sweep an entry whose 24h window elapsed offline.
+			this.checkAnswers();
 			this.checkParked();
 		}
 	}
@@ -219,12 +225,20 @@ export class WorkerPool {
 					break;
 				}
 			}
-			// Consume the answer either way (a no-match is a stale/typo ref — dropped).
-			clearAnswer(this.o.stateDir, answer.ref);
-			if (!match) continue;
+			if (!match) {
+				// Keep a fresh unmatched answer (the worker may not have parked yet);
+				// only drop a genuinely stale/typo ref after a grace window.
+				const age = this.o.now() - Date.parse(answer.ts);
+				if (!Number.isFinite(age) || age > ANSWER_TTL_MS) clearAnswer(this.o.stateDir, answer.ref);
+				continue;
+			}
 			const { entry, prepared } = match;
 			this.parked.delete(entry.runId);
 			removeParked(this.o.stateDir, entry.runId);
+			// Clear every ref key for this entry so a sibling answer can't linger/replay.
+			clearAnswer(this.o.stateDir, answer.ref);
+			if (entry.taskId) clearAnswer(this.o.stateDir, entry.taskId);
+			clearAnswer(this.o.stateDir, entry.runId);
 			const resumePrompt =
 				`The human answered your question${entry.question ? ` ("${entry.question}")` : ""}:\n\n${answer.answer}\n\n` +
 				`Continue from where you left off, taking this answer into account.`;
@@ -233,7 +247,10 @@ export class WorkerPool {
 				entry: { ...entry, prompt: resumePrompt, awaitingAnswer: false, question: undefined },
 				prepared,
 			});
-			if (entry.taskId) this.o.tadu.comment(entry.taskId, `Human answered — resuming: ${answer.answer.slice(0, 300)}`);
+			if (entry.taskId) {
+				this.o.tadu.move(entry.taskId, this.o.startStatus); // back to the active lane from "blocked"
+				this.o.tadu.comment(entry.taskId, `Human answered — resuming: ${answer.answer.slice(0, 300)}`);
+			}
 			this.o.onDecision?.({
 				kind: "answered",
 				summary: `Worker ${entry.runId} resumed with a human answer${entry.taskId ? ` (${entry.taskId})` : ""}.`,
@@ -262,8 +279,10 @@ export class WorkerPool {
 	private ensureParkTimer(): void {
 		if (this.parkTimer || this.o.parkPollMs <= 0 || this.stopping) return;
 		this.parkTimer = setInterval(() => {
-			this.checkParked();
+			// Answers first: a real human answer must always win over the 24h safety
+			// timer (which would otherwise resume the block with the "no answer" prompt).
 			this.checkAnswers();
+			this.checkParked();
 		}, this.o.parkPollMs);
 	}
 
@@ -320,11 +339,9 @@ export class WorkerPool {
 			});
 			this.o.logger?.(`[pool] worker ${id} started (active ${this.active.size + 1}/${this.o.maxConcurrent}, queued ${this.queue.length})`);
 		} else {
-			// Back to the active lane (a needs-human resume was sitting in "blocked").
-			if (taskId) {
-				this.o.tadu.move(taskId, this.o.startStatus);
-				this.o.tadu.comment(taskId, `Worker ${id} resumed (cycle ${resumes}).`);
-			}
+			// (A needs-human resume already moved the task back to the active lane in
+			// checkAnswers; a plain park resume stays in-progress — no move needed.)
+			if (taskId) this.o.tadu.comment(taskId, `Worker ${id} resumed (cycle ${resumes}).`);
 			this.o.onDecision?.({
 				kind: "worker-resume",
 				summary: `Resumed worker ${id}${taskId ? ` (${taskId})` : ""} — cycle ${resumes}.`,
@@ -357,7 +374,9 @@ export class WorkerPool {
 
 		// PARK: the worker asked to wait. Keep the task in flight but dormant; free
 		// the slot; resume at the due time. Don't finalise the worktree or status.
-		if (req && result.ok && resumes < this.o.maxResumes) {
+		// A needs_human block is an ESCALATION, not a loop cycle: it is honoured even
+		// when the auto-loop resume budget is exhausted, and does not consume budget.
+		if (req && result.ok && (req.awaitingAnswer || resumes < this.o.maxResumes)) {
 			clearParkRequest(this.o.stateDir, spec.id);
 			const entry: ParkedEntry = {
 				runId: spec.id,
@@ -366,7 +385,7 @@ export class WorkerPool {
 				dueAt: req.dueAt,
 				prompt: req.prompt,
 				reason: req.reason,
-				resumes: resumes + 1,
+				resumes: resumes + (req.awaitingAnswer ? 0 : 1),
 				timeoutMs: spec.timeoutMs,
 				awaitingAnswer: req.awaitingAnswer,
 				question: req.question,
