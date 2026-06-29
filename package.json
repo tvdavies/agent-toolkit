@@ -27,6 +27,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@jeffs-brain/memory": "file:../dev/tvdavies/jeffs-brain-memory/sdks/ts/memory",
     "@mozilla/readability": "^0.6.0",
     "jsdom": "^27.4.0",
     "pi-subagents": "^0.28.0",
