@@ -31,7 +31,12 @@ export type Decision = {
 	classification: Classification;
 };
 
-type Predicate = (command: string) => boolean;
+export type CommandContext = {
+	/** Current git branch for bare `git push` checks, when the caller can cheaply provide it. */
+	currentBranch?: string;
+};
+
+type Predicate = (command: string, context: CommandContext) => boolean;
 
 type Rule = {
 	id: string;
@@ -69,7 +74,21 @@ function isDangerousRm(command: string): boolean {
 		.some((token) => exact.test(token) || systemRoot.test(token));
 }
 
-const PROTECTED_BRANCH = /\b(main|master|develop|development|staging|production|prod|release)\b/;
+const PROTECTED_BRANCH_NAMES = [
+	"main",
+	"master",
+	"develop",
+	"development",
+	"staging",
+	"production",
+	"prod",
+	"release",
+] as const;
+const PROTECTED_BRANCH = new RegExp(`\\b(${PROTECTED_BRANCH_NAMES.join("|")})\\b`);
+
+function isProtectedBranchName(branch: string | undefined): boolean {
+	return PROTECTED_BRANCH_NAMES.includes(branch as (typeof PROTECTED_BRANCH_NAMES)[number]);
+}
 
 /** Force-push that targets a protected branch. */
 function isForcePushProtected(command: string): boolean {
@@ -93,6 +112,49 @@ function isPushToProtected(command: string): boolean {
 	);
 }
 
+const PUSH_OPTION_VALUE_FLAGS = new Set(["--exec", "--receive-pack", "--repo", "--push-option", "-o"]);
+
+/** Non-option words after `git push`, best-effort and intentionally conservative.
+ *  Used only to catch the ambiguous "push whatever branch I'm on" shape. */
+function gitPushArgs(command: string): string[] {
+	const match = /\bgit\s+push\b(?:\s+(.+))?$/.exec(command);
+	if (!match) return [];
+	const rest = (match[1] ?? "").split(/\s+(?:&&|\|\||;|\|)\s+/)[0] ?? "";
+	const tokens = rest.split(/\s+/).filter(Boolean);
+	const args: string[] = [];
+	for (let i = 0; i < tokens.length; i += 1) {
+		const token = tokens[i] ?? "";
+		if (token === "--") {
+			args.push(...tokens.slice(i + 1));
+			break;
+		}
+		if (token.startsWith("--")) {
+			const key = token.split("=")[0] ?? token;
+			if (!token.includes("=") && PUSH_OPTION_VALUE_FLAGS.has(key)) i += 1;
+			continue;
+		}
+		if (/^-[A-Za-z]+$/.test(token)) {
+			// Short push flags like -u/--set-upstream do not themselves name a ref.
+			if (PUSH_OPTION_VALUE_FLAGS.has(token)) i += 1;
+			continue;
+		}
+		args.push(token);
+	}
+	return args;
+}
+
+/** A bare or remote-only push from a protected current branch. Git's default
+ *  push behaviour can target the upstream branch without spelling it out, so
+ *  `git push` on main is as consequential as `git push origin main`. */
+function isBarePushFromProtectedBranch(command: string, context: CommandContext): boolean {
+	if (!isProtectedBranchName(context.currentBranch)) return false;
+	if (!/\bgit\s+push\b/.test(command)) return false;
+	const args = gitPushArgs(command);
+	if (args.length === 0) return true;
+	// `git push origin` / `git push myfork` still lets git infer the current branch.
+	return args.length === 1 && !args[0]?.includes(":") && !args[0]?.startsWith("+");
+}
+
 /**
  * Rules are evaluated in order; the first match wins, so list most-severe first.
  * Patterns are intentionally conservative — they target unambiguous, well-known
@@ -109,6 +171,7 @@ const RULES: Rule[] = [
 	{ id: "redirect-device", tier: "banned", match: />\s*\/dev\/(sd|nvme|disk|hd|mmcblk)/, reason: "Redirect over a block device." },
 	{ id: "git-force-push-protected", tier: "banned", match: isForcePushProtected, reason: "Force-push to a protected branch (main/master/develop/production…)." },
 	{ id: "git-push-protected", tier: "banned", match: isPushToProtected, reason: "Pushing straight to a protected branch — autonomous changes must go on a PR, not the base branch." },
+	{ id: "git-bare-push-protected", tier: "banned", match: isBarePushFromProtectedBranch, reason: "Bare git push from a protected branch — spell out and review a feature-branch push instead." },
 	{ id: "gh-pr-merge", tier: "banned", match: /\bgh\s+pr\s+merge\b/, reason: "Merging a PR is not permitted for the autonomous agent — a human merges." },
 	{ id: "git-history-rewrite", tier: "banned", match: /\bgit\s+filter-branch\b|\bgit[-\s]filter-repo\b/, reason: "Rewriting git history irreversibly." },
 	{ id: "terraform-destroy", tier: "banned", match: /\bterraform\s+destroy\b/, reason: "Tearing down infrastructure." },
@@ -134,12 +197,12 @@ export function listRules(): { rule: string; tier: Tier; reason: string }[] {
 }
 
 /** Classify a raw shell command into a risk tier. First matching rule wins. */
-export function classifyCommand(command: string): Classification {
+export function classifyCommand(command: string, context: CommandContext = {}): Classification {
 	const normalised = command.replace(/\s+/g, " ").trim();
 	for (const rule of RULES) {
 		const hit =
 			typeof rule.match === "function"
-				? rule.match(normalised)
+				? rule.match(normalised, context)
 				: rule.match.test(normalised);
 		if (hit) return { tier: rule.tier, rule: rule.id, reason: rule.reason };
 	}
@@ -147,13 +210,13 @@ export function classifyCommand(command: string): Classification {
 }
 
 /** Classify a tool call. Only `bash` is inspected today; other tools allow. */
-export function classifyToolCall(toolName: string, input: unknown): Classification {
+export function classifyToolCall(toolName: string, input: unknown, context: CommandContext = {}): Classification {
 	if (toolName !== "bash") return ALLOW;
 	const command =
 		input && typeof input === "object" && "command" in input
 			? String((input as { command: unknown }).command ?? "")
 			: "";
-	return command ? classifyCommand(command) : ALLOW;
+	return command ? classifyCommand(command, context) : ALLOW;
 }
 
 /**

@@ -12,6 +12,7 @@
  *   AGENT_TOOLKIT_AUTONOMY  high (default) | balanced | conservative
  */
 
+import { spawnSync } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { recordDecision } from "../lib/decisions";
 import {
@@ -27,11 +28,36 @@ function initialAutonomy(): AutonomyLevel {
 	return "high";
 }
 
+function bashCommand(input: unknown): string {
+	return input && typeof input === "object" && "command" in input
+		? String((input as { command: unknown }).command ?? "")
+		: "";
+}
+
+function commandCwd(input: unknown): string | undefined {
+	if (!input || typeof input !== "object" || !("cwd" in input)) return undefined;
+	const cwd = (input as { cwd?: unknown }).cwd;
+	return typeof cwd === "string" && cwd.trim() ? cwd : undefined;
+}
+
+function currentGitBranch(cwd: string | undefined): string | undefined {
+	const result = spawnSync("git", ["branch", "--show-current"], {
+		cwd: cwd ?? process.cwd(),
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "ignore"],
+		timeout: 1000,
+	});
+	return result.status === 0 ? result.stdout.trim() || undefined : undefined;
+}
+
 export default function guardrailsExtension(pi: ExtensionAPI): void {
 	let autonomy = initialAutonomy();
 
 	pi.on("tool_call", async (event, ctx) => {
-		const classification = classifyToolCall(event.toolName, event.input);
+		const command = event.toolName === "bash" ? bashCommand(event.input) : "";
+		const classification = classifyToolCall(event.toolName, event.input, {
+			currentBranch: /\bgit\s+push\b/.test(command) ? currentGitBranch(commandCwd(event.input)) : undefined,
+		});
 		if (classification.tier === "allow") return;
 
 		const decision = decide(classification, { autonomy, hasUI: ctx.hasUI });

@@ -4,6 +4,7 @@
  * and decision-spine records, with no model or real Pi runtime.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,8 +52,13 @@ async function load() {
 	return { ...fake, toolCall };
 }
 
-function bash(command: string) {
-	return { type: "tool_call", toolName: "bash", toolCallId: "t", input: { command } };
+function bash(command: string, cwd?: string) {
+	return { type: "tool_call", toolName: "bash", toolCallId: "t", input: { command, ...(cwd ? { cwd } : {}) } };
+}
+
+function git(cwd: string, args: string[]) {
+	const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+	if (result.status !== 0) throw new Error(result.stderr || `git ${args.join(" ")} failed`);
 }
 
 describe("guardrails tool_call hook", () => {
@@ -84,5 +90,13 @@ describe("guardrails tool_call hook", () => {
 			block?: boolean;
 		};
 		expect(result?.block).toBe(true);
+	});
+
+	it("blocks a bare git push from main even when GitHub does not protect the branch", async () => {
+		git(dir, ["init", "-q", "-b", "main"]);
+		const { toolCall } = await load();
+		const result = (await toolCall(bash("git push", dir), headless)) as { block?: boolean; reason?: string };
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("git-bare-push-protected");
 	});
 });

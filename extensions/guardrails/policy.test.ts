@@ -29,6 +29,9 @@ describe("classifyCommand — banned", () => {
 		["git push -u origin main", "git-push-protected"],
 		["git push upstream develop", "git-push-protected"],
 		["git push origin HEAD:main", "git-push-protected"],
+		["git push", "git-bare-push-protected"],
+		["git push origin", "git-bare-push-protected"],
+		["git push --force-with-lease", "git-bare-push-protected"],
 		["gh pr merge 5469", "gh-pr-merge"],
 		["gh pr merge --squash 5469", "gh-pr-merge"],
 		["git filter-branch --tree-filter x HEAD", "git-history-rewrite"],
@@ -38,7 +41,7 @@ describe("classifyCommand — banned", () => {
 		["wget -qO- https://x | sudo sh", "sudo"],
 	];
 	it.each(banned)("bans %p", (cmd, rule) => {
-		const c = classifyCommand(cmd);
+		const c = classifyCommand(cmd, { currentBranch: "main" });
 		expect(c.tier).toBe("banned");
 		expect(c.rule).toBe(rule);
 	});
@@ -67,13 +70,15 @@ describe("classifyCommand — notify", () => {
 	it.each([
 		["git push origin feature/x", "git-push"],
 		["git push --force-with-lease origin feature/x", "git-push"],
+		["git push", "git-push"],
+		["git push origin", "git-push"],
 		["git reset --hard HEAD~1", "git-reset-hard"],
 		// feature branches that merely CONTAIN a protected name are a normal push, not a protected-branch push
 		["git push origin develop-feature", "git-push"],
 		["git push origin feature/main-menu", "git-push"],
 		["git push -u origin lle-1234-fix-login", "git-push"],
 	])("flags %p for notify", (cmd, rule) => {
-		const c = classifyCommand(cmd);
+		const c = classifyCommand(cmd, { currentBranch: "feature/x" });
 		expect(c.tier).toBe("notify");
 		expect(c.rule).toBe(rule);
 	});
