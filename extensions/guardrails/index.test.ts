@@ -121,6 +121,17 @@ describe("guardrails tool_call hook", () => {
 		expect(result?.reason).toContain("git-bare-push-protected");
 	});
 
+	it("does not let an env var bypass ask-tier protected-branch approval", async () => {
+		git(dir, ["init", "-q", "-b", "main"]);
+		const { toolCall } = await load();
+		const result = (await toolCall(bash("AGENT_TOOLKIT_ALLOW_PROTECTED_PUSH=1 git push origin main", dir), headless)) as {
+			block?: boolean;
+			reason?: string;
+		};
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("git-push-protected");
+	});
+
 	it("prompts for an ask-tier protected-branch push and allows it when approved", async () => {
 		git(dir, ["init", "-q", "-b", "main"]);
 		const { toolCall } = await load();

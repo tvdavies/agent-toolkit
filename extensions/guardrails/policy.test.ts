@@ -44,6 +44,7 @@ describe("classifyCommand — banned", () => {
 describe("classifyCommand — ask", () => {
 	const ask: [string, string][] = [
 		["git push origin main", "git-push-protected"],
+		["AGENT_TOOLKIT_ALLOW_PROTECTED_PUSH=1 git push origin main", "git-push-protected"],
 		["git push -u origin main", "git-push-protected"],
 		["git push upstream develop", "git-push-protected"],
 		["git push origin HEAD:main", "git-push-protected"],
