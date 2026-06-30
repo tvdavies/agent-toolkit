@@ -11,7 +11,7 @@
  */
 
 /** Risk tiers, in increasing severity. */
-export type Tier = "allow" | "notify" | "confirm" | "banned";
+export type Tier = "allow" | "notify" | "confirm" | "ask" | "banned";
 
 /** How much the agent may do on the user's behalf without asking. */
 export type AutonomyLevel = "high" | "balanced" | "conservative";
@@ -170,8 +170,8 @@ const RULES: Rule[] = [
 	{ id: "dd-device", tier: "banned", match: /\bdd\b[^\n]*\bof=\/dev\/(sd|nvme|disk|hd|mmcblk)/, reason: "Raw write to a block device." },
 	{ id: "redirect-device", tier: "banned", match: />\s*\/dev\/(sd|nvme|disk|hd|mmcblk)/, reason: "Redirect over a block device." },
 	{ id: "git-force-push-protected", tier: "banned", match: isForcePushProtected, reason: "Force-push to a protected branch (main/master/develop/production…)." },
-	{ id: "git-push-protected", tier: "banned", match: isPushToProtected, reason: "Pushing straight to a protected branch — autonomous changes must go on a PR, not the base branch." },
-	{ id: "git-bare-push-protected", tier: "banned", match: isBarePushFromProtectedBranch, reason: "Bare git push from a protected branch — spell out and review a feature-branch push instead." },
+	{ id: "git-push-protected", tier: "ask", match: isPushToProtected, reason: "Pushing straight to a protected branch requires explicit human approval." },
+	{ id: "git-bare-push-protected", tier: "ask", match: isBarePushFromProtectedBranch, reason: "Bare git push from a protected branch requires explicit human approval." },
 	{ id: "gh-pr-merge", tier: "banned", match: /\bgh\s+pr\s+merge\b/, reason: "Merging a PR is not permitted for the autonomous agent — a human merges." },
 	{ id: "git-history-rewrite", tier: "banned", match: /\bgit\s+filter-branch\b|\bgit[-\s]filter-repo\b/, reason: "Rewriting git history irreversibly." },
 	{ id: "terraform-destroy", tier: "banned", match: /\bterraform\s+destroy\b/, reason: "Tearing down infrastructure." },
@@ -221,12 +221,13 @@ export function classifyToolCall(toolName: string, input: unknown, context: Comm
 
 /**
  * Decide what to do about a classification given the autonomy level and whether
- * a UI is available to prompt. Banned is always blocked; the confirm/notify
- * tiers soften as autonomy rises.
+ * a UI is available to prompt. Banned is always blocked; ask always requires an
+ * interactive prompt; the confirm/notify tiers soften as autonomy rises.
  *
- * - high:         act on everything except banned; escalate (notify-after) on confirm.
+ * - high:         act on confirm/notify; escalate (notify-after) on confirm.
  * - balanced:     prompt for confirm when interactive, else block+escalate.
  * - conservative: prompt for confirm and notify when interactive, else block+escalate.
+ * - ask:          always prompt when interactive; block headless/non-interactive.
  */
 export function decide(
 	classification: Classification,
@@ -246,6 +247,10 @@ export function decide(
 		hasUI
 			? { action: "prompt", escalate: false, classification }
 			: { action: "block", escalate: true, classification };
+
+	if (tier === "ask") {
+		return gated();
+	}
 
 	if (tier === "confirm") {
 		if (autonomy === "high") {

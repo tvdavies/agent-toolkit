@@ -4,8 +4,8 @@
  * Subscribes to `tool_call` and blocks destructive/irreversible operations even
  * without pi approval prompts. Pairs with the "high autonomy, notify-after" policy: the agent
  * acts on everything except genuinely dangerous ops (which are blocked) and, at
- * lower autonomy levels, gates the "confirm" tier behind a prompt (interactive)
- * or a block+escalate (headless). All blocks and notify-after escalations are
+ * the `ask` tier always requires an interactive Pi prompt, and at lower autonomy
+ * levels the "confirm" tier is also gated. All blocks and notify-after escalations are
  * recorded to the decision spine.
  *
  * Config:
@@ -90,9 +90,15 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
 				detail: { tier: classification.tier, autonomy },
 			});
 			if (ctx.hasUI) ctx.ui.notify(`⛔ Guardrail blocked: ${classification.reason}`, "error");
+			const explanation =
+				classification.tier === "banned"
+					? "banned (destructive/irreversible)"
+					: classification.tier === "ask"
+						? "blocked because it requires an interactive Pi approval step"
+						: "gated at the current autonomy level";
 			return {
 				block: true,
-				reason: `Blocked by guardrail "${classification.rule}": ${classification.reason} This operation is ${classification.tier === "banned" ? "banned (destructive/irreversible)" : "gated at the current autonomy level"}. If it is genuinely required, ask the user to approve it explicitly.`,
+				reason: `Blocked by guardrail "${classification.rule}": ${classification.reason} This operation is ${explanation}. If it is genuinely required, ask the user to approve it explicitly.`,
 			};
 		}
 
@@ -143,7 +149,7 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
 				case "list": {
 					const byTier = listRules();
 					const lines = ["Guardrail rules (first match wins):"];
-					for (const tier of ["banned", "confirm", "notify"] as const) {
+					for (const tier of ["banned", "ask", "confirm", "notify"] as const) {
 						lines.push(`\n${tier.toUpperCase()}:`);
 						for (const r of byTier.filter((x) => x.tier === tier)) {
 							lines.push(`  • ${r.rule} — ${r.reason}`);

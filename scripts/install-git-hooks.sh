@@ -63,32 +63,18 @@ esac
 exit 0
 HOOK
 
-read -r -d '' PRE_PUSH <<'HOOK' || true
-#!/usr/bin/env bash
-# agent-tools protected-push hook
-set -u
-
-case "${AGENT_TOOLKIT_ALLOW_PROTECTED_PUSH:-}" in
-  1|true|yes) exit 0 ;;
-esac
-
-protected='^(main|master|develop|development|staging|production|prod|release)$'
-while read -r local_ref _local_sha remote_ref _remote_sha; do
-  local_branch="${local_ref#refs/heads/}"
-  remote_branch="${remote_ref#refs/heads/}"
-  if [[ "$remote_ref" == refs/heads/* && "$remote_branch" =~ $protected ]]; then
-    cat >&2 <<MSG
-agent-tools pre-push blocked a direct push involving protected branch '$local_branch' -> '$remote_branch'.
-Push a feature branch and open a PR, or rerun with AGENT_TOOLKIT_ALLOW_PROTECTED_PUSH=1 after explicit human approval.
-MSG
-    exit 1
+remove_legacy_managed_hook() {
+  local name="$1"
+  local marker="$2"
+  local hook_path="$HOOK_DIR/$name"
+  if [ -f "$hook_path" ] && grep -q "$marker" "$hook_path"; then
+    rm "$hook_path"
+    echo "Removed legacy managed $hook_path (protected pushes are now handled by Pi guardrails ask-tier)."
   fi
-done
-exit 0
-HOOK
+}
 
 install_hook post-merge "$POST_MERGE"
 install_hook post-rewrite "$POST_REWRITE"
-install_hook pre-push "$PRE_PUSH"
+remove_legacy_managed_hook pre-push "agent-tools protected-push hook"
 
-echo "Agent tooling Git hooks installed. They run scripts/after-pull.sh after pulls/rebases and block direct protected-branch pushes."
+echo "Agent tooling Git hooks installed. They run scripts/after-pull.sh after merge pulls and pull --rebase rewrites."

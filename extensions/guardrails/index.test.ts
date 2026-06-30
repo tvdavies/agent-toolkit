@@ -30,6 +30,8 @@ function makeFakePi() {
 }
 
 const headless = { hasUI: false, ui: { notify() {}, async confirm() { return false; } } } as any;
+const interactiveApprove = { hasUI: true, ui: { notify() {}, async confirm() { return true; } } } as any;
+const interactiveDeny = { hasUI: true, ui: { notify() {}, async confirm() { return false; } } } as any;
 let dir: string;
 
 beforeEach(() => {
@@ -96,6 +98,22 @@ describe("guardrails tool_call hook", () => {
 		git(dir, ["init", "-q", "-b", "main"]);
 		const { toolCall } = await load();
 		const result = (await toolCall(bash("git push", dir), headless)) as { block?: boolean; reason?: string };
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("git-bare-push-protected");
+	});
+
+	it("prompts for an ask-tier protected-branch push and allows it when approved", async () => {
+		git(dir, ["init", "-q", "-b", "main"]);
+		const { toolCall } = await load();
+		const result = await toolCall(bash("git push", dir), interactiveApprove);
+		expect(result).toBeUndefined();
+		expect(readRecent().some((d) => d.kind === "guardrail-allow" && d.summary.includes("git-bare-push-protected"))).toBe(true);
+	});
+
+	it("prompts for an ask-tier protected-branch push and blocks it when declined", async () => {
+		git(dir, ["init", "-q", "-b", "main"]);
+		const { toolCall } = await load();
+		const result = (await toolCall(bash("git push", dir), interactiveDeny)) as { block?: boolean; reason?: string };
 		expect(result?.block).toBe(true);
 		expect(result?.reason).toContain("git-bare-push-protected");
 	});

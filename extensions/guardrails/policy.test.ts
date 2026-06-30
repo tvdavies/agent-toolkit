@@ -25,13 +25,7 @@ describe("classifyCommand — banned", () => {
 		["git push --force origin main", "git-force-push-protected"],
 		["git push -f origin master", "git-force-push-protected"],
 		["git push --force origin develop", "git-force-push-protected"],
-		["git push origin main", "git-push-protected"],
-		["git push -u origin main", "git-push-protected"],
-		["git push upstream develop", "git-push-protected"],
-		["git push origin HEAD:main", "git-push-protected"],
-		["git push", "git-bare-push-protected"],
-		["git push origin", "git-bare-push-protected"],
-		["git push --force-with-lease", "git-bare-push-protected"],
+		["AGENT_TOOLKIT_ALLOW_PROTECTED_PUSH=1 git push --force origin main", "git-force-push-protected"],
 		["gh pr merge 5469", "gh-pr-merge"],
 		["gh pr merge --squash 5469", "gh-pr-merge"],
 		["git filter-branch --tree-filter x HEAD", "git-history-rewrite"],
@@ -43,6 +37,23 @@ describe("classifyCommand — banned", () => {
 	it.each(banned)("bans %p", (cmd, rule) => {
 		const c = classifyCommand(cmd, { currentBranch: "main" });
 		expect(c.tier).toBe("banned");
+		expect(c.rule).toBe(rule);
+	});
+});
+
+describe("classifyCommand — ask", () => {
+	const ask: [string, string][] = [
+		["git push origin main", "git-push-protected"],
+		["git push -u origin main", "git-push-protected"],
+		["git push upstream develop", "git-push-protected"],
+		["git push origin HEAD:main", "git-push-protected"],
+		["git push", "git-bare-push-protected"],
+		["git push origin", "git-bare-push-protected"],
+		["git push --force-with-lease", "git-bare-push-protected"],
+	];
+	it.each(ask)("asks for %p", (cmd, rule) => {
+		const c = classifyCommand(cmd, { currentBranch: "main" });
+		expect(c.tier).toBe("ask");
 		expect(c.rule).toBe(rule);
 	});
 });
@@ -114,6 +125,7 @@ describe("classifyToolCall", () => {
 
 describe("decide", () => {
 	const banned = classifyCommand("rm -rf /");
+	const ask = classifyCommand("git push origin main");
 	const confirm = classifyCommand("npm publish");
 	const notify = classifyCommand("git push origin feature/x");
 	const allow = classifyCommand("ls");
@@ -125,6 +137,13 @@ describe("decide", () => {
 				expect(d.action).toBe("block");
 				expect(d.escalate).toBe(true);
 			}
+		}
+	});
+
+	it("ask always prompts interactively and blocks headless", () => {
+		for (const autonomy of ["high", "balanced", "conservative"] as AutonomyLevel[]) {
+			expect(decide(ask, { autonomy, hasUI: true }).action).toBe("prompt");
+			expect(decide(ask, { autonomy, hasUI: false }).action).toBe("block");
 		}
 	});
 
