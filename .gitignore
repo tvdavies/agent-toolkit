@@ -19,3 +19,4 @@ bun.lock
 
 # Pi/runtime artefacts
 .pi-runs/
+.pi/
