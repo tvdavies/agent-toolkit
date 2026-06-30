@@ -4,7 +4,7 @@
  * Flow (mirrors park/resume, with the daemon as the safe actor):
  *  1. The agent edits the live checkout and calls the `apply_update` tool, which
  *     writes an update request.
- *  2. apply(): validate the working tree with `bun test`. Red → notify + stop (the
+ *  2. apply(): validate the working tree with the root toolkit test gate. Red → notify + stop (the
  *     running daemon keeps the old code in memory; the bad edit stays uncommitted to
  *     fix). Green → commit it, record a restart marker (with the last-good commit as
  *     the rollback target), and restart (drain + exit; systemd re-execs new code).
@@ -205,7 +205,13 @@ export function gitOps(repoDir: string): GitOps {
 	};
 }
 
-/** The validation gate: `bun test` in the checkout (with the agent's uncommitted edits). */
+/** The validation gate for the root toolkit checkout (with the agent's uncommitted edits).
+ *
+ * The vendored Brain runtime has its own Bun workspace and test script; running
+ * bare `bun test` from the root also discovers Brain's much larger upstream
+ * suite and can exceed the self-update watchdog. Keep this gate scoped to the
+ * toolkit files that are live-loaded by the daemon/Pi package.
+ */
 export function bunTestValidator(repoDir: string, bunBin = process.env.AGENT_TOOLKIT_BUN_BIN ?? "bun", timeoutMs = 120_000): Validator {
 	return () =>
 		new Promise((resolve) => {
@@ -215,7 +221,7 @@ export function bunTestValidator(repoDir: string, bunBin = process.env.AGENT_TOO
 			};
 			let child: ReturnType<typeof spawn>;
 			try {
-				child = spawn(bunBin, ["test"], { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"] });
+				child = spawn(bunBin, ["test", "./daemon", "./extensions", "./bin"], { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"] });
 			} catch (e) {
 				resolve({ ok: false, output: `failed to spawn ${bunBin}: ${(e as Error).message}` });
 				return;

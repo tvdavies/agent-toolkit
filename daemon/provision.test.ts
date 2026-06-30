@@ -20,6 +20,7 @@ const cfg: ProvisionConfig = {
 	user: "tom",
 	nodeBinDir: "/home/tom/.nvm/v24/bin",
 	piBin: "/home/tom/.nvm/v24/bin/pi",
+	brainBin: "/home/tom/agent-toolkit/bin/brain",
 };
 
 describe("renderEnvFile", () => {
@@ -30,6 +31,7 @@ describe("renderEnvFile", () => {
 		expect(out).toContain("export AGENT_TOOLKIT_MODEL=anthropic/claude-opus-4-8");
 		expect(out).toContain("export PATH=/home/tom/.nvm/v24/bin:$PATH");
 		expect(out).toContain("export AGENT_TOOLKIT_PI_BIN=/home/tom/.nvm/v24/bin/pi");
+		expect(out).toContain("export AGENT_TOOLKIT_BRAIN_BIN=/home/tom/agent-toolkit/bin/brain");
 		expect(out).toContain("# export SLACK_APP_TOKEN=");
 	});
 

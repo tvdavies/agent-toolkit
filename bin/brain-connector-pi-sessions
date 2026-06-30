@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+BUN_BIN="${AGENT_TOOLKIT_BUN_BIN:-}"
+if [ -z "$BUN_BIN" ]; then
+  BUN_BIN="$(command -v bun 2>/dev/null || true)"
+fi
+if [ -z "$BUN_BIN" ] && [ -x "$HOME/.bun/bin/bun" ]; then
+  BUN_BIN="$HOME/.bun/bin/bun"
+fi
+if [ -z "$BUN_BIN" ]; then
+  echo "agent-toolkit brain connector wrapper: bun is required but was not found" >&2
+  exit 127
+fi
+if [ ! -d "$REPO_DIR/brain/node_modules" ]; then
+  echo "agent-toolkit brain connector wrapper: installing bundled Brain dependencies..." >&2
+  (cd "$REPO_DIR/brain" && "$BUN_BIN" install --frozen-lockfile >/dev/null)
+fi
+exec "$BUN_BIN" run --cwd "$REPO_DIR/brain" packages/connectors/pi-sessions/src/index.ts "$@"

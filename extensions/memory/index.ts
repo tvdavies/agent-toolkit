@@ -20,7 +20,7 @@
  *
  * Env:
  *   AGENT_TOOLKIT_MEMORY_ENGINE   "brain" (default) | "okf" | "off" — gate
- *   AGENT_TOOLKIT_BRAIN_BIN       brain binary path (else $BRAIN_BIN, else "brain")
+ *   AGENT_TOOLKIT_BRAIN_BIN       brain binary path (else $BRAIN_BIN, else bundled bin/brain, else "brain")
  *   AGENT_TOOLKIT_MEMORY_BRAIN_HOME   brain --home override (else brain default)
  *   AGENT_TOOLKIT_MEMORY_BRAIN_ROOT   brain --root override (else brain default)
  *   AGENT_TOOLKIT_MEMORY_SCOPE    brain --scope override (else brain's default)
@@ -31,6 +31,8 @@
  */
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 
@@ -62,8 +64,13 @@ function trimmedEnv(name: string): string | undefined {
 function memoryEngine(): string {
 	return process.env.AGENT_TOOLKIT_MEMORY_ENGINE ?? "brain";
 }
+function bundledBrainBin(): string | undefined {
+	const candidate = resolve(import.meta.dirname, "../../bin/brain");
+	return existsSync(candidate) ? candidate : undefined;
+}
+
 function brainBin(): string {
-	return process.env.AGENT_TOOLKIT_BRAIN_BIN ?? process.env.BRAIN_BIN ?? "brain";
+	return trimmedEnv("AGENT_TOOLKIT_BRAIN_BIN") ?? trimmedEnv("BRAIN_BIN") ?? bundledBrainBin() ?? "brain";
 }
 function memoryScope(): string | undefined {
 	return trimmedEnv("AGENT_TOOLKIT_MEMORY_SCOPE");
@@ -244,8 +251,9 @@ function runBrain(args: readonly string[], options: RunBrainOptions = {}): Promi
  *  `rerank` off (the per-turn default) skips the slow LLM reranker; the explicit
  *  tool turns it on for higher quality. Throws on a non-zero brain exit. */
 async function brainRecall(query: string, limit: number, rerank: boolean, timeoutMs: number): Promise<string> {
-	const args = ["query", query, "--format", "context", "--limit", String(limit)];
+	const args = ["query", "--format", "context", "--limit", String(limit)];
 	if (!rerank) args.push("--no-rerank");
+	args.push("--", query);
 	const { code, stdout, stderr } = await runBrain(args, { timeoutMs });
 	if (code !== 0) throw brainExitError("query", code, stderr);
 	return stdout.trim();

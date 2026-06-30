@@ -110,6 +110,7 @@ beforeEach(() => {
 	argsOut = join(dir, "args.txt");
 	rememberOut = join(dir, "remember.jsonl");
 	setEnv("AGENT_TOOLKIT_BRAIN_BIN", brain);
+	setEnv("BRAIN_BIN", undefined);
 	setEnv("AGENT_TOOLKIT_MEMORY_ENGINE", "brain");
 	setEnv("AGENT_TOOLKIT_MEMORY_SCOPE", undefined);
 	setEnv("AGENT_TOOLKIT_MEMORY_BRAIN_HOME", undefined);
@@ -156,6 +157,45 @@ describe("memory extension — brain client", () => {
 		expect(args).toContain("--format");
 		expect(args).toContain("context");
 		expect(args).toContain("--no-rerank"); // per-turn recall skips the slow reranker
+	});
+
+	it("uses BRAIN_BIN when AGENT_TOOLKIT_BRAIN_BIN is unset", async () => {
+		setEnv("BRAIN_BIN", process.env.AGENT_TOOLKIT_BRAIN_BIN);
+		setEnv("AGENT_TOOLKIT_BRAIN_BIN", undefined);
+		const pi = fakePi();
+		memoryExtension(pi.api);
+		await hook(pi, "before_agent_start")({ prompt: "how do I run tests?", systemPrompt: "BASE" });
+		const args = readFileSync(argsOut, "utf8");
+		expect(args).toContain("query");
+	});
+
+	it("falls back to the bundled bin/brain when no binary override is set", async () => {
+		setEnv("AGENT_TOOLKIT_BRAIN_BIN", undefined);
+		setEnv("BRAIN_BIN", undefined);
+		setEnv("AGENT_TOOLKIT_MEMORY_BRAIN_HOME", join(dir, "brain-home"));
+		setEnv("AGENT_TOOLKIT_MEMORY_BRAIN_ROOT", join(dir, "brain-root"));
+		const pi = fakePi();
+		memoryExtension(pi.api);
+		const { ctx, notifications } = fakeCommandContext();
+		await command(pi, "memory").handler("status", ctx);
+		expect(notifications).toHaveLength(1);
+		const [notification] = notifications;
+		if (!notification) throw new Error("expected a notification");
+		expect(notification.level).toBe("info");
+		expect(notification.text).toContain("brain daemon");
+	});
+
+	it("ignores blank binary overrides and still falls back to the bundled bin/brain", async () => {
+		setEnv("AGENT_TOOLKIT_BRAIN_BIN", "   ");
+		setEnv("BRAIN_BIN", "");
+		setEnv("AGENT_TOOLKIT_MEMORY_BRAIN_HOME", join(dir, "brain-home"));
+		setEnv("AGENT_TOOLKIT_MEMORY_BRAIN_ROOT", join(dir, "brain-root"));
+		const pi = fakePi();
+		memoryExtension(pi.api);
+		const { ctx, notifications } = fakeCommandContext();
+		await command(pi, "memory").handler("status", ctx);
+		expect(notifications[0]?.level).toBe("info");
+		expect(notifications[0]?.text).toContain("brain daemon");
 	});
 
 	it("skips brain entirely for an empty prompt", async () => {
@@ -225,6 +265,15 @@ describe("memory extension — brain client", () => {
 		expect(out.content[0].text).toContain("Tom prefers bun test.");
 		const args = readFileSync(argsOut, "utf8");
 		expect(args).not.toContain("--no-rerank"); // explicit lookup keeps the reranker
+	});
+
+	it("passes a -- sentinel before query text so dash-prefixed queries are not parsed as flags", async () => {
+		const pi = fakePi();
+		memoryExtension(pi.api);
+		const out = await pi.tools.memory_query.execute("id", { query: "--starts-with-dash" });
+		expect(out.details.ok).toBe(true);
+		const args = readFileSync(argsOut, "utf8");
+		expect(args).toContain("--\n--starts-with-dash");
 	});
 
 	it("memory_query rejects an empty query without spawning brain", async () => {

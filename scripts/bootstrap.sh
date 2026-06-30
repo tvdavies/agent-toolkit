@@ -22,6 +22,11 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
+if [ -d "$REPO_DIR/brain" ] && ! command -v bun >/dev/null 2>&1; then
+  echo "bun is required for the bundled Brain runtime but is not on PATH" >&2
+  exit 1
+fi
+
 ensure_skill_link() {
   local target="$1"
   local link_path="$2"
@@ -43,6 +48,18 @@ if [ -f "$REPO_DIR/package-lock.json" ]; then
   npm ci --omit=dev --prefix "$REPO_DIR"
 else
   npm install --omit=dev --prefix "$REPO_DIR"
+fi
+
+if [ -d "$REPO_DIR/brain" ]; then
+  echo "Installing bundled Brain runtime dependencies..."
+  (
+    cd "$REPO_DIR/brain"
+    if [ -f bun.lock ]; then
+      bun install --frozen-lockfile
+    else
+      bun install
+    fi
+  )
 fi
 
 mkdir -p "$HOME/.pi/agent"

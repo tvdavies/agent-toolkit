@@ -10,7 +10,9 @@ Thumbs.db
 # Dependencies and generated files
 node_modules/
 # Bun is used for local dev/tests; package-lock.json is the canonical install lock.
+# The vendored Brain runtime is Bun-native, so keep its lockfile for reproducible installs.
 bun.lock
+!brain/bun.lock
 .env
 .env.*
 *.log

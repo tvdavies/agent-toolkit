@@ -89,10 +89,9 @@ recoverable actions) and reports. The floor:
 
 ## Memory — the brain
 
-A git-tracked **OKF** bundle (`~/.local/share/agent-toolkit/brain`): markdown +
-YAML frontmatter, queried by ripgrep, written behind a stable
-`brain_query`/`brain_remember` seam so the backend can be upgraded without
-ripple. Recall is injected each turn; capture commits async on `agent_end`.
+The default memory backend is the vendored **Brain** runtime under `brain/`, executed through `bin/brain`. Agent Toolkit keeps a CLI/runtime boundary: Pi extensions call `brain query`, `brain remember`, and `brain daemon status` instead of importing Brain internals. Brain owns the markdown source-of-truth, redaction, embeddings/BM25/vector retrieval, source connectors, and daemon ingestion.
+
+The older in-process OKF bundle (`~/.local/share/agent-toolkit/brain`) remains an opt-in fallback via `AGENT_TOOLKIT_MEMORY_ENGINE=okf`.
 
 ## State layout
 
@@ -108,17 +107,14 @@ ripple. Recall is injected each turn; capture commits async on `agent_end`.
   escalation-state.json    notify rate-limiter state
   spend-state.json         daily spend accounting
   sessions/                pi session dir (--session-dir)
-~/.local/share/agent-toolkit/brain/   OKF knowledge bundle (git)
+~/brain/                            Brain home/source store (default external Brain path)
+~/.local/share/agent-toolkit/brain/  legacy OKF fallback bundle
 ~/.config/agent-toolkit/{serve.env(0600), HEARTBEAT.md, launch.sh, *.service}
 ```
 
 ## Deployment
 
-Local-first, server-ready. The daemon runs under `systemd --user` (+
-`loginctl enable-linger`) and spawns the RPC child. Installation is **deferred**:
-`toolkit-daemon --print-units` / `--write-units` render the unit, launcher, and
-env template; `/cron print` renders the crontab. The user applies them. Secrets
-live in a 0600 env file the daemon refuses to start without securing.
+Local-first, server-ready. The toolkit daemon and Brain daemon run under `systemd --user` (+ `loginctl enable-linger`); the toolkit daemon spawns the RPC child, while `agent-toolkit-brain.service` runs `bin/brain daemon run` for memory queue processing. Installation is **deferred** for the toolkit daemon artefacts: `toolkit-daemon --print-units` / `--write-units` render the unit, launcher, and env template; `scripts/install.sh` adds the Brain unit and heartbeat timer. Secrets live in a 0600 env file the daemon refuses to start without securing.
 
 ## Code quality
 

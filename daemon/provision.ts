@@ -41,6 +41,8 @@ export type ProvisionConfig = {
 	/** Absolute path to the bun binary — the self-update validate gate runs `bun test`,
 	 *  and bun is usually NOT on the minimal systemd PATH. */
 	bunBin?: string;
+	/** Absolute path to the bundled Brain CLI wrapper. */
+	brainBin?: string;
 };
 
 const MEMORY_MAX = "8G";
@@ -57,12 +59,13 @@ export function renderEnvFile(cfg: ProvisionConfig): string {
 	if (pathDirs.length) lines.push(`export PATH=${pathDirs.join(":")}:$PATH`);
 	if (cfg.piBin) lines.push(`export AGENT_TOOLKIT_PI_BIN=${cfg.piBin}`);
 	if (cfg.bunBin) lines.push(`export AGENT_TOOLKIT_BUN_BIN=${cfg.bunBin}`);
+	if (cfg.brainBin) lines.push(`export AGENT_TOOLKIT_BRAIN_BIN=${cfg.brainBin}`);
 	lines.push(
 		`export AGENT_TOOLKIT_STATE_DIR=${cfg.stateDir}`,
 		`export AGENT_TOOLKIT_BRAIN_ROOT=${cfg.brainRoot}`,
 		`export AGENT_TOOLKIT_SESSION_DIR=${cfg.sessionDir}`,
-		// Memory = the external `brain` CLI (resolved on PATH via the bun bin dir
-		// above). "okf" reverts to the in-process OKF brain; "off" disables memory.
+		// Memory = the bundled external `brain` CLI. "okf" reverts to the in-process
+		// OKF brain; "off" disables memory.
 		`export AGENT_TOOLKIT_MEMORY_ENGINE=brain`,
 		cfg.model ? `export AGENT_TOOLKIT_MODEL=${cfg.model}` : `# export AGENT_TOOLKIT_MODEL=anthropic/claude-opus-4-8`,
 		``,

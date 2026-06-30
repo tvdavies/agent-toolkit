@@ -4,8 +4,7 @@ Personal agent toolkit shared across machines: Agent Skills, custom Pi extension
 
 ## Fresh machine setup
 
-One command does the lot — package setup, the resident-agent daemon as a
-`systemd --user` service, a heartbeat timer, and lingering:
+One command does the lot — package setup, the resident-agent daemon and bundled Brain daemon as `systemd --user` services, a heartbeat timer, and lingering:
 
 ```bash
 git clone git@github.com:tvdavies/agent-toolkit.git ~/agent-toolkit
@@ -52,9 +51,10 @@ fi
 The bootstrap script is idempotent and will:
 
 1. install this repo's npm dependencies for local extension development;
-2. link `~/.claude/skills` and `~/.agents/skills` to `~/agent-toolkit/skills`;
-3. install this repo as a local Pi package with `pi install ~/agent-toolkit`;
-4. install third-party Pi packages listed in `manifests/pi-packages.json`.
+2. install the bundled Brain runtime dependencies under `brain/` with Bun;
+3. link `~/.claude/skills` and `~/.agents/skills` to `~/agent-toolkit/skills`;
+4. install this repo as a local Pi package with `pi install ~/agent-toolkit`;
+5. install third-party Pi packages listed in `manifests/pi-packages.json`.
 
 It refuses to overwrite existing non-symlink skill directories.
 
@@ -78,6 +78,8 @@ extensions/                Custom Pi extensions loaded by this package
 prompts/                   Optional Pi prompt templates
 themes/                    Optional Pi themes
 manifests/pi-packages.json Third-party Pi package list
+brain/                     Vendored Brain memory runtime (Bun workspace)
+bin/brain                  Wrapper for the bundled Brain CLI
 scripts/bootstrap.sh       Fresh machine bootstrap
 scripts/sync-pi-packages.sh Install/update third-party Pi packages
 archive/extensions-disabled Disabled legacy extensions that must not auto-load
@@ -102,6 +104,19 @@ pi install git:git@github.com:tvdavies/agent-toolkit.git@main
 After editing extensions, run `/reload` inside Pi.
 
 `~/.pi/agent/extensions` is no longer the source of truth. Avoid keeping duplicate active `.ts` extensions there, otherwise Pi may load the same command/tool twice.
+
+## Memory / Brain
+
+The default memory engine is the vendored Brain runtime in `brain/`, executed through `bin/brain`. The Pi extension still talks to Brain only through the CLI boundary (`brain query`, `brain remember`, `brain daemon status`), so Brain can stay Bun-native while the toolkit root remains npm-based. `scripts/install.sh` also installs `agent-toolkit-brain.service`, which runs `bin/brain daemon run` to drain extraction and maintenance queues.
+
+Override resolution is:
+
+1. `AGENT_TOOLKIT_BRAIN_BIN`
+2. `BRAIN_BIN`
+3. bundled `bin/brain`
+4. `brain` on `PATH`
+
+Set `AGENT_TOOLKIT_MEMORY_ENGINE=okf` only to use the legacy in-process OKF fallback. Use `AGENT_TOOLKIT_MEMORY_BRAIN_HOME`, `AGENT_TOOLKIT_MEMORY_BRAIN_ROOT`, and `AGENT_TOOLKIT_MEMORY_SCOPE` for toolkit-scoped Brain paths; the bundled Brain CLI also honors its native `BRAIN_HOME`, `BRAIN_ROOT`, and `BRAIN_SCOPE` environment variables when those toolkit-specific overrides are unset.
 
 ## Other agent harnesses
 

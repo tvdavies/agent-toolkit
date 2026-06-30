@@ -22,9 +22,11 @@
   "scripts": {
     "bootstrap": "./scripts/bootstrap.sh",
     "sync:pi-packages": "./scripts/sync-pi-packages.sh",
-    "test": "bun test",
+    "test": "bun test ./daemon ./extensions ./bin",
     "test:watch": "bun test --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "brain:test": "cd brain && bun test",
+    "brain:typecheck": "cd brain && bun run typecheck"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",

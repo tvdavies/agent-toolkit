@@ -98,6 +98,7 @@ function provisionConfig(): ProvisionConfig {
 		// The self-update validate gate runs `bun test`; resolve bun absolutely so it
 		// works under the minimal systemd PATH.
 		bunBin: resolveBunBin(),
+		brainBin: join(repoDir, "bin", "brain"),
 	};
 }
 

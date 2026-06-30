@@ -1,0 +1,17 @@
+{
+  "name": "@ai-assistant/connector-pi-sessions",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "brain-connector-pi-sessions": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@ai-assistant/contracts": "workspace:*"
+  },
+  "devDependencies": {}
+}

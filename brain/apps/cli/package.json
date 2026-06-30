@@ -1,0 +1,32 @@
+{
+  "name": "@ai-assistant/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "bin": {
+    "brain": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "bun --env-file=../../.env run src/index.ts",
+    "test": "vitest run --passWithNoTests tests/brain-paths.test.ts tests/memory-synthesize-generator.test.ts && bun test tests/init.test.ts tests/sources.test.ts tests/source-store.test.ts"
+  },
+  "dependencies": {
+    "@ai-assistant/brain-core": "workspace:*",
+    "@ai-assistant/connector-mock": "workspace:*",
+    "@ai-assistant/contracts": "workspace:*",
+    "@ai-assistant/harness": "workspace:*",
+    "@ai-assistant/memory": "workspace:*",
+    "@ai-assistant/router": "workspace:*",
+    "@clack/prompts": "^1.3.0",
+    "ai": "^6.0.168",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.18"
+  }
+}
