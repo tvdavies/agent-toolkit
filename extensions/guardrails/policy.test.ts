@@ -26,6 +26,8 @@ describe("classifyCommand — banned", () => {
 		["git push -f origin master", "git-force-push-protected"],
 		["git push --force origin develop", "git-force-push-protected"],
 		["AGENT_TOOLKIT_ALLOW_PROTECTED_PUSH=1 git push --force origin main", "git-force-push-protected"],
+		["git push --force", "git-force-push-protected"],
+		["git push --force origin", "git-force-push-protected"],
 		["gh pr merge 5469", "gh-pr-merge"],
 		["gh pr merge --squash 5469", "gh-pr-merge"],
 		["git filter-branch --tree-filter x HEAD", "git-history-rewrite"],
@@ -45,6 +47,9 @@ describe("classifyCommand — ask", () => {
 	const ask: [string, string][] = [
 		["git push origin main", "git-push-protected"],
 		["AGENT_TOOLKIT_ALLOW_PROTECTED_PUSH=1 git push origin main", "git-push-protected"],
+		['BRANCH=main; git push origin "$BRANCH"', "git-push-protected"],
+		["git push origin ${BRANCH}", "git-push-protected"],
+		["git push origin $(git branch --show-current)", "git-push-protected"],
 		["git push -u origin main", "git-push-protected"],
 		["git push upstream develop", "git-push-protected"],
 		["git push origin HEAD:main", "git-push-protected"],
@@ -62,6 +67,7 @@ describe("classifyCommand — ask", () => {
 describe("classifyCommand — confirm", () => {
 	const confirm: [string, string][] = [
 		["git push --force origin feature/x", "git-force-push"],
+		["git push --force origin feature/main-menu", "git-force-push"],
 		["git clean -fd", "git-clean"],
 		["npm publish", "package-publish"],
 		["cargo publish", "package-publish"],

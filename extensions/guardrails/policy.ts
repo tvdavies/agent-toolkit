@@ -84,38 +84,47 @@ const PROTECTED_BRANCH_NAMES = [
 	"prod",
 	"release",
 ] as const;
-const PROTECTED_BRANCH = new RegExp(`\\b(${PROTECTED_BRANCH_NAMES.join("|")})\\b`);
-
 function isProtectedBranchName(branch: string | undefined): boolean {
 	return PROTECTED_BRANCH_NAMES.includes(branch as (typeof PROTECTED_BRANCH_NAMES)[number]);
 }
 
-/** Force-push that targets a protected branch. */
-function isForcePushProtected(command: string): boolean {
-	if (!/\bgit\s+push\b/.test(command)) return false;
-	if (!/(--force(?!-with-lease)|(^|\s)-f(\s|$))/.test(command)) return false;
-	return PROTECTED_BRANCH.test(command) || /\s\+(main|master|develop|production)/.test(command);
-}
-
-/** A plain (non-force) push whose explicit refspec target is a protected branch.
- *  Autonomous changes go on PRs — never straight to main/master/develop/etc.
- *  Matches the protected name only as the WHOLE push target (right after the remote,
- *  or as a refspec destination), so feature branches like `develop-x` or
- *  `feature/main-menu` are not false-positives. A bare `git push` (current branch)
- *  is intentionally not matched — the agent works on a feature branch. */
-function isPushToProtected(command: string): boolean {
-	if (!/\bgit\s+push\b/.test(command)) return false;
-	const P = "(?:main|master|develop|development|staging|production|prod|release)";
-	return (
-		new RegExp(`\\b(?:origin|upstream)\\s+(?:refs/heads/)?${P}(?:\\s|$|:)`).test(command) ||
-		new RegExp(`:(?:refs/heads/)?${P}(?:\\s|$)`).test(command)
-	);
-}
-
 const PUSH_OPTION_VALUE_FLAGS = new Set(["--exec", "--receive-pack", "--repo", "--push-option", "-o"]);
+const KNOWN_REMOTE_NAMES = new Set(["origin", "upstream"]);
+
+function isGitPush(command: string): boolean {
+	return /\bgit\s+push\b/.test(command);
+}
+
+function isForcePushFlag(command: string): boolean {
+	return /(--force(?!-with-lease)|(^|\s)-f(\s|$))/.test(command);
+}
+
+function stripMatchingQuotes(text: string): string {
+	if (text.length >= 2) {
+		const first = text[0];
+		const last = text[text.length - 1];
+		if ((first === '"' && last === '"') || (first === "'" && last === "'")) return text.slice(1, -1);
+	}
+	return text;
+}
+
+function isDynamicRef(ref: string): boolean {
+	return /[$`\\]/.test(ref) || /\$\(|\$\{|\b(eval|printenv|envsubst)\b/.test(ref);
+}
+
+function refDestination(ref: string): string {
+	const unquoted = stripMatchingQuotes(ref.trim()).replace(/^\+/, "");
+	const parts = unquoted.split(":");
+	const destination = parts.length > 1 ? (parts[parts.length - 1] ?? "") : unquoted;
+	return destination.replace(/^refs\/heads\//, "");
+}
+
+function isProtectedRef(ref: string): boolean {
+	return isProtectedBranchName(refDestination(ref));
+}
 
 /** Non-option words after `git push`, best-effort and intentionally conservative.
- *  Used only to catch the ambiguous "push whatever branch I'm on" shape. */
+ *  Used only to catch protected/dynamic branch targets. */
 function gitPushArgs(command: string): string[] {
 	const match = /\bgit\s+push\b(?:\s+(.+))?$/.exec(command);
 	if (!match) return [];
@@ -143,16 +152,47 @@ function gitPushArgs(command: string): string[] {
 	return args;
 }
 
+function refArgs(args: readonly string[]): string[] {
+	if (args.length === 0) return [];
+	return KNOWN_REMOTE_NAMES.has(args[0] ?? "") ? args.slice(1) : [...args];
+}
+
+function isRemoteOnlyPush(args: readonly string[]): boolean {
+	return args.length === 1 && !args[0]?.includes(":") && !args[0]?.startsWith("+");
+}
+
+/** Force-push that targets a protected branch, including bare/current-branch
+ *  force-pushes when the current branch is protected. */
+function isForcePushProtected(command: string, context: CommandContext): boolean {
+	if (!isGitPush(command)) return false;
+	const args = gitPushArgs(command);
+	const refs = refArgs(args);
+	const plusForceRefs = refs.filter((ref) => ref.startsWith("+"));
+	if (plusForceRefs.some((ref) => isProtectedRef(ref) || (KNOWN_REMOTE_NAMES.has(args[0] ?? "") && isDynamicRef(ref)))) return true;
+	if (!isForcePushFlag(command)) return false;
+	if (refs.some((ref) => isProtectedRef(ref) || (KNOWN_REMOTE_NAMES.has(args[0] ?? "") && isDynamicRef(ref)))) return true;
+	return isProtectedBranchName(context.currentBranch) && (args.length === 0 || isRemoteOnlyPush(args));
+}
+
+/** A plain (non-force) push whose explicit refspec target is a protected branch,
+ *  or whose ref target is dynamic enough that the guardrail cannot prove it is
+ *  safe. Dynamic refs to known remotes ask rather than silently falling through
+ *  to the generic git-push notify tier. */
+function isPushToProtected(command: string): boolean {
+	if (!isGitPush(command)) return false;
+	const args = gitPushArgs(command);
+	const refs = refArgs(args);
+	return refs.some((ref) => isProtectedRef(ref) || (KNOWN_REMOTE_NAMES.has(args[0] ?? "") && isDynamicRef(ref)));
+}
+
 /** A bare or remote-only push from a protected current branch. Git's default
  *  push behaviour can target the upstream branch without spelling it out, so
  *  `git push` on main is as consequential as `git push origin main`. */
 function isBarePushFromProtectedBranch(command: string, context: CommandContext): boolean {
 	if (!isProtectedBranchName(context.currentBranch)) return false;
-	if (!/\bgit\s+push\b/.test(command)) return false;
+	if (!isGitPush(command)) return false;
 	const args = gitPushArgs(command);
-	if (args.length === 0) return true;
-	// `git push origin` / `git push myfork` still lets git infer the current branch.
-	return args.length === 1 && !args[0]?.includes(":") && !args[0]?.startsWith("+");
+	return args.length === 0 || isRemoteOnlyPush(args);
 }
 
 /**

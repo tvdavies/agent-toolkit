@@ -40,6 +40,12 @@ function commandCwd(input: unknown): string | undefined {
 	return typeof cwd === "string" && cwd.trim() ? cwd : undefined;
 }
 
+function contextCwd(ctx: unknown): string | undefined {
+	if (!ctx || typeof ctx !== "object" || !("cwd" in ctx)) return undefined;
+	const cwd = (ctx as { cwd?: unknown }).cwd;
+	return typeof cwd === "string" && cwd.trim() ? cwd : undefined;
+}
+
 function currentGitBranch(cwd: string | undefined): string | undefined {
 	const result = spawnSync("git", ["branch", "--show-current"], {
 		cwd: cwd ?? process.cwd(),
@@ -103,7 +109,9 @@ export default function guardrailsExtension(pi: ExtensionAPI): void {
 	pi.on("tool_call", async (event, ctx) => {
 		const command = event.toolName === "bash" ? bashCommand(event.input) : "";
 		const classification = classifyToolCall(event.toolName, event.input, {
-			currentBranch: /\bgit\s+push\b/.test(command) ? currentGitBranch(commandCwd(event.input)) : undefined,
+			currentBranch: /\bgit\s+push\b/.test(command)
+				? currentGitBranch(contextCwd(ctx) ?? commandCwd(event.input))
+				: undefined,
 		});
 		if (classification.tier === "allow") return;
 
