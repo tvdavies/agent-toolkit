@@ -104,7 +104,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$(systemd_quote "$REPO_DIR")
-ExecStart=/usr/bin/env bash -lc 'source "$1" 2>/dev/null || true; exec "$2" daemon run' _ $(systemd_quote "$CONFIG/serve.env") $(systemd_quote "$REPO_DIR/bin/brain")
+ExecStart=/usr/bin/env bash -lc 'source "\$1" 2>/dev/null || true; exec "\$2" daemon run' _ $(systemd_quote "$CONFIG/serve.env") $(systemd_quote "$REPO_DIR/bin/brain")
 Restart=always
 RestartSec=2
 NoNewPrivileges=yes

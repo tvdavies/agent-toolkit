@@ -113,7 +113,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$(systemd_quote "$REPO")
-ExecStart=/usr/bin/env bash -lc 'source "$1" 2>/dev/null || true; exec "$2" daemon run' _ $(systemd_quote "$CONFIG/serve.env") $(systemd_quote "$REPO/bin/brain")
+ExecStart=/usr/bin/env bash -lc 'source "\$1" 2>/dev/null || true; exec "\$2" daemon run' _ $(systemd_quote "$CONFIG/serve.env") $(systemd_quote "$REPO/bin/brain")
 Restart=always
 RestartSec=2
 NoNewPrivileges=yes
@@ -139,7 +139,7 @@ if [ "$WITH_SCHEDULE" = true ]; then
 Description=Agent Toolkit heartbeat trigger
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/env bash -lc 'source "$1" 2>/dev/null; exec "$2" --experimental-transform-types --no-warnings "$3" --cron-job heartbeat' _ $(systemd_quote "$CONFIG/serve.env") $(systemd_quote "$NODE_BIN") $(systemd_quote "$REPO/bin/toolkit-trigger.ts")
+ExecStart=/usr/bin/env bash -lc 'source "\$1" 2>/dev/null; exec "\$2" --experimental-transform-types --no-warnings "\$3" --cron-job heartbeat' _ $(systemd_quote "$CONFIG/serve.env") $(systemd_quote "$NODE_BIN") $(systemd_quote "$REPO/bin/toolkit-trigger.ts")
 EOF
   cat > "$UNITDIR/$INSTANCE-heartbeat.timer" <<EOF
 [Unit]
