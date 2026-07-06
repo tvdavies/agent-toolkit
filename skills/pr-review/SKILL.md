@@ -237,6 +237,11 @@ Prompt focus — Performance:
 - Unhandled promise rejections
 - Large synchronous operations blocking the event loop
 
+Prompt focus — Concurrency and data integrity:
+- For ANY autosave, debounce, retry, fire-and-forget mutation, or optimistic-write flow, explicitly answer: (1) can two requests be in flight at once? (2) is completion ordering guaranteed? (3) is the server write conditional (revision/version/updatedAt guard) or plain last-write-wins? If two in-flight writes can complete out of order against an unconditional update, that is a lost-update race — flag it.
+- Unmount/close/beforeunload "flush" saves are part of the same write path — check they cannot race an earlier in-flight request.
+- Silent data-loss races in save/persistence paths are real findings even when the window is narrow (slow network + fast typing is a normal condition, not a theoretical one).
+
 Security findings default to CRITICAL severity.
 
 ### Sub-agent 3: Architecture and Patterns
@@ -249,6 +254,7 @@ Prompt focus:
 - Only flag pattern deviations that would cause actual confusion or bugs, not stylistic differences
 - Check for duplicate functionality (search if similar utility already exists)
 - Evaluate error handling, service communication, and database access patterns for correctness
+- Consistency with an existing pattern is NOT evidence of correctness. When the diff mirrors or copies a pattern from elsewhere in the codebase ("same as the X page"), treat the copied logic as new, un-reviewed code and verify it on its own merits — the original may contain the same bug. If the source of the copy has the same defect, still flag the finding in this PR and note the pre-existing occurrence as a suggested follow-up.
 
 Scoping: The sub-agent may read unchanged files to understand context, but must only flag issues the PR creates or worsens.
 
@@ -359,10 +365,12 @@ SUGGESTION = things the author would genuinely thank you for pointing out. Maxim
 These are NOT findings — do not report them:
 - Missing tests for trivial branches, early returns, or guard clauses
 - Slightly broad hook dependencies (useEffect, useMemo) that cause harmless no-ops
-- Theoretical edge cases that require multiple unlikely conditions to manifest
+- Theoretical edge cases that require multiple unlikely conditions to manifest — EXCEPT silent data loss in save/write paths: a lost-update or out-of-order-write race in an autosave, flush, or persistence flow is a real finding even when the window is narrow
 - Stylistic preferences when the current approach works correctly
 - Types that could be narrower but are correct as-is
 - An approach that works but could use a different pattern
+
+Do not let provenance substitute for analysis: code that mirrors an established pattern elsewhere in the codebase, or that survived earlier bot/human review rounds on this PR, is NOT automatically correct. Prior reviewers auditing their own known findings is not the same as the code being verified — run your own checks (especially concurrency/ordering on any debounced or fire-and-forget write path) regardless of what previous reviews concluded.
 
 **Respect prior discussion.** If a "Prior Discussion" section is included in your prompt, scan it before drafting any finding. For each finding you intend to raise, search the prior discussion for threads on the same file:line range or topic and apply this rule:
 
@@ -420,6 +428,24 @@ Calculate totals per severity for the summary section.
 ### 3.6 Identify Positives
 
 Only note genuinely notable things — skip this section entirely if nothing stands out. Do not pad with generic praise like "good error handling" or "clean code."
+
+### 3.7 Adversarial Approval Gate (devil's advocate)
+
+Every earlier phase is biased towards approval by design (verification requirements, confidence thresholds, suggestion caps). This gate is the counterweight against false negatives. **If, and only if, the provisional verdict is APPROVE or APPROVE_WITH_SUGGESTIONS**, dispatch one additional sub-agent before Phase 4. Run it exactly once — do not loop, and do not run it when the verdict is already REQUEST_CHANGES.
+
+**Sub-agent config:** use `delegate`, inherit the parent model, and restrict tools to read-only inspection (`read`, `grep`, `find`, `ls`, `bash`). Do not edit files.
+
+Give it: the diff path (`$REVIEW_TMPDIR/pr.diff`), the changed-file list, AND the draft approval summary (2-3 sentences of what the provisional review concluded and what it claims to have verified).
+
+Prompt (adapt, keep the framing):
+
+> A prior review has provisionally APPROVED this PR. Assume that approval is WRONG and there is at least one merge-blocking defect the review missed. Your job is to find it. Do not re-verify what the draft approval says was checked — attack what it does NOT mention. Hunt specifically in the places approval bias hides bugs: concurrency and ordering on write paths (two in-flight requests, out-of-order completion, unguarded last-write-wins), lifecycle edges (unmount, close, navigation, cancellation, retries), error and partial-failure paths, stale cache/refetch interactions, boundary states (empty, deleted, permission-edge), and mismatches between what the UI promises ("Saved") and what the server guarantees. Treat any code that "mirrors an existing pattern" as unverified. For each candidate defect, trace the real code and construct a concrete step-by-step failure scenario a user could plausibly hit. Report only defects you can demonstrate this way, in the standard finding format. If after genuine effort you cannot demonstrate one, reply exactly "No demonstrable blocker found" — a manufactured finding here is worse than none, because it erodes the gate's credibility.
+
+Handling the result:
+
+- **"No demonstrable blocker found"** — proceed to Phase 4 with the approval. Do not mention the gate in the output.
+- **Findings returned** — verify them yourself with the same rigour as any other finding (read the code, confirm reachability). Discard anything that does not survive verification. If a CRITICAL or SHOULD_FIX survives, flip the verdict to REQUEST_CHANGES and include the finding normally; surviving SUGGESTIONs join the suggestion pool (still capped at 3).
+- **Sub-agent failure/timeout** — proceed with the provisional verdict; note nothing.
 
 ## Phase 4: Present
 
