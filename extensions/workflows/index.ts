@@ -24,9 +24,21 @@
  *   (workflow_run's `budget` param or the PI_WORKFLOW_BUDGET env var) is exhausted. Null
  *   target => unbounded, matching Claude Code.
  *
- * - Guaranteed activation: session_start additively re-activates the workflow_run tool
- *   (without clobbering other active tools) so its description + guidelines always render,
- *   even under a --tools allowlist that would otherwise drop it.
+ * - Guaranteed activation: session_start additively re-activates the workflow_run and
+ *   workflow_status tools (without clobbering other active tools) so their descriptions +
+ *   guidelines always render, even under a --tools allowlist that would otherwise drop them.
+ *
+ * - Pending-run awareness (prevents premature final answers): completion messages end with a
+ *   fleet-state note saying whether OTHER launched runs are still active or all reports are in;
+ *   the per-turn system prompt addendum lists in-flight runs; and the agent-callable
+ *   workflow_status tool exposes fleet/run/agent progress. Together these keep the
+ *   outstanding-work ledger in the model's context — the piece Claude Code has that stops the
+ *   agent from writing a "complete" report while a dangling run is still executing.
+ *
+ * - Child execution via pi-subagents (runner.ts): workflow agents run through the pi-subagents
+ *   runtime (runSync) instead of a bespoke spawner, and each child writes a LIVE Pi session
+ *   transcript under <runDir>/agents/. workflow_status { runId, agentLabel, tailLines } tails a
+ *   running agent's output-so-far — the Claude Code BashOutput-style peek.
  *
  * Workflow mode (/workflow-mode on, or PI_WORKFLOW_MODE) is the Pi analogue of ultracode:
  * it injects a standing directive (buildWorkflowSystemPromptAddendum) that overrides the
@@ -34,7 +46,7 @@
  * prioritisation only and never affects the wake transport.
  */
 
-import { spawn, execFile as execFileCb } from "node:child_process";
+import { execFile as execFileCb } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -43,9 +55,10 @@ import { promisify } from "node:util";
 import vm from "node:vm";
 import { complete, type Message, type UserMessage } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { type ExtensionAPI, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { type AgentConfig, type AgentScope, discoverAgents } from "pi-subagents/src/agents/agents.ts";
+import { type AgentScope, discoverAgents } from "pi-subagents/src/agents/agents.ts";
+import { freshAgentSessionPath, renderSessionTail, runWorkflowChild } from "./runner.ts";
 
 type RunStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
 type AgentStatus = "running" | "succeeded" | "failed" | "cancelled";
@@ -136,6 +149,7 @@ interface AgentResult {
 	usage: UsageStats;
 	error?: string;
 	worktree?: WorktreeResult;
+	sessionFile?: string;
 }
 
 interface WorktreeResult {
@@ -158,6 +172,7 @@ interface AgentRecord {
 	usage?: UsageStats;
 	cached?: boolean;
 	phase?: string;
+	sessionFile?: string;
 }
 
 interface PhaseRecord {
@@ -167,7 +182,7 @@ interface PhaseRecord {
 	endedAt?: number;
 }
 
-interface RunState {
+export interface RunState {
 	id: string;
 	name: string;
 	workflowPath: string;
@@ -226,7 +241,7 @@ let mainLoopOutputTokens = 0;
 // session. The delivery WAKES the agent (triggerTurn), so the framing tells it the message
 // is an automated completion notification it should act on — not a user prompt.
 const WORKFLOW_RESULT_BANNER =
-	"[Automated background notification — NOT a user message. A workflow you launched has finished. If the task is still in progress, act on these results now (e.g. read them and launch the next phase); otherwise summarise the outcome for the user.]";
+	"[Automated background notification — NOT a user message. A workflow you launched has finished. Read the fleet-state note at the END of this message before responding: if OTHER runs you launched are still active, do NOT produce a final answer or complete report — acknowledge progress at most and wait to be woken again. Only when the fleet-state note says all reports are in should you act on the combined results (e.g. launch the next phase) or produce the final synthesis for the user.]";
 
 function parseBudgetEnv(): number | null {
 	const raw = process.env.PI_WORKFLOW_BUDGET?.trim();
@@ -359,9 +374,16 @@ async function clearWorkflowMode(): Promise<void> {
 function buildWorkflowSystemPromptAddendum(cwd: string): string | null {
 	const mode = readWorkflowMode();
 	const workflows = discoverWorkflows(cwd);
-	if (!mode.enabled && workflows.length === 0) return null;
+	if (!mode.enabled && workflows.length === 0 && listInFlightRuns().length === 0) return null;
 
 	const sections: string[] = ["## Workflow orchestration (workflow_run tool)"];
+
+	const inFlight = listInFlightRuns();
+	if (inFlight.length > 0) {
+		sections.push(
+			`ACTIVE workflow runs (their reports have NOT been delivered yet):\n${inFlight.map(describeRunLine).join("\n")}\nThese runs are still executing, so their results do not exist yet. Do NOT present final conclusions or a complete report this turn — deliver at most a partial summary that explicitly names the runs still pending. You will be woken with each run's report as it finishes; check progress with the workflow_status tool.`,
+		);
+	}
 
 	if (mode.enabled) {
 		sections.push(
@@ -441,7 +463,7 @@ function findMatchingBrace(src: string, openIndex: number): number {
 	return -1;
 }
 
-function extractMeta(source: string): WorkflowMeta {
+export function extractMeta(source: string): WorkflowMeta {
 	const stripped = stripStringsAndComments(source);
 	const match = stripped.match(/export\s+const\s+meta\s*=\s*/);
 	if (!match || match.index === undefined) throw new Error("Workflow must define `export const meta = { name, description }`.");
@@ -461,7 +483,7 @@ function extractMeta(source: string): WorkflowMeta {
 	return meta;
 }
 
-function validateScript(source: string): string[] {
+export function validateScript(source: string): string[] {
 	const errors: string[] = [];
 	const code = stripStringsAndComments(source);
 	if (/(^|\n)\s*import\b/.test(code)) {
@@ -502,37 +524,11 @@ function loadWorkflowFromSource(source: string, filePath: string): CompiledWorkf
 	}
 }
 
-function getFinalOutput(messages: Message[]): string {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const msg = messages[i];
-		if (msg.role === "assistant") {
-			for (const part of msg.content) if (part.type === "text") return part.text;
-		}
-	}
-	return "";
-}
-
 function truncateBytes(text: string, maxBytes: number): string {
 	if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
 	let out = text.slice(0, maxBytes);
 	while (Buffer.byteLength(out, "utf8") > maxBytes) out = out.slice(0, -1);
 	return `${out}\n\n[truncated; full output preserved on disk]`;
-}
-
-async function writePromptToTempFile(agentName: string, prompt: string): Promise<{ dir: string; filePath: string }> {
-	const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-workflow-agent-"));
-	const filePath = path.join(tmpDir, `prompt-${safeName(agentName)}.md`);
-	await withFileMutationQueue(filePath, async () => fs.promises.writeFile(filePath, prompt, { encoding: "utf8", mode: 0o600 }));
-	return { dir: tmpDir, filePath };
-}
-
-function getPiInvocation(args: string[]): { command: string; args: string[] } {
-	const currentScript = process.argv[1];
-	const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
-	if (currentScript && !isBunVirtualScript && fs.existsSync(currentScript)) return { command: process.execPath, args: [currentScript, ...args] };
-	const execName = path.basename(process.execPath).toLowerCase();
-	if (!/^(node|bun)(\.exe)?$/.test(execName)) return { command: process.execPath, args };
-	return { command: "pi", args };
 }
 
 async function isGitRepo(cwd: string): Promise<boolean> {
@@ -621,6 +617,7 @@ async function runSingleAgent(run: RunState, agentName: string, options: AgentOp
 			usage: zeroUsage(),
 			cached: true,
 			phase: options.phase ?? run.currentPhase,
+			sessionFile: cached.sessionFile,
 		};
 		run.agents.push(record);
 		await persistRun(run, { type: "agent_cache_hit", label: options.label, agent: agentName, cacheKey });
@@ -645,17 +642,9 @@ async function runSingleAgent(run: RunState, agentName: string, options: AgentOp
 		return { label: options.label, agent: agentName, status: "failed", text: "", messages: [], usage: zeroUsage(), error: record.error };
 	}
 
-	let tmpPromptDir: string | null = null;
-	let tmpPromptPath: string | null = null;
 	let executionCwd = options.cwd ?? run.cwd;
 	let worktreePath: string | undefined;
 	let worktreeResult: WorktreeResult | undefined;
-	const messages: Message[] = [];
-	let stderr = "";
-	let wasAborted = false;
-	const usage = zeroUsage();
-	let stopReason: string | undefined;
-	let errorMessage: string | undefined;
 
 	try {
 		if (options.isolation === "worktree") {
@@ -664,84 +653,36 @@ async function runSingleAgent(run: RunState, agentName: string, options: AgentOp
 			executionCwd = path.join(worktree.path, worktree.relativeCwd);
 		}
 
-		const args = ["--mode", "json", "-p", "--no-session"];
-		args.push("--model", options.model ?? agent.model ?? parentModel);
-		if (options.thinking) args.push("--thinking", options.thinking);
-		const tools = options.tools ?? agent.tools;
-		if (tools && tools.length > 0) args.push("--tools", tools.join(","));
-		if (agent.systemPrompt.trim()) {
-			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
-			tmpPromptDir = tmp.dir;
-			tmpPromptPath = tmp.filePath;
-			args.push("--append-system-prompt", tmpPromptPath);
-		}
-		args.push(`Task: ${options.task}`);
+		// Live Pi session transcript for this child — recorded up front so status views can tail
+		// a RUNNING agent's output-so-far, not just finished output.
+		const sessionFile = freshAgentSessionPath(run.runDir, safeName(options.label));
+		record.sessionFile = sessionFile;
+		await persistRun(run, { type: "agent_session", label: options.label, sessionFile });
 
-		const exitCode = await new Promise<number>((resolve) => {
-			const invocation = getPiInvocation(args);
-			const proc = spawn(invocation.command, invocation.args, { cwd: executionCwd, shell: false, stdio: ["ignore", "pipe", "pipe"] });
-			let buffer = "";
-			const timeout = options.timeoutMs ? setTimeout(() => {
-				wasAborted = true;
-				proc.kill("SIGTERM");
-			}, options.timeoutMs) : null;
-
-			const killProc = () => {
-				wasAborted = true;
-				proc.kill("SIGTERM");
-				setTimeout(() => { if (!proc.killed) proc.kill("SIGKILL"); }, 5000);
-			};
-			if (signal.aborted) killProc(); else signal.addEventListener("abort", killProc, { once: true });
-
-			const processLine = async (line: string) => {
-				if (!line.trim()) return;
-				await appendJsonl(path.join(run.runDir, "agents", `${safeName(options.label)}.jsonl`), { raw: line });
-				let event: any;
-				try { event = JSON.parse(line); } catch { return; }
-				if (event.type === "message_end" && event.message) {
-					const msg = event.message as Message;
-					messages.push(msg);
-					if (msg.role === "assistant") {
-						usage.turns++;
-						const msgUsage = msg.usage;
-						if (msgUsage) {
-							usage.input += msgUsage.input || 0;
-							usage.output += msgUsage.output || 0;
-							usage.cacheRead += msgUsage.cacheRead || 0;
-							usage.cacheWrite += msgUsage.cacheWrite || 0;
-							usage.cost += msgUsage.cost?.total || 0;
-						}
-						stopReason = msg.stopReason;
-						errorMessage = msg.errorMessage;
-					}
-				}
-				if (event.type === "tool_result_end" && event.message) messages.push(event.message as Message);
-			};
-
-			proc.stdout.on("data", (data) => {
-				buffer += data.toString();
-				const lines = buffer.split("\n");
-				buffer = lines.pop() || "";
-				for (const line of lines) void processLine(line);
-			});
-			proc.stderr.on("data", (data) => { stderr += data.toString(); });
-			proc.on("close", (code) => {
-				if (timeout) clearTimeout(timeout);
-				if (buffer.trim()) void processLine(buffer);
-				resolve(code ?? 0);
-			});
-			proc.on("error", () => resolve(1));
+		const child = await runWorkflowChild({
+			cwd: executionCwd,
+			agent,
+			task: options.task,
+			runId: run.id,
+			label: safeName(options.label),
+			sessionFile,
+			model: options.model,
+			parentModel,
+			thinking: options.thinking,
+			tools: options.tools,
+			timeoutMs: options.timeoutMs,
+			signal,
 		});
 
 		if (worktreePath) worktreeResult = await finalizeAgentWorktree(run, options.label, worktreePath);
 
-		const output = getFinalOutput(messages);
-		const failed = exitCode !== 0 || stopReason === "error" || stopReason === "aborted" || wasAborted;
-		record.status = failed ? (wasAborted ? "cancelled" : "failed") : "succeeded";
+		const output = child.text;
+		const failed = child.cancelled || child.exitCode !== 0 || Boolean(child.error);
+		record.status = failed ? (child.cancelled ? "cancelled" : "failed") : "succeeded";
 		record.endedAt = Date.now();
 		record.outputBytes = Buffer.byteLength(output, "utf8");
-		record.usage = usage;
-		record.error = failed ? (errorMessage || stderr || `exit code ${exitCode}`) : undefined;
+		record.usage = child.usage;
+		record.error = failed ? (child.error || `exit code ${child.exitCode}`) : undefined;
 		const worktreeNote = worktreeResult?.preserved
 			? `\n\n[Worktree changes preserved at ${worktreeResult.path}; diff: ${worktreeResult.diffPath}]`
 			: "";
@@ -750,10 +691,11 @@ async function runSingleAgent(run: RunState, agentName: string, options: AgentOp
 			agent: agentName,
 			status: record.status === "succeeded" ? "succeeded" : record.status === "cancelled" ? "cancelled" : "failed",
 			text: truncateBytes(`${output || record.error || ""}${worktreeNote}`, MAX_AGENT_OUTPUT_BYTES),
-			messages,
-			usage,
+			messages: child.messages,
+			usage: child.usage,
 			error: record.error,
 			worktree: worktreeResult,
+			sessionFile: child.sessionFile,
 		};
 		if (options.expectedOutput === "json" && result.text) {
 			try { result.json = JSON.parse(result.text); } catch { /* leave undefined */ }
@@ -762,15 +704,13 @@ async function runSingleAgent(run: RunState, agentName: string, options: AgentOp
 			run.agentCache ??= {};
 			run.agentCache[cacheKey] = result;
 		}
-		await persistRun(run, { type: "agent_end", label: options.label, status: record.status, usage, error: record.error, cacheKey });
+		await persistRun(run, { type: "agent_end", label: options.label, status: record.status, usage: child.usage, error: record.error, cacheKey });
 		updateUi(run);
 		return result;
 	} finally {
 		if (worktreePath && !worktreeResult) {
 			try { await finalizeAgentWorktree(run, options.label, worktreePath); } catch { /* preserve on unexpected cleanup failure */ }
 		}
-		if (tmpPromptPath) try { fs.unlinkSync(tmpPromptPath); } catch { /* ignore */ }
-		if (tmpPromptDir) try { fs.rmdirSync(tmpPromptDir); } catch { /* ignore */ }
 	}
 }
 
@@ -874,14 +814,44 @@ async function clearUiIfNoActive(): Promise<void> {
 	}
 }
 
+// Pure variant for tests: runs that have not yet delivered their report.
+export function inFlightRunsOf(runs: Iterable<RunState>, excludeId?: string): RunState[] {
+	return Array.from(runs).filter((r) => r.id !== excludeId && (r.status === "running" || r.status === "pending"));
+}
+
+// Runs launched from this session that have not yet delivered their report.
+function listInFlightRuns(excludeId?: string): RunState[] {
+	return inFlightRunsOf(activeRuns.values(), excludeId);
+}
+
+export function describeRunLine(run: RunState): string {
+	const done = run.agents.filter((a) => a.status !== "running").length;
+	return `- ${run.name} (${run.id}): ${run.status}, phase ${run.currentPhase ?? "-"}, agents ${done}/${run.agents.length} done, elapsed ${formatDuration(Date.now() - run.startedAt)}`;
+}
+
+// Appended to every completion delivery so the woken agent knows whether it may finalise.
+// This is the outstanding-work ledger: without it the agent treats the first report it sees
+// as "the task is done" and writes the full synthesis while other runs are still executing.
+export function buildFleetStateNoteFor(runs: Iterable<RunState>, excludeId?: string): string {
+	const active = inFlightRunsOf(runs, excludeId);
+	if (active.length === 0) {
+		return "Fleet state: no other workflow runs are active — every report from the runs you launched is now in. It is safe to synthesise the final answer (or launch the next phase) now.";
+	}
+	return `Fleet state: ⚠ ${active.length} other workflow run(s) you launched are STILL ACTIVE:\n${active.map(describeRunLine).join("\n")}\nTheir reports have NOT arrived. Do NOT produce a final answer or complete report yet — acknowledge progress at most; you will be woken as each run finishes (check progress with the workflow_status tool).`;
+}
+
+function buildFleetStateNote(excludeId?: string): string {
+	return buildFleetStateNoteFor(activeRuns.values(), excludeId);
+}
+
 // Deliver the final workflow report back into the session AND wake the agent to act on it.
 // triggerTurn:true triggers a fresh turn when the agent is idle; deliverAs:"followUp" makes it
 // ride the tail of an in-flight turn instead (the runtime checks isStreaming atomically, so
 // there is no idle/streaming race). Custom messages are surfaced to the LLM as user content,
 // so the woken agent sees the report. This is what lets it chain workflow phases the way
 // Claude Code resumes on a task-completion notification, rather than fire-and-forget.
-function safeSendWorkflowMessage(pi: ExtensionAPI, content: string): void {
-	const framed = `${WORKFLOW_RESULT_BANNER}\n\n${content}`;
+function safeSendWorkflowMessage(pi: ExtensionAPI, content: string, completedRunId?: string): void {
+	const framed = `${WORKFLOW_RESULT_BANNER}\n\n${content}\n\n---\n${buildFleetStateNote(completedRunId)}`;
 	try {
 		pi.sendMessage({ customType: "workflow-result", display: true, content: framed }, { deliverAs: "followUp", triggerTurn: true });
 	} catch {
@@ -1137,14 +1107,14 @@ async function startRun(pi: ExtensionAPI, workflowFile: WorkflowFile, args: stri
 			await persistRun(run, { type: "run_end", status: run.status, reportBytes: Buffer.byteLength(run.report, "utf8") });
 			const usage = aggregateUsage(run);
 			const budgetNote = run.budgetTotal != null ? ` (budget ${workflowSpent(run)}/${run.budgetTotal} output tokens)` : "";
-			safeSendWorkflowMessage(pi, `# Workflow complete: ${run.name}\n\n${run.report}\n\n---\nRun: ${run.id}\nAgents: ${run.agents.length}\nUsage: ${usage.turns} turns, ${usage.output} output tokens${budgetNote}, $${usage.cost.toFixed(4)}\nDetails: ${run.runDir}`);
+			safeSendWorkflowMessage(pi, `# Workflow complete: ${run.name}\n\n${run.report}\n\n---\nRun: ${run.id}\nAgents: ${run.agents.length}\nUsage: ${usage.turns} turns, ${usage.output} output tokens${budgetNote}, $${usage.cost.toFixed(4)}\nDetails: ${run.runDir}`, run.id);
 		} catch (error: any) {
 			run.status = controller.signal.aborted ? "cancelled" : "failed";
 			closeOpenPhase(run, run.status);
 			run.error = error?.message ?? String(error);
 			run.endedAt = Date.now();
 			await persistRun(run, { type: "run_end", status: run.status, error: run.error });
-			safeSendWorkflowMessage(pi, `# Workflow ${run.status}: ${run.name}\n\n${run.error}\n\nRun: ${run.id}\nDetails: ${run.runDir}`);
+			safeSendWorkflowMessage(pi, `# Workflow ${run.status}: ${run.name}\n\n${run.error}\n\nRun: ${run.id}\nDetails: ${run.runDir}`, run.id);
 		} finally {
 			clearTimeout(runTimeout);
 			abortControllers.delete(id);
@@ -1211,6 +1181,34 @@ function summarizeRuns(cwd: string): string {
 	return `Workflows:\n${workflowLines}\n\nRecent runs:\n${runLines}`;
 }
 
+// Fleet summary for the agent-callable workflow_status tool: the finalise/don't-finalise
+// verdict first, then in-flight runs (in-memory), then recent persisted runs.
+function workflowFleetStatus(cwd: string): string {
+	const active = listInFlightRuns();
+	const activeIds = new Set(active.map((r) => r.id));
+	const finished = listPersistedRuns(cwd).filter((r) => !activeIds.has(r.id)).slice(0, 10);
+	const finishedLines = finished.length
+		? finished.map((r) => {
+			const usage = aggregateUsage(r);
+			return `- ${r.name} (${r.id}): ${r.status}, ${r.agents.length} agents, ${formatDuration((r.endedAt ?? Date.now()) - r.startedAt)}, $${usage.cost.toFixed(4)}`;
+		}).join("\n")
+		: "(none)";
+	const verdict = active.length === 0
+		? "No workflow runs are in flight — every launched report is in; it is safe to finalise your answer."
+		: `⚠ ${active.length} workflow run(s) still in flight — their reports have NOT arrived; do NOT finalise your answer yet.`;
+	return [
+		verdict,
+		"",
+		"In flight:",
+		active.length ? active.map(describeRunLine).join("\n") : "(none)",
+		"",
+		"Recent finished runs:",
+		finishedLines,
+		"",
+		"Inspect a run with workflow_status { runId } (add agentLabel for one agent's output, and tailLines to tail a running agent's transcript).",
+	].join("\n");
+}
+
 function findAgentDiffPath(run: RunState, agentLabel: string): string | undefined {
 	const cacheEntry = run.agentCache ? Object.values(run.agentCache).find((r) => r.label === agentLabel) : undefined;
 	return cacheEntry?.worktree?.diffPath ?? path.join(run.runDir, "worktree-diffs", `${safeName(agentLabel)}.diff`);
@@ -1226,13 +1224,15 @@ async function applyWorkflowPatch(run: RunState, agentLabel: string, cwd: string
 	return `Applied workflow patch for ${run.id}/${agentLabel} to ${cwd}\nDiff: ${diffPath}`;
 }
 
-function workflowRunDetails(run: RunState, agentLabel?: string): string {
+function workflowRunDetails(run: RunState, agentLabel?: string, tailLines?: number): string {
 	const usage = aggregateUsage(run);
 	if (agentLabel) {
 		const agent = run.agents.find((a) => a.label === agentLabel);
 		const cacheEntry = run.agentCache ? Object.values(run.agentCache).find((r) => r.label === agentLabel) : undefined;
 		if (!agent) return `Agent not found in run ${run.id}: ${agentLabel}`;
 		const diffPath = findAgentDiffPath(run, agent.label);
+		const transcriptPath = agent.sessionFile ?? cacheEntry?.sessionFile ?? path.join(run.runDir, "agents", `${safeName(agent.label)}.session.jsonl`);
+		const showTail = tailLines !== undefined || agent.status === "running";
 		return [
 			`Workflow: ${run.name}`,
 			`Run: ${run.id}`,
@@ -1240,14 +1240,17 @@ function workflowRunDetails(run: RunState, agentLabel?: string): string {
 			`Status: ${agent.status}${agent.cached ? " (cached)" : ""}`,
 			`Duration: ${formatDuration((agent.endedAt ?? Date.now()) - agent.startedAt)}`,
 			`Usage: ${agent.usage?.turns ?? 0} turns, $${(agent.usage?.cost ?? 0).toFixed(4)}`,
-			`Raw events: ${path.join(run.runDir, "agents", `${safeName(agent.label)}.jsonl`)}`,
+			`Transcript: ${transcriptPath}`,
 			...(diffPath && fs.existsSync(diffPath) ? [`Diff: ${diffPath}`] : []),
 			"",
 			"Task:",
 			agent.task ?? "(task was not recorded by this runtime version)",
 			"",
 			"Output:",
-			cacheEntry?.text ?? agent.error ?? "(output available in raw events)",
+			cacheEntry?.text ?? agent.error ?? (agent.status === "running" ? "(still running — output so far below)" : "(no final output captured; see transcript)"),
+			...(showTail
+				? ["", `Output so far (transcript tail, last ${tailLines ?? 40} lines):`, renderSessionTail(transcriptPath, tailLines ?? 40)]
+				: []),
 		].join("\n");
 	}
 	const phaseLines = run.phases.length ? run.phases.map((p) => `- ${p.name}: ${p.status} (${formatDuration((p.endedAt ?? Date.now()) - p.startedAt)})`).join("\n") : "(none)";
@@ -1319,7 +1322,9 @@ Modes:
 - 'saved': run a known workflow by name.
 - 'generate': a script is written from a natural-language goal and a human approves it.
 
-Background + wake semantics: this tool returns IMMEDIATELY with a run id. The workflow runs in the background; when it finishes its report is delivered back into this session and WAKES you (an idle agent gets a fresh turn; an in-flight turn gets the report appended to its tail) so you can read the results and launch the next phase — exactly like resuming on a task-completion notification. Do NOT block waiting on it, and do NOT re-run the same workflow to "check" on it; inspect progress with /workflows or /workflow-show. For multi-phase work (understand -> design -> implement -> review), run several workflows in sequence, acting on each report as it arrives.
+Background + wake semantics: this tool returns IMMEDIATELY with a run id. The workflow runs in the background; when it finishes its report is delivered back into this session and WAKES you (an idle agent gets a fresh turn; an in-flight turn gets the report appended to its tail) so you can read the results and launch the next phase — exactly like resuming on a task-completion notification. Do NOT block waiting on it, and do NOT re-run the same workflow to "check" on it; inspect progress with the workflow_status tool (which can also tail a running agent's output-so-far via runId + agentLabel + tailLines). For multi-phase work (understand -> design -> implement -> review), run several workflows in sequence, acting on each report as it arrives.
+
+Finalisation rule: while ANY run you launched is still active, NEVER present a final answer or complete report — end your turn with a brief acknowledgment of what is in flight. Each completion notification ends with a fleet-state note telling you whether other runs are still active or all reports are in; synthesise the final answer only when the last report has arrived (confirm with workflow_status if unsure).
 
 Decision gate: a workflow spends real tokens across many agents. Reach for it when breadth, confidence, or scale genuinely change the outcome; for anything a single agent can finish inline in this session, do it directly — UNLESS workflow mode is on, in which case orchestrate substantive tasks by default (the standing workflow-mode directive overrides this gate). Either way: scout the work-list inline first (list the files, the diff, the items), THEN fan out.
 
@@ -1407,6 +1412,12 @@ class WorkflowsBrowser {
 	}
 }
 
+const WorkflowStatusParams = Type.Object({
+	runId: Type.Optional(Type.String({ description: "Run id (or id prefix) for detailed status of one run; omit for a fleet summary of in-flight and recent runs." })),
+	agentLabel: Type.Optional(Type.String({ description: "With runId: show one agent's task, status, and output." })),
+	tailLines: Type.Optional(Type.Number({ description: "With runId + agentLabel: include the last N lines of the agent's live transcript (output-so-far; works while it is still running). Running agents include a 40-line tail by default." })),
+});
+
 const WorkflowRunParams = Type.Object({
 	mode: StringEnum(["saved", "generate", "script"] as const, { description: "Run a saved workflow, generate one from a goal, or run a provided script." }),
 	name: Type.Optional(Type.String({ description: "Workflow name for saved mode" })),
@@ -1425,11 +1436,12 @@ export default function (pi: ExtensionAPI) {
 		lastCtx = ctx;
 		mainLoopOutputTokens = 0;
 		// Registered tools auto-activate on a normal startup, but a --tools allowlist (or another
-		// extension narrowing the active set) can drop workflow_run, which silently hides its
-		// description + guidelines. Defensively re-add it without clobbering other active tools.
+		// extension narrowing the active set) can drop workflow_run/workflow_status, which silently
+		// hides their descriptions + guidelines. Defensively re-add them without clobbering others.
 		try {
 			const active = pi.getActiveTools();
-			if (!active.includes("workflow_run")) pi.setActiveTools([...new Set([...active, "workflow_run"])]);
+			const missing = ["workflow_run", "workflow_status"].filter((tool) => !active.includes(tool));
+			if (missing.length > 0) pi.setActiveTools([...new Set([...active, ...missing])]);
 		} catch {
 			// Best-effort: if the host narrowed tools deliberately or the API is unavailable, skip.
 		}
@@ -1775,11 +1787,12 @@ return "## Smoke test results\\n\\n" + results.map((r, i) => "### agent " + (i +
 		promptSnippet:
 			"Run a background multi-agent workflow (script/saved/generate) for breadth, independent verification, or scale — audits, migrations, cross-checked research, exhaustive reviews. Returns a run id and wakes you with the report when it finishes.",
 		promptGuidelines: [
-			"workflow_run fans a task out across many bounded-concurrency subagents and reports back asynchronously; it WAKES you when done (idle -> new turn; streaming -> appended to the turn's tail), so you can read the results and chain the next phase. Do not block on it or re-run it to check progress (use /workflows).",
+			"workflow_run fans a task out across many bounded-concurrency subagents and reports back asynchronously; it WAKES you when done (idle -> new turn; streaming -> appended to the turn's tail), so you can read the results and chain the next phase. Do not block on it or re-run it to check progress (use workflow_status; it can also tail a running agent's output-so-far).",
 			"Decision gate: reach for it when a task needs breadth (too large to cover serially), confidence (independent or adversarial verification), or scale (more than one context can hold). For work a single agent can finish inline, do it directly — UNLESS workflow mode is on, in which case orchestrate substantive tasks by default. Scout the work-list inline first, then fan out.",
 			"Prefer mode:'script' for one-offs — author the orchestration directly (the full authoring contract is in this tool's description). Use pipeline() by default; use a barrier (parallel) only when a stage needs the whole set (dedup/merge, zero-count early exit, cross-item compare).",
 			"Verify adversarially for audits/research/plans/risky outputs: spawn independent skeptics or distinct lenses (correctness, security, reproduction) prompted to refute each finding, keep only those that survive a majority. Converge (loop until dry / until budget) rather than silently capping at top-N.",
 			"Scale to the ask: a quick check = a few finders + one verification pass; 'thorough'/'comprehensive'/'audit' = a larger finder pool, a 3-5 way adversarial pass, then a synthesis stage. Pass a token budget for large runs; gate loops on budget.remaining().",
+			"Finalisation rule: after launching a workflow, end your turn with a brief acknowledgment only — never a final answer or complete report while any launched run is still active. Each completion notification ends with a fleet-state note; only when it says all reports are in (or workflow_status confirms nothing is in flight) may you synthesise the final answer.",
 		],
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			let wf: WorkflowFile | undefined;
@@ -1820,7 +1833,35 @@ return "## Smoke test results\\n\\n" + results.map((r, i) => "### agent " + (i +
 				if (!ok) return { content: [{ type: "text", text: "Workflow not approved." }], isError: true };
 			}
 			const run = await startRun(pi, wf, params.args ?? "", ctx, { budget: params.budget });
-			return { content: [{ type: "text", text: `Started workflow ${run.name} (${run.id}). Details: ${run.runDir}` }], details: run };
+			const inFlightCount = listInFlightRuns().length;
+			return {
+				content: [{
+					type: "text",
+					text: `Started workflow ${run.name} (${run.id}) in the background. Details: ${run.runDir}\n\nYou will be WOKEN with the full report when it finishes; until then its results do NOT exist — do not guess at them. ${inFlightCount} workflow run(s) are now in flight. If you end your turn now, end with a brief acknowledgment that work is in progress; do NOT produce a final answer or complete report until every launched run has delivered its report (check with workflow_status).`,
+				}],
+				details: run,
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "workflow_status",
+		label: "Workflow Status",
+		description:
+			"Check the status of background workflow runs launched with workflow_run. With no arguments, returns a fleet summary: which runs are still in flight (their reports have NOT been delivered yet — do not finalise your answer while any are) and which have finished. Pass runId (or an id prefix) for one run's phases/agents/report; add agentLabel for a single agent's task and output, and tailLines to tail its live session transcript — this shows a RUNNING agent's output-so-far (assistant text + tool calls), like peeking at a background shell. Use it to confirm nothing is pending before presenting a final answer; do not poll it in a tight loop — each run wakes you automatically when it completes.",
+		parameters: WorkflowStatusParams,
+		promptSnippet:
+			"Check background workflow runs: which are still in flight (never finalise an answer while any are) and which have finished, or inspect one run/agent in detail.",
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const id = params.runId?.trim();
+			if (id) {
+				const run =
+					Array.from(activeRuns.values()).find((r) => r.id === id || r.id.startsWith(id)) ??
+					listPersistedRuns(ctx.cwd).find((r) => r.id === id || r.id.startsWith(id));
+				if (!run) return { content: [{ type: "text", text: `Run not found: ${id}` }], isError: true };
+				return { content: [{ type: "text", text: workflowRunDetails(run, params.agentLabel?.trim() || undefined, params.tailLines) }] };
+			}
+			return { content: [{ type: "text", text: workflowFleetStatus(ctx.cwd) }] };
 		},
 	});
 }
