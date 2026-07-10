@@ -961,6 +961,13 @@ function issueContext(
     issue.priorityLabel ? `Priority: ${issue.priorityLabel}` : undefined,
     issue.url ? `URL: ${issue.url}` : undefined,
     issue.description ? `\nDescription:\n${issue.description}` : undefined,
+    "\nCompletion contract:",
+    "- The deliverable is a GitHub pull request ready for review, not just a local implementation.",
+    "- Implement the ticket, run the relevant checks, inspect the final diff, commit all intended changes, and push this branch.",
+    "- Create a ready-for-review (non-draft) PR, or update the existing PR for this branch. Do not stop after coding while changes are uncommitted, unpushed, or lack a PR.",
+    "- Use a clear title that identifies the ticket and change. Write a well-documented PR body with the ticket link, summary, implementation details and key decisions, validation commands and results, risks or caveats, and screenshots for UI changes.",
+    "- Keep the PR focused on this ticket. Before finishing, verify the working tree is clean and return the PR URL.",
+    "- If a genuine blocker prevents committing, pushing, or creating the PR, report the exact blocker and the commands attempted instead of silently stopping.",
   ]
     .filter(Boolean)
     .join("\n");
