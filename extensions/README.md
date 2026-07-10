@@ -8,6 +8,7 @@ Custom Pi extensions bundled by the root `agent-toolkit` Pi package.
 - `btw.ts` — adds a command for quick side-question handling.
 - `scheduler.ts` — adds `/schedule` plus tools for delayed prompts.
 - `send-user-message.ts` — adds a lightweight progress-note tool.
+- `delegation-policy/` — instructs agents to delegate through `subagent` or `workflow_run`, never by launching agent harnesses through shell tools.
 - `web-tools/` — adds local web search/fetch tools.
 - `worktrees.ts` — adds personal worktree commands.
 - `workflows/` — adds dynamic workflow commands for saved multi-subagent TypeScript workflow scripts.
