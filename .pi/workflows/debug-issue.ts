@@ -1,4 +1,5 @@
 export const meta = {
+  version: 2,
   name: "debug-issue",
   description:
     "Debug a failing test, error/stack trace, or bug report and propose a verified minimal fix. Reproduces the failure and maps the code in parallel, generates several diverse root-cause hypotheses each backed by concrete file:line evidence, has independent skeptics adversarially try to refute each hypothesis (defaulting to refuted when uncertain), then implements the minimal fix for the surviving root cause in an isolated worktree and verifies it re-runs the failing command green with no obvious regressions. Returns { reproduced, rootCause, fix, verification }.",
@@ -110,7 +111,7 @@ const [repro, ...maps] = await parallel([
         "Report whether you genuinely observed the failure, the exact command, the verbatim relevant output, a one-line failure signature, and notes.",
         "Be precise and literal — downstream agents will rely on your exactOutput and failureSignature.",
       ].join("\n"),
-      { label: "reproduce", phase: "Reproduce + Map", schema: reproSchema, effort: "high", agentType: "scout" },
+      { label: "reproduce", phase: "Reproduce + Map", schema: reproSchema, effort: "high", agentType: "scout", network: true },
     ),
   ...mapLenses.map(
     (lens) => () =>
@@ -431,7 +432,7 @@ for (let attempt = 1; attempt <= MAX_FIX_ATTEMPTS; attempt++) {
       fixContext,
       priorFeedback ? `\nThe previous fix attempt was rejected by the verifier. Feedback to address:\n${priorFeedback}` : "",
     ].join("\n"),
-    { label: `fix-attempt-${attempt}`, phase: "Fix + Verify", schema: fixSchema, effort: "max", isolation: "worktree", agentType: "worker" },
+    { label: `fix-attempt-${attempt}`, phase: "Fix + Verify", schema: fixSchema, effort: "max", isolation: "worktree", agentType: "worker", network: true, allowFailure: true },
   );
 
   if (!fix || !fix.implemented || !fix.diff || !fix.diff.trim()) {
@@ -462,7 +463,7 @@ for (let attempt = 1; attempt <= MAX_FIX_ATTEMPTS; attempt++) {
       fixResult.diff,
       "```",
     ].join("\n"),
-    { label: `verify-fix-${attempt}`, phase: "Fix + Verify", schema: verifySchema, effort: "max", isolation: "worktree", agentType: "reviewer" },
+    { label: `verify-fix-${attempt}`, phase: "Fix + Verify", schema: verifySchema, effort: "max", isolation: "worktree", agentType: "reviewer", network: true, allowFailure: true },
   );
 
   verification = verdict;

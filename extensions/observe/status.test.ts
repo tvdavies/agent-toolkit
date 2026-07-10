@@ -27,7 +27,6 @@ describe("formatStatus", () => {
 	it("shows sensible defaults for an empty system", () => {
 		const out = formatStatus(model(), NOW);
 		expect(out).toContain("Daemon:    not running");
-		expect(out).toContain("Goal:      none");
 		expect(out).toContain("Schedule:  0 pending");
 		expect(out).toContain("Brain:     not initialised");
 		expect(out).toContain("TADU:      no workspace");
@@ -38,7 +37,6 @@ describe("formatStatus", () => {
 		const out = formatStatus(
 			model({
 				daemon: { running: true, uptime: "2h", restarts: 1, lastTrigger: "2026-06-24T11:55:00Z" },
-				goal: { objective: "Ship phase 1", status: "active", turns: 3 },
 				scheduler: { pending: 1, jobs: [{ preview: "in 10m: check PR" }] },
 				workflows: [
 					{ id: "wf_1", name: "deep-research", status: "running" },
@@ -53,15 +51,14 @@ describe("formatStatus", () => {
 			NOW,
 		);
 		expect(out).toContain("Daemon:    running (up 2h, 1 restarts, last trigger 5m ago)");
-		expect(out).toContain('Goal:      active — "Ship phase 1" (3 turns)');
 		expect(out).toContain("Workflows: 1 running, 2 recent");
 		expect(out).toContain("Brain:     42 concepts");
 		expect(out).toContain("TADU:      current TASK-0007, 5 open");
 		expect(out).toContain("guardrail-block");
 	});
 
-	it("truncates a long goal objective", () => {
-		const out = formatStatus(model({ goal: { objective: "x".repeat(200), status: "active", turns: 0 } }), NOW);
+	it("truncates a long scheduler preview", () => {
+		const out = formatStatus(model({ scheduler: { pending: 1, jobs: [{ preview: "x".repeat(200) }] } }), NOW);
 		expect(out).toContain("…");
 	});
 });

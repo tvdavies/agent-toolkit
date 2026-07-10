@@ -61,6 +61,7 @@ describe("heartbeat extension", () => {
 		)) as { systemPrompt: string };
 		expect(hb.systemPrompt).toContain("SILENCE RULE");
 		expect(hb.systemPrompt).toContain("Checklist (HEARTBEAT.md)");
+		expect(hb.systemPrompt).not.toContain(`/${"goal"}`);
 
 		const normal = await before(
 			{ type: "before_agent_start", prompt: "just a normal request", systemPrompt: "BASE" },

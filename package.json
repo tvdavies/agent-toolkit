@@ -23,6 +23,7 @@
     "bootstrap": "./scripts/bootstrap.sh",
     "sync:pi-packages": "./scripts/sync-pi-packages.sh",
     "test": "bun test ./daemon ./extensions ./bin",
+    "test:workflows": "bun test ./extensions/workflows",
     "test:watch": "bun test --watch",
     "typecheck": "tsc --noEmit",
     "brain:test": "cd brain && bun test",

@@ -38,8 +38,7 @@ so keep them conservative.
   what is genuinely urgent and cannot wait until the window ends.
 
 ## Checks
-1. If a durable /goal is active, make concrete progress on it.
-2. Otherwise do read-only triage only — nothing surprising or outward-facing.
+1. Do read-only triage only — nothing surprising or outward-facing unless this checklist explicitly authorises it.
 
 (Add Slack/Gmail/PR checks here as those integrations land.)
 `;

@@ -2,7 +2,7 @@
  * Decision spine — the append-only audit log of autonomous actions.
  *
  * Every meaningful thing the agent does on its own (a guardrail block, a brain
- * write, a goal continuation, an escalation) appends one structured JSON line to
+ * write, a workflow launch, an escalation) appends one structured JSON line to
  * `decisions.jsonl`. It is the source of truth behind every oversight surface
  * (/status, digests, the future dashboard) and answers "what did my agent do
  * while I was away?" with `jq`/`rg`, no service required.
@@ -22,7 +22,7 @@ import { dirname, join } from "node:path";
 export type Decision = {
 	/** ISO 8601 timestamp. */
 	ts: string;
-	/** Category, e.g. "guardrail-block", "brain-write", "goal-continue", "escalate". */
+	/** Category, e.g. "guardrail-block", "brain-write", "workflow-run", "escalate". */
 	kind: string;
 	/** One-line human-readable summary. */
 	summary: string;

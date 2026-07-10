@@ -79,7 +79,7 @@ The printed steps cover `systemctl --user enable --now` and
 AGENT_TOOLKIT_STATE_DIR=~/.local/state/agent-toolkit \
   node --experimental-transform-types --no-warnings bin/toolkit-daemon.ts
 # in another shell:
-node --experimental-transform-types --no-warnings bin/toolkit-trigger.ts "advance the active goal"
+node --experimental-transform-types --no-warnings bin/toolkit-trigger.ts "check the current review queue"
 ```
 
 ## Config (environment)

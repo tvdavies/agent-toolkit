@@ -1,4 +1,5 @@
 export const meta = {
+  version: 2,
   name: "review-pr",
   description:
     "Review a GitHub PR across six independent dimensions (correctness, security, architecture, test coverage, ticket/AC compliance, style), adversarially verify every finding, then synthesise one prioritised report. args is the PR number or { pr, post }.",
@@ -133,6 +134,8 @@ const ctx = await agent(sharedContext, {
   schema: contextSchema,
   agentType: "scout",
   effort: "medium",
+  network: true,
+  githubAuth: true,
 });
 
 if (!ctx || ctx.ok === false || !ctx.changedFiles || ctx.changedFiles.length === 0) {
@@ -258,6 +261,8 @@ For every finding, set dimension to "${dimension.key}". Use the changed file's p
       schema: reviewResultSchema,
       agentType: "reviewer",
       effort: "high",
+      network: true,
+      githubAuth: true,
     });
 
     if (!result) {
@@ -310,6 +315,8 @@ If REAL, set real=true and adjustedSeverity to the severity the EVIDENCE support
           schema: verdictSchema,
           agentType: "oracle",
           effort: "high",
+          network: true,
+          githubAuth: true,
         });
         return { finding, verdict };
       }),

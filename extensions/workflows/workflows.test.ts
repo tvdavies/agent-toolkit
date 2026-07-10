@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildFleetStateNoteFor, describeRunLine, extractMeta, inFlightRunsOf, type RunState, validateScript } from "./index.ts";
+import { belongsToSession, buildFleetStateNoteFor, describeRunLine, extractMeta, inFlightRunsOf, reportsPendingOf, transitionRunStatus, type RunState, validateScript } from "./index.ts";
 import { freshAgentSessionPath, renderSessionTail } from "./runner.ts";
 
 function makeRun(over: Partial<RunState> = {}): RunState {
@@ -28,6 +28,13 @@ function tmpDir(): string {
 }
 
 describe("workflows — fleet state (pending-run awareness)", () => {
+	test("session ownership fails closed when the current identity is unavailable", () => {
+		expect(belongsToSession(makeRun({ ownerSession: "/sessions/a.jsonl" }), undefined)).toBe(false);
+		expect(belongsToSession(makeRun({ ownerSession: "/sessions/a.jsonl" }), "/sessions/b.jsonl")).toBe(false);
+		expect(belongsToSession(makeRun({ ownerSession: "/sessions/a.jsonl" }), "/sessions/a.jsonl")).toBe(true);
+		expect(belongsToSession(makeRun({ ownerSession: undefined }), undefined)).toBe(true);
+	});
+
 	test("inFlightRunsOf keeps only running/pending and honours excludeId", () => {
 		const runs = [
 			makeRun({ id: "a", status: "running" }),
@@ -42,7 +49,7 @@ describe("workflows — fleet state (pending-run awareness)", () => {
 
 	test("all reports in -> explicit safe-to-finalise note", () => {
 		const note = buildFleetStateNoteFor([makeRun({ id: "done", status: "succeeded" })], "done");
-		expect(note).toContain("no other workflow runs are active");
+		expect(note).toContain("no other workflow executions or undelivered reports remain");
 		expect(note).toContain("safe to synthesise");
 	});
 
@@ -50,7 +57,15 @@ describe("workflows — fleet state (pending-run awareness)", () => {
 		// Terminal status is set before the message is sent, but excludeId must also guard
 		// against the completing run still being flagged active in edge orderings.
 		const note = buildFleetStateNoteFor([makeRun({ id: "last", status: "running" })], "last");
-		expect(note).toContain("no other workflow runs are active");
+		expect(note).toContain("no other workflow executions or undelivered reports remain");
+	});
+
+	test("terminal runs with pending outboxes still block finalisation", () => {
+		const pendingDelivery = makeRun({ id: "terminal-pending", status: "succeeded", deliveryStatus: "pending" });
+		expect(reportsPendingOf([pendingDelivery]).map((run) => run.id)).toEqual(["terminal-pending"]);
+		const note = buildFleetStateNoteFor([makeRun({ id: "done", status: "succeeded" }), pendingDelivery], "done");
+		expect(note).toContain("terminal-pending");
+		expect(note).toContain("NOT YET DELIVERED");
 	});
 
 	test("other active runs -> do-not-finalise warning listing each run", () => {
@@ -60,12 +75,12 @@ describe("workflows — fleet state (pending-run awareness)", () => {
 			status: "running",
 			currentPhase: "verify",
 			agents: [
-				{ label: "a1", agent: "scout", status: "succeeded", startedAt: 0, endedAt: 1 },
-				{ label: "a2", agent: "scout", status: "running", startedAt: 0 },
+				{ id: "agent-0001", label: "a1", agent: "scout", status: "succeeded", startedAt: 0, endedAt: 1 },
+				{ id: "agent-0002", label: "a2", agent: "scout", status: "running", startedAt: 0 },
 			],
 		});
 		const note = buildFleetStateNoteFor([makeRun({ id: "done", status: "succeeded" }), other], "done");
-		expect(note).toContain("1 other workflow run(s) you launched are STILL ACTIVE");
+		expect(note).toContain("1 other workflow report(s) you launched are NOT YET DELIVERED");
 		expect(note).toContain("security-sweep (other-run)");
 		expect(note).toContain("phase verify");
 		expect(note).toContain("agents 1/2 done");
@@ -76,6 +91,22 @@ describe("workflows — fleet state (pending-run awareness)", () => {
 		const line = describeRunLine(makeRun({ id: "x", name: "wf", status: "pending" }));
 		expect(line).toContain("wf (x): pending");
 		expect(line).toContain("agents 0/0 done");
+	});
+});
+
+describe("workflows — terminal state authority", () => {
+	test("terminal runs cannot transition back to success or another terminal state", () => {
+		const run = makeRun({ status: "running" });
+		transitionRunStatus(run, "cancelled");
+		expect(run.status).toBe("cancelled");
+		expect(() => transitionRunStatus(run, "succeeded")).toThrow("Illegal workflow transition");
+	});
+
+	test("pending and running follow only legal transitions", () => {
+		const run = makeRun({ status: "pending" });
+		transitionRunStatus(run, "running");
+		transitionRunStatus(run, "timed_out");
+		expect(run.status).toBe("timed_out");
 	});
 });
 

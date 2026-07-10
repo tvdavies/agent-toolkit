@@ -21,7 +21,7 @@ detail lives in `extensions/README.md` and `bin/README.md`.
                                   │ stdio RPC
                           ┌───────▼────────┐
                           │  resident pi    │  one --mode rpc session, --continue
-                          │  (extensions)   │  brain · guardrails · goal · scheduler
+                          │  (extensions)   │  brain · guardrails · scheduler
                           └───────┬────────┘  cron · heartbeat · observe · workflows
                                   │
         OKF brain (git)  ◄────────┼────────►  decision spine (decisions.jsonl)
@@ -31,7 +31,7 @@ detail lives in `extensions/README.md` and `bin/README.md`.
 
 **Layer 1 — resident session.** One `pi --mode rpc --continue` process. It loads
 the agent-toolkit package, so all extensions are live. Its JSONL session is
-durable; goal/scheduler/plan state restore on `session_start`.
+durable; scheduler state restores on `session_start`, while workflow runs persist independently.
 
 **Layer 2 — daemon (`bin/toolkit-daemon.ts`).** A dumb babysitter with zero LLM
 logic: owns the RPC child (strict-LF framing, respawn with backoff, SIGTERM
@@ -84,8 +84,6 @@ recoverable actions) and reports. The floor:
   (auto-hourly on Claude/Codex subscription auth) within optional quiet hours, gated in
   `toolkit-trigger`; check-ins escalate only what needs attention, suppressing
   already-handled items.
-- **Completion audit** — `goal.ts` requires evidence before "complete"; a
-  blocked goal escalates.
 
 ## Memory — the brain
 

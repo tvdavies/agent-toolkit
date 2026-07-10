@@ -5,7 +5,6 @@ Custom Pi extensions bundled by the root `agent-toolkit` Pi package.
 ## Extensions
 
 - `anthropic-claude-code.ts` — registers an Anthropic provider using local Claude Code OAuth credentials.
-- `goal.ts` — adds `/goal`, durable `/plan`, and continuation tools for long-running objectives.
 - `btw.ts` — adds a command for quick side-question handling.
 - `scheduler.ts` — adds `/schedule` plus tools for delayed prompts.
 - `send-user-message.ts` — adds a lightweight progress-note tool.
@@ -14,9 +13,9 @@ Custom Pi extensions bundled by the root `agent-toolkit` Pi package.
 - `workflows/` — adds dynamic workflow commands for saved multi-subagent TypeScript workflow scripts.
 - `brain/` — durable memory as an Open Knowledge Format (OKF) markdown bundle queried by ripgrep and committed to git. Registers `brain_query`/`brain_remember`/`brain_forget` tools, injects recalled context on each turn, and adds `/brain`.
 - `guardrails/` — the safety floor for autonomous operation: blocks destructive/banned tool calls (pi has no tool-approval prompts) via the `tool_call` hook, with autonomy levels (`high`/`balanced`/`conservative`) and `/guard`.
-- `observe/` — the in-terminal oversight surface: `/status` renders a single pane (daemon, goal, schedule, workflows, brain, TADU, recent decisions) over the decision spine.
+- `observe/` — the in-terminal oversight surface: `/status` renders a single pane (daemon, schedule, workflows, brain, TADU, recent decisions) over the decision spine.
 - `cron/` — durable scheduling via the user's crontab: `/cron` manages a job set (default: the heartbeat) and renders a managed block that runs `toolkit-trigger --cron-job <id>`. Install is deferred (`/cron print` renders the crontab to apply).
-- `heartbeat/` — the scheduled check-in loop: detects the heartbeat trigger and injects `HEARTBEAT.md` + the silence rule, suppresses already-handled items, and escalates only what needs attention via `heartbeat_note`. Adds `/heartbeat`. The effective cadence is gated to `max(timer, min-interval)` — hourly by default on Claude/Codex subscription auth, 30 min otherwise — inside an optional quiet-hours window, so a fast timer can't over-run it.
+- `heartbeat/` — the scheduled check-in loop: detects the heartbeat trigger and injects `HEARTBEAT.md` + the silence rule, suppresses already-handled items, and escalates only what needs attention via `heartbeat_note`. Adds `/heartbeat`. The effective cadence is gated to `max(timer, min-interval)` — hourly by default on Claude/Codex subscription auth, 30 min otherwise — inside an optional quiet-hours window, so a fast timer can't over-run it. Existing user-created `HEARTBEAT.md` files are never overwritten.
 - `lib/` — shared modules used by several extensions (the `decisions` audit spine and `paths`). It has no `index.ts`, so Pi never loads it as an extension.
 - `openai-fast.json` — provider/model configuration retained with the extension set.
 
@@ -32,8 +31,9 @@ After adding or changing extensions, run `/reload` inside Pi.
 
 ## Dynamic workflows
 
-The `workflows/` extension discovers reusable workflow scripts from `.pi/workflows/*.ts` and `~/.pi/agent/workflows/*.ts`.
-Project workflows shadow user workflows with the same name and require content-hash approval before running.
+The `workflows/` extension discovers reusable workflow scripts from `.pi/workflows/*.{js,ts}` and `~/.pi/agent/workflows/*.{js,ts}`. Project workflows shadow user workflows with the same name and require approval of an immutable root/dependency hash.
+
+Workflow JavaScript never runs in the Pi process. On Linux it executes under `bubblewrap` with an empty environment, no network or project/user filesystem, a bounded V8 heap, and authenticated access only to orchestration capabilities. There is deliberately no unsafe fallback when that sandbox is unavailable. Runs fail early outside a Git repository. Every subagent runs in a unique detached Git clone outside the launch checkout, built from one pinned tracked snapshot. A child guard limits tools to read/search plus Bash; Bash sees only minimal system runtimes and the clone, clears its environment, and has no network by default. An approved call may request `network: true`; `githubAuth: true` additionally mounts an ephemeral GitHub token. Non-ignored untracked contents are excluded to avoid copying secrets and are listed in run events.
 
 Commands:
 
@@ -42,20 +42,23 @@ Commands:
 - `/flow <goal>` — generate a workflow script with the current model, then view/edit/save/run it after approval.
 - `/workflows` — list discovered workflows and recent persisted runs.
 - `/workflow-save <run-id> [user|project]` — save a run's script snapshot as a reusable workflow.
-- `/workflow-rerun <run-id> [fresh|reuse]` — rerun an exact script snapshot, optionally reusing completed agent cache entries.
-- `/workflow-apply <run-id> <agent-label> [cwd] [--check]` — check or apply a patch produced by a worktree-isolated agent.
+- `/workflow-rerun <run-id> [fresh|reuse]` — rerun the persisted immutable script snapshot. Individual `agent()` calls must opt into deterministic cache reuse with `cache: true`.
+- `/workflow-apply <run-id> <agent-id> [cwd] [--check]` — check or apply an isolated-clone agent patch. Apply refuses repository drift since launch.
 - `/workflow-stop <run-id>` — cancel an active run.
 
 Workflow authoring guidelines:
 
-- Import only `workflow` from `pi-workflows` and default-export `workflow({ name, run })`.
-- Use `ctx.phase`, stable agent labels, and `ctx.mapLimit` for bounded fan-out.
-- Let `ctx.agent` subagents do filesystem/tool work; workflow scripts should orchestrate only.
-- End with `return ctx.report(markdown)`.
-- Avoid non-determinism (`Date.now`, `Math.random`) so `/workflow-rerun <id> reuse` can skip completed agents safely.
-- Use `isolation: "worktree"` for modifying agents; inspect diffs with `/workflow-show` and apply clean patches with `/workflow-apply`.
-
-Bundled example workflow patterns currently include `auth-audit`, `codebase-audit`, `deep-research`, `migration-plan`, and `validate-branch`.
+- Ask `workflow_run` for `mode: "guide"` when authoring. The complete contract is intentionally omitted from ordinary turns.
+- Begin with a pure `export const meta = { version: 2, name, description, phases, dependencies? }` literal. Version 2 uses fail-fast child semantics; unversioned saved scripts retain the legacy nullable-failure behavior for compatibility. The remaining plain JavaScript body may use only injected `agent`, `parallel`, `pipeline`, `phase`, `log`, `workflow`, `args`, and `budget` globals.
+- Let subagents do every repository, shell, file, and web action. The workflow body only orchestrates.
+- `agent(prompt, { schema })` uses pi-subagents' native `structured_output` validation. Invalid or missing structured output fails explicitly before display truncation.
+- `agent(prompt, { patches: [diffPath] })` seeds preserved diffs from earlier agents in the same run into a fresh writable clone for isolated review/fix stages. Use `returnMetadata: true` to receive `{ value, agentId, workspacePath, diffPath }` without scraping display text.
+- Child Bash is networkless by default. `network: true` is explicit source-approved authority; `githubAuth: true` additionally provides the host's GitHub token and implies network.
+- Child failures propagate by default. Use `allowFailure: true` only when a nullable ordinary failure is intentional; cancellation, timeout, budget, and sandbox failures remain terminal.
+- Labels are display text and may repeat; persisted agent IDs are the filesystem/control identity. The compatibility phrase `Worktree changes preserved at …` in child output refers to the isolated clone path.
+- Nested workflow names must be listed in `meta.dependencies`; dynamic script paths are forbidden and nesting is limited to one level.
+- Start fan-out small, prefer `pipeline` over unnecessary barriers, and expand only while novel yield justifies `budget.remaining()`.
+- Completion execution and wake delivery are separate persisted states. `sent_unacknowledged` is honest about Pi's current lack of a durable enqueue receipt.
 
 ## Scheduling: scheduler vs cron
 
@@ -79,6 +82,7 @@ as `*.test.ts` and run with Bun:
 
 ```bash
 bun test extensions/        # run the suite
+bun run test:workflows      # workflow sandbox/state/isolation regression suite
 bun run typecheck           # tsc --noEmit (new code is type-clean)
 ```
 

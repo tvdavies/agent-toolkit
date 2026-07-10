@@ -30,11 +30,9 @@ workflow_run mode:'saved' name:'review-pr' args:'4811'
 
 ## Safety
 
-- `implement-ticket` leaves its change **in a git worktree** for you to review/merge — it never
-  commits, pushes, or opens a PR, even if `args` mentions pushing.
+- `implement-ticket` uses isolated Git clones. By default, once tests and review pass it may commit a feature branch, push it, and open or update a PR. Pass `{ noPr: true }` (or ask to leave it in the workspace) to preserve the reviewed diff without shipping.
 - `review-pr` is **read-only** — it never posts to GitHub unless explicitly authorised.
-- File-mutating agents run with `isolation: 'worktree'`; destructive ops are still subject to
-  the guardrails floor.
+- Every child starts from the run's pinned tracked snapshot in a unique clone. Tools are allowlisted; Bash sees only minimal runtimes plus that clone and is networkless by default. Cross-stage changes move explicitly as preserved diffs. Calls that need external access declare `network: true`; GitHub calls additionally declare `githubAuth: true` for an ephemeral token.
 
 ## Editing / distribution
 

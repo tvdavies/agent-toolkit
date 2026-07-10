@@ -1,8 +1,8 @@
 /**
  * Observe extension — the in-terminal oversight surface (`/status`).
  *
- * Reads state the rest of the toolkit already persists (the goal + scheduler
- * session entries, workflow-run manifests, the brain, TADU, and the decision
+ * Reads state the rest of the toolkit already persists (scheduler session
+ * entries, workflow-run manifests, the brain, TADU, and the decision
  * spine) and renders a single pane answering "what is it doing right now?".
  * Pure rendering lives in ./status; this module only gathers and wires.
  *
@@ -22,9 +22,6 @@ import { BrainStore } from "../brain/store";
 import { brainRoot, workflowRunRoots } from "../lib/paths";
 import { formatStatus, type StatusModel } from "./status";
 
-const GOAL_SET = "goal-set";
-const GOAL_STATUS = "goal-status";
-const GOAL_CLEAR = "goal-clear";
 const SCHED_JOB = "scheduler-job";
 const SCHED_CANCEL = "scheduler-cancel";
 
@@ -43,7 +40,6 @@ export default function observeExtension(pi: ExtensionAPI): void {
 function gather(ctx: ExtensionContext): StatusModel {
 	return {
 		daemon: gatherDaemon(),
-		goal: gatherGoal(ctx),
 		scheduler: gatherScheduler(ctx),
 		workflows: gatherWorkflows(ctx.cwd),
 		brain: gatherBrain(),
@@ -66,25 +62,6 @@ function gatherDaemon(): StatusModel["daemon"] {
 	} catch {
 		return { running: false };
 	}
-}
-
-function gatherGoal(ctx: ExtensionContext): StatusModel["goal"] {
-	let goal: { objective: string; status: string; turns: number } | undefined;
-	for (const entry of customEntries(ctx)) {
-		const data = entry.data as Record<string, unknown> | undefined;
-		if (entry.customType === GOAL_SET && data?.id) {
-			goal = {
-				objective: String(data.objective ?? ""),
-				status: String(data.status ?? "active"),
-				turns: Number(data.turns ?? 0),
-			};
-		} else if (entry.customType === GOAL_STATUS && goal && data?.status) {
-			goal.status = String(data.status);
-		} else if (entry.customType === GOAL_CLEAR) {
-			goal = undefined;
-		}
-	}
-	return goal;
 }
 
 function gatherScheduler(ctx: ExtensionContext): StatusModel["scheduler"] {

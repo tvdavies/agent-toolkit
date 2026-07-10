@@ -15,7 +15,6 @@ export type StatusModel = {
 		restarts?: number;
 		lastTrigger?: string;
 	};
-	goal?: { objective: string; status: string; turns: number };
 	scheduler: { pending: number; jobs: { preview: string }[] };
 	workflows: { id: string; name?: string; status: string }[];
 	brain: { initialised: boolean; concepts: number };
@@ -63,12 +62,6 @@ export function formatStatus(model: StatusModel, now: number): string {
 		parts.push(`last trigger ${ago(model.daemon.lastTrigger, now)}`);
 		lines.push(`Daemon:    running (${parts.join(", ")})`);
 	}
-
-	lines.push(
-		model.goal
-			? `Goal:      ${model.goal.status} — "${truncate(model.goal.objective)}" (${model.goal.turns} turns)`
-			: "Goal:      none",
-	);
 
 	lines.push(`Schedule:  ${model.scheduler.pending} pending`);
 	for (const job of model.scheduler.jobs.slice(0, MAX_LISTED)) {

@@ -7,7 +7,7 @@
  * blocks the resident orchestrator, and so every task can run concurrently.
  *
  * Workers run with `--no-extensions` for predictable one-shot behaviour (no
- * orchestrator-only loops like goal continuation); built-in tools stay enabled.
+ * resident-session extension loops); built-in tools stay enabled.
  * The spawn is injectable so the lifecycle (capture, exit, timeout) is tested
  * without pi.
  */

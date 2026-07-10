@@ -1,11 +1,12 @@
 export const meta = {
+  version: 2,
   name: "implement-ticket",
   description:
-    "Implement a ticket or bug end-to-end and open a well-described PR. Triages the input like a principal engineer (ticket id or free-form report; detects an existing branch/PR to continue, duplicate/related issues, or a ticket too big for one PR), maps the code, plans via a judge panel, implements in an isolated worktree with tests and an adversarial review + bounded fix, then pushes a well-named branch and opens a well-described PR against the base. Surfaces related issues and any recommended breakdown into follow-up PRs. Pass { noPr: true } (or say 'leave it in the worktree') to stop before pushing; { draft: true } for a draft PR.",
+    "Implement a ticket or bug end-to-end and open a well-described PR. Triages the input like a principal engineer (ticket id or free-form report; detects an existing branch/PR to continue, duplicate/related issues, or a ticket too big for one PR), maps the code, plans via a judge panel, implements in an isolated clone with tests and an adversarial review + bounded fix, then pushes a well-named branch and opens a well-described PR against the base. Surfaces related issues and any recommended breakdown into follow-up PRs. Pass { noPr: true } (or say 'leave it in the worktree') to stop before pushing; { draft: true } for a draft PR.",
   phases: [
     { title: "Understand", detail: "Triage the input (ticket vs report; existing branch/PR; duplicates; size) and, in parallel, fetch the requirement and map the affected code and conventions." },
     { title: "Plan", detail: "Generate independent implementation approaches, score them with parallel judges, and synthesize the winning plan grafting the best ideas from runners-up." },
-    { title: "Implement", detail: "Carry out the winning plan in a fresh git worktree, writing code and tests and running the repo's test command, scoped to the ticket." },
+    { title: "Implement", detail: "Carry out the winning plan in a fresh isolated git clone, writing code and tests and running the repo's test command, scoped to the ticket." },
     { title: "Review", detail: "Independent reviewers across correctness, test-adequacy, and regression-risk try to find real problems and re-run tests; do one bounded fix pass if needed." },
     { title: "Ship", detail: "Commit on a well-named branch, push, and open a well-described PR against the base branch (unless opted out)." },
   ],
@@ -114,7 +115,7 @@ const [ticket, codeMap, triage] = await parallel([
         `3. Extract crisp, testable acceptance criteria. If the ticket has no explicit list, infer them from the description and title. Each criterion must be checkable by a test or a manual step.\n` +
         `4. Note what is explicitly OUT of scope, and any open questions / ambiguities that could change the implementation.\n\n` +
         `Do not write any code. Only read/fetch.`,
-      { label: "fetch-ticket", phase: "Understand", schema: ticketSchema, effort: "medium" },
+      { label: "fetch-ticket", phase: "Understand", schema: ticketSchema, effort: "medium", network: true, githubAuth: true },
     ),
   () =>
     agent(
@@ -140,7 +141,7 @@ const [ticket, codeMap, triage] = await parallel([
         `4. relatedIssues: duplicate or closely-related tickets/PRs (search Linear via linear-cli and 'gh pr list'/'gh issue list'). List id + one line each so we don't duplicate effort.\n` +
         `5. tooBigForOnePr + suggestedSubtasks: is this too large for one reviewable PR? If so, propose slices each shippable as its own PR, smallest/foundational first.\n` +
         `6. branchName: a well-formed branch name for fresh work, following any visible repo convention (else '<ticket-id-lowercased>-<short-slug>').`,
-      { label: "triage", phase: "Understand", schema: triageSchema, effort: "medium", agentType: "scout" },
+      { label: "triage", phase: "Understand", schema: triageSchema, effort: "medium", agentType: "scout", network: true, githubAuth: true },
     ),
 ]);
 
@@ -203,13 +204,8 @@ const sharedContext =
     : "");
 
 // ---------------------------------------------------------------------------
-// Helpers for worktree agents. These agents MUST NOT use a JSON `schema`: the
-// engine appends a "[Worktree changes preserved at <path>; diff: <diffPath>]"
-// note to the agent's text AFTER it finishes, which breaks the engine's bare-
-// JSON parse and would make agent() return null even on success. Instead we ask
-// for a fenced ```json block (the appended note lands OUTSIDE the fence) and
-// parse it in-script, and we read the real worktree path/diff from the note
-// (the agent itself can never see the note, since it is appended post-hoc).
+// Helpers for mutating agents. Their human report stays in a fenced JSON block while
+// returnMetadata supplies stable workspace/diff identities without scraping display text.
 // ---------------------------------------------------------------------------
 const extractJsonBlock = (text) => {
   if (typeof text !== "string") return null;
@@ -228,13 +224,6 @@ const extractJsonBlock = (text) => {
     }
   }
   return null;
-};
-
-const extractWorktreeNote = (text) => {
-  if (typeof text !== "string") return { path: null, diffPath: null };
-  const m = text.match(/\[Worktree changes preserved at ([^\];]+); diff: ([^\]]+)\]/);
-  if (!m) return { path: null, diffPath: null };
-  return { path: m[1].trim(), diffPath: m[2].trim() };
 };
 
 const jsonContract = (fields) =>
@@ -302,7 +291,7 @@ const scoredApproaches = (
       agent(
         `Design an implementation approach for the requirement below, using the ${style.brief}\n\n${sharedContext}\n\n` +
           `Stay strictly within scope (respect OUT OF SCOPE). Be concrete: name real files and real tests. Do NOT write code yet — this is a plan.`,
-        { label: `approach-${style.key}`, phase: "Plan", schema: approachSchema, effort: "medium" },
+        { label: `approach-${style.key}`, phase: "Plan", schema: approachSchema, effort: "medium", allowFailure: true },
       ),
     // Stage 2: judge this candidate with an independent 3-judge panel (parallel barrier
     // local to this item), average the scores, and attach the verdict.
@@ -315,7 +304,7 @@ const scoredApproaches = (
               `${sharedContext}\n\n` +
               `APPROACH UNDER REVIEW (${approach.style}):\n${JSON.stringify(approach, null, 2)}\n\n` +
               `Score correctness, scope, and risk (1-5 each) and give an overall (1-5). Name its single best idea and its most important weakness.`,
-            { label: `judge-${style.key}-${j + 1}`, phase: "Plan", schema: judgeSchema, effort: "low" },
+            { label: `judge-${style.key}-${j + 1}`, phase: "Plan", schema: judgeSchema, effort: "low", allowFailure: true },
           ),
         ),
       );
@@ -377,7 +366,7 @@ const plan = await agent(
       .map((r) => `- (${r.approach.style}, score ${r.score.toFixed(2)}) best ideas: ${r.judges.map((j) => j.bestIdea).join("; ")}`)
       .join("\n") || "(none)"}\n\n` +
     `Output a single, coherent plan with ordered steps, concrete files and tests (each tied to an acceptance criterion), and a verification plan that uses the test command "${testCommand}".`,
-  { label: "synthesize-plan", phase: "Plan", schema: planSchema, effort: "high" },
+  { label: "synthesize-plan", phase: "Plan", schema: planSchema, effort: "high", allowFailure: true },
 );
 
 if (!plan) {
@@ -399,9 +388,8 @@ const finalPlan = plan || {
 phase("Implement");
 log(`Implementing "${finalPlan.title}" in an isolated worktree.`);
 
-// NOTE: no `schema` here — see the worktree-agent helpers above for why.
-const implementText = await agent(
-  `Implement the plan below. You are running in a FRESH GIT WORKTREE — make all changes here; do not touch the main checkout.\n\n` +
+const implementRun = await agent(
+  `Implement the plan below. You are running in a FRESH ISOLATED GIT CLONE — make all changes here; do not touch the main checkout.\n\n` +
     `${sharedContext}\n\n` +
     `FINAL PLAN:\n${JSON.stringify(finalPlan, null, 2)}\n\n` +
     `Rules:\n` +
@@ -415,8 +403,9 @@ const implementText = await agent(
         `testsPassed (boolean), testOutputTail (string), summary (string: what you implemented and how it satisfies the acceptance criteria)`,
     ) +
     `\nDo NOT try to report the worktree path or diff path yourself — the orchestrator derives those from the run.`,
-  { label: "implement", phase: "Implement", isolation: "worktree", effort: "high" },
+  { label: "implement", phase: "Implement", isolation: "worktree", effort: "high", returnMetadata: true, network: true, allowFailure: true },
 );
+const implementText = implementRun && typeof implementRun.value === "string" ? implementRun.value : "";
 
 if (!implementText) {
   log("Implementation agent failed.");
@@ -430,15 +419,14 @@ if (!implementText) {
 }
 
 const implReport = extractJsonBlock(implementText) || {};
-const implWorktree = extractWorktreeNote(implementText);
 const implementation = {
   filesChanged: Array.isArray(implReport.filesChanged) ? implReport.filesChanged : [],
   testsAdded: Array.isArray(implReport.testsAdded) ? implReport.testsAdded : [],
   testCommandRun: typeof implReport.testCommandRun === "string" ? implReport.testCommandRun : testCommand,
   testsPassed: implReport.testsPassed === true,
   testOutputTail: typeof implReport.testOutputTail === "string" ? implReport.testOutputTail : "(no test output captured)",
-  worktreePath: implWorktree.path,
-  diffPath: implWorktree.diffPath,
+  worktreePath: implementRun.workspacePath,
+  diffPath: implementRun.diffPath,
   summary: typeof implReport.summary === "string" ? implReport.summary : "(no summary returned)",
   rawText: implementText.slice(0, 4000),
 };
@@ -511,12 +499,11 @@ const reviewLenses = [
   },
 ];
 
-// Reviewers inspect the implement worktree directly (it is preserved on disk).
+// Each reviewer receives the implementation diff in its own fresh writable clone.
 const reviewWorktreeNote =
-  `The changes live in this git worktree: ${implementation.worktreePath}. ` +
-  `Inspect the diff there (e.g. \`git -C "${implementation.worktreePath}" diff HEAD\` and \`git -C "${implementation.worktreePath}" status\`) ` +
-  `and run the tests INSIDE it: \`cd "${implementation.worktreePath}" && ${testCommand}\`. ` +
-  (implementation.diffPath ? `A preserved copy of the diff is also at ${implementation.diffPath}.` : "");
+  `The implementation diff has already been applied to your current isolated clone. ` +
+  `Inspect it with \`git diff HEAD\` / \`git status\` and run the tests in your current working directory with \`${testCommand}\`. ` +
+  `Do not access or mutate another agent's workspace.`;
 
 const reviews = (
   await parallel(
@@ -538,7 +525,7 @@ const reviews = (
             2,
           )}\n\n` +
           `${reviewWorktreeNote}`,
-        { label: `review-${lens.key}`, phase: "Review", schema: reviewSchema, effort: "high" },
+        { label: `review-${lens.key}`, phase: "Review", schema: reviewSchema, effort: "high", patches: [implementation.diffPath], network: true },
       ),
     ),
   )
@@ -565,12 +552,9 @@ let postFixTestTail = implementation.testOutputTail;
 
 if (realIssues.length > 0 || anyFailVerdict || !implementation.testsPassed) {
   log(`Running one bounded fix pass for ${realIssues.length} issue(s).`);
-  // NOTE: no `schema` here — same worktree-note reason as the implement agent.
-  // The fix pass runs in its OWN fresh worktree, so it must first re-apply the
-  // preserved implementation diff before fixing on top of it.
-  const fixText = await agent(
-    `Do ONE bounded fix pass for the change described below. You are in a FRESH git worktree; the prior changes are NOT yet present here, so FIRST re-apply the implementation by working from the preserved diff, then address the issues. ` +
-      `Specifically: apply the preserved diff into this worktree (e.g. \`git apply "${implementation.diffPath}"\` from the repo root of this worktree, or recreate the changes from the implementation report if the patch does not apply), then fix the issues below. ` +
+  // The fix pass runs in its OWN fresh clone seeded with the preserved implementation diff.
+  const fixRun = await agent(
+    `Do ONE bounded fix pass for the change described below. You are in a FRESH isolated clone and the prior implementation diff has already been applied. Address the issues on top of those changes. ` +
       `Do NOT expand scope, refactor unrelated code, or start new features. If an issue is out of scope or a false positive, leave it and explain in remainingIssues.\n\n` +
       `${sharedContext}\n\n` +
       `ORIGINAL IMPLEMENTATION REPORT:\n${JSON.stringify(
@@ -582,7 +566,7 @@ if (realIssues.length > 0 || anyFailVerdict || !implementation.testsPassed) {
         null,
         2,
       )}\n` +
-      `Preserved diff to re-apply: ${implementation.diffPath || "(none — recreate from the report above)"}\n\n` +
+      `Seeded implementation diff: ${implementation.diffPath}\n\n` +
       `ISSUES TO ADDRESS (only blockers/majors with evidence):\n${
         realIssues
           .map((i, n) => `${n + 1}. [${i.severity}/${i.lens}] ${i.claim}\n   evidence: ${i.evidence}\n   suggested fix: ${i.fix}`)
@@ -593,12 +577,12 @@ if (realIssues.length > 0 || anyFailVerdict || !implementation.testsPassed) {
         `fixedIssues (string[]), remainingIssues (string[]: issues you could NOT fix within scope, with why), ` +
           `testCommandRun (string), testsPassed (boolean), testOutputTail (string), summary (string)`,
       ),
-    { label: "fix-pass", phase: "Review", isolation: "worktree", effort: "high" },
+    { label: "fix-pass", phase: "Review", isolation: "worktree", effort: "high", patches: [implementation.diffPath], returnMetadata: true, network: true, allowFailure: true },
   );
+  const fixText = fixRun && typeof fixRun.value === "string" ? fixRun.value : "";
 
   if (fixText) {
     const fixReport = extractJsonBlock(fixText) || {};
-    const fixWorktree = extractWorktreeNote(fixText);
     fixResult = {
       fixedIssues: Array.isArray(fixReport.fixedIssues) ? fixReport.fixedIssues : [],
       remainingIssues: Array.isArray(fixReport.remainingIssues) ? fixReport.remainingIssues : [],
@@ -606,8 +590,8 @@ if (realIssues.length > 0 || anyFailVerdict || !implementation.testsPassed) {
       testsPassed: fixReport.testsPassed === true,
       testOutputTail: typeof fixReport.testOutputTail === "string" ? fixReport.testOutputTail : "(no test output captured)",
       summary: typeof fixReport.summary === "string" ? fixReport.summary : "(no summary returned)",
-      worktreePath: fixWorktree.path,
-      diffPath: fixWorktree.diffPath,
+      worktreePath: fixRun.workspacePath,
+      diffPath: fixRun.diffPath,
     };
     postFixTestsPassed = fixResult.testsPassed;
     postFixTestTail = fixResult.testOutputTail;
@@ -623,13 +607,41 @@ if (realIssues.length > 0 || anyFailVerdict || !implementation.testsPassed) {
   }
 }
 
-// Final verdict: pass only if no surviving blockers and tests are green.
-const survivingBlockers = realIssues.filter((i) => i.severity === "blocker");
-const reviewVerdict = postFixTestsPassed && survivingBlockers.length === 0
-  ? realIssues.length > 0 || anyFailVerdict
-    ? "pass-after-fix"
-    : "pass"
-  : survivingBlockers.length > 0
+// A fix report is not self-verifying. Re-review the complete fixed diff independently and
+// derive shipping blockers from that result rather than blindly retaining or clearing the
+// original findings.
+let postFixReview = null;
+let finalReviewIssues = realIssues;
+let finalFailVerdict = anyFailVerdict;
+if (fixResult && activeDiffPath) {
+  postFixReview = await agent(
+    `Independently verify the COMPLETE post-fix change already seeded into your current isolated clone. Re-run "${testCommand}". Adjudicate every original finding and every item the fixer says remains; report only blocker/major problems that still exist with concrete file:line or command evidence. If all earlier issues are truly fixed and tests pass, return pass with no issues.\n\n` +
+      `${sharedContext}\n\n` +
+      `ORIGINAL FINDINGS:\n${JSON.stringify(realIssues, null, 2)}\n\n` +
+      `FIX REPORT:\n${JSON.stringify(fixResult, null, 2)}`,
+    { label: "post-fix-review", phase: "Review", schema: reviewSchema, effort: "high", patches: [activeDiffPath], network: true },
+  );
+  if (postFixReview) {
+    finalReviewIssues = (postFixReview.issues || []).filter((issue) => issue.severity === "blocker" || issue.severity === "major");
+    finalFailVerdict = postFixReview.verdict === "fail";
+  } else {
+    finalReviewIssues = [{
+      lens: "post-fix",
+      severity: "major",
+      claim: "Post-fix verification did not complete.",
+      evidence: "The independent post-fix reviewer returned no validated result.",
+      fix: "Re-run independent verification before shipping.",
+    }];
+    finalFailVerdict = true;
+  }
+}
+
+const survivingBlockers = finalReviewIssues.filter((issue) => issue.severity === "blocker");
+const survivingMajors = finalReviewIssues.filter((issue) => issue.severity === "major");
+const blockingFindings = [...survivingBlockers, ...survivingMajors];
+const reviewVerdict = postFixTestsPassed && blockingFindings.length === 0 && !finalFailVerdict
+  ? fixResult ? "pass-after-fix" : "pass"
+  : blockingFindings.length > 0 || finalFailVerdict
     ? "needs-attention"
     : "tests-failing";
 
@@ -662,8 +674,10 @@ if (PROTECTED.test(branchName) || branchName === baseBranch) {
 // Only ship if the change is sound AND the branch is a safe, non-protected feature branch.
 const shippable =
   Boolean(activeWorktreePath) &&
+  Boolean(activeDiffPath) &&
   postFixTestsPassed &&
-  survivingBlockers.length === 0 &&
+  blockingFindings.length === 0 &&
+  !finalFailVerdict &&
   Boolean(safeRef(branchName)) &&
   !PROTECTED.test(branchName) &&
   branchName !== baseBranch;
@@ -672,7 +686,7 @@ let pr = null;
 if (optedOutOfPr) {
   log("Opted out of a PR — leaving the change in the worktree.");
 } else if (!shippable) {
-  log(`Not shipping: ${!activeWorktreePath ? "no worktree" : survivingBlockers.length ? "surviving blockers" : "tests failing"} — left in the worktree.`);
+  log(`Not shipping: ${!activeWorktreePath ? "no workspace" : blockingFindings.length ? "surviving blocker/major findings" : finalFailVerdict ? "review verification failed" : "tests failing"} — left in the workspace.`);
 } else {
   phase("Ship");
   log(`Shipping branch ${branchName} -> PR against ${baseBranch}.`);
@@ -691,14 +705,15 @@ if (optedOutOfPr) {
     },
   };
   pr = await agent(
-    `Open the implemented + reviewed change as a PR. The change lives in the git worktree at ${activeWorktreePath}${activeDiffPath ? ` (preserved diff at ${activeDiffPath})` : ""}. Operate IN that worktree — do not create a new one.\n\n` +
+    `Open the implemented + reviewed change as a PR. The reviewed diff has already been applied to your current isolated clone; operate only in this clone.\n\n` +
       `Base branch: ${baseBranch}. Branch to use: ${branchName}.\n` +
       `SAFETY: push ONLY the branch "${branchName}". NEVER push to "${baseBranch}" or any protected branch (main/master/develop/production), never force-push, and never run any command other than the git/gh steps below.\n` +
       (triageInfo.existingBranch
         ? `This CONTINUES existing work on ${triageInfo.existingBranch}${triageInfo.existingPr ? ` (PR ${triageInfo.existingPr})` : ""}: bring your changes onto that branch (fetch it, then cherry-pick/apply your commit onto it) and push it, updating its PR rather than opening a duplicate. If the changes do not apply cleanly, set conflict:true, push nothing, and explain in notes.\n`
         : "") +
       `Steps:\n` +
-      `1. In ${activeWorktreePath}: stage and commit ALL changes with a clear conventional message derived from the ticket (e.g. "<type>: <title>${ticket.id ? ` (${ticket.id})` : ""}"). Put the commit on branch ${branchName} (create it at the current commit if you are not already on it).\n` +
+      `0. Run \`gh auth setup-git\`. If origin is an SSH GitHub URL but this sandbox has no SSH key, replace it with the equivalent HTTPS GitHub URL; use only the provided ephemeral GitHub auth.\n` +
+      `1. In your current clone, stage and commit ALL changes with a clear conventional message derived from the ticket (e.g. "<type>: <title>${ticket.id ? ` (${ticket.id})` : ""}"). Put the commit on branch ${branchName} (create it at the current commit if you are not already on it).\n` +
       `2. Push: \`git push -u origin ${branchName}\`.\n` +
       (triageInfo.existingPr
         ? `3. A PR already exists (${triageInfo.existingPr}); do NOT open another — pushing updates it. Report that URL.\n`
@@ -711,7 +726,7 @@ if (optedOutOfPr) {
       (ticket.id ? `   Reference the ticket (${ticket.id}).\n` : "") +
       (triageInfo.tooBigForOnePr ? `   Note that this is the first slice of a larger ticket; follow-up PRs: ${(triageInfo.suggestedSubtasks || []).join("; ")}.\n` : "") +
       `4. Do NOT merge the PR. Report the PR URL, the branch, whether you pushed, and conflict:true if it could not be applied onto the existing branch.`,
-    { label: "ship-pr", phase: "Ship", schema: shipSchema, effort: "high", agentType: "worker" },
+    { label: "ship-pr", phase: "Ship", schema: shipSchema, effort: "high", agentType: "worker", patches: [activeDiffPath], network: true, githubAuth: true },
   );
   if (pr && pr.prUrl) log(`PR ready: ${pr.prUrl}`);
   else log("Ship step returned no PR URL; the change remains in the worktree.");
@@ -721,7 +736,7 @@ const shipNote = optedOutOfPr
   ? `Opted out of a PR — the change is in the worktree${activeWorktreePath ? ` at ${activeWorktreePath}` : ""} for you to review/merge.`
   : pr && pr.prUrl
     ? `PR: ${pr.prUrl}${pr.conflict ? " (changes could not be cleanly applied onto the existing branch — resolve the conflict)" : ""}`
-    : `No PR opened (${survivingBlockers.length ? "surviving blockers" : !postFixTestsPassed ? "tests failing" : "ship step incomplete"}); the change is in the worktree${activeWorktreePath ? ` at ${activeWorktreePath}` : ""}.`;
+    : `No PR opened (${blockingFindings.length ? "surviving blocker/major findings" : finalFailVerdict ? "review verification failed" : !postFixTestsPassed ? "tests failing" : "ship step incomplete"}); the change is in the workspace${activeWorktreePath ? ` at ${activeWorktreePath}` : ""}.`;
 const relatedNote = (triageInfo.relatedIssues || []).length ? `\nRelated/duplicate issues: ${triageInfo.relatedIssues.join("; ")}` : "";
 const breakdownNote = triageInfo.tooBigForOnePr
   ? `\nLarge ticket — this run shipped the first slice; recommended follow-up PRs: ${(triageInfo.suggestedSubtasks || []).join("; ") || "(see triage)"}.`
@@ -732,9 +747,9 @@ const summary =
   `Plan: ${finalPlan.title}\n` +
   `Implementation: ${implementation.filesChanged.length} file(s) changed, ${implementation.testsAdded.length} test(s) added.\n` +
   `Tests: ${postFixTestsPassed ? "PASSING" : "FAILING"} via "${fixResult ? fixResult.testCommandRun : implementation.testCommandRun}".\n` +
-  `Review: ${reviews.length} adversarial reviewer(s); ${realIssues.length} evidence-backed blocker/major issue(s)` +
-  `${fixResult ? `, ${fixResult.fixedIssues.length} fixed in one bounded pass` : ""}. Verdict: ${reviewVerdict}.\n` +
-  (survivingBlockers.length > 0 ? `Surviving blockers: ${survivingBlockers.map((b) => b.claim).join("; ")}\n` : "") +
+  `Review: ${reviews.length} initial adversarial reviewer(s)${postFixReview ? " plus independent post-fix verification" : ""}; ${realIssues.length} initial blocker/major issue(s)` +
+  `${fixResult ? `, ${fixResult.fixedIssues.length} addressed in one bounded pass` : ""}. Verdict: ${reviewVerdict}.\n` +
+  (blockingFindings.length > 0 ? `Surviving blocker/major findings: ${blockingFindings.map((finding) => finding.claim).join("; ")}\n` : "") +
   shipNote + relatedNote + breakdownNote;
 
 return {
@@ -755,6 +770,7 @@ return {
   reviewVerdict,
   reviews,
   fixPass: fixResult,
+  postFixReview,
   pr: pr ? { url: pr.prUrl, branch: pr.branch, pushed: pr.pushed, conflict: pr.conflict } : null,
   summary,
 };
