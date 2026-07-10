@@ -3,12 +3,13 @@
  * Built-in path tools are restricted to the child's isolated repository. Bash commands run
  * in a minimal bubblewrap mount namespace: only system runtimes and the isolated repository
  * are visible, only the repository is writable, the environment is cleared, and networking is
- * disabled unless the approved agent() call explicitly requests `network: true`.
+ * disabled unless the validated agent() call explicitly requests `network: true`.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { classifyCommand, decide } from "../guardrails/policy.ts";
 
 function repositoryRoot(cwd: string): string {
 	let current = path.resolve(cwd);
@@ -108,11 +109,22 @@ export function sandboxCommand(command: string, cwd: string, root: string): stri
 	return args.join(" ");
 }
 
+export function workflowChildCommandBlockReason(command: string): string | undefined {
+	// A compound command can change branches before a later bare push, so pre-execution branch
+	// inspection cannot prove its destination. Require an explicit non-protected ref instead.
+	const classification = classifyCommand(command, { assumeBarePushProtected: true });
+	const decision = decide(classification, { autonomy: "high", hasUI: false });
+	if (decision.action !== "block") return undefined;
+	return `Blocked by workflow child safety floor "${classification.rule}": ${classification.reason}`;
+}
+
 export default function workflowChildGuard(pi: ExtensionAPI) {
 	pi.on("tool_call", (event, ctx) => {
 		const root = repositoryRoot(ctx.cwd);
 		const input = event.input as Record<string, unknown>;
 		if (event.toolName === "bash" && typeof input.command === "string") {
+			const reason = workflowChildCommandBlockReason(input.command);
+			if (reason) return { block: true, reason };
 			input.command = sandboxCommand(input.command, ctx.cwd, root);
 			return;
 		}

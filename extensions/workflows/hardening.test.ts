@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createAgentWorktree, finalizeAgentWorktree, persistRun, preparePersistedRunWorkflow, prepareWorkflow, type RunState } from "./index.ts";
-import { isInside, sandboxCommand } from "./child-guard.ts";
+import { isInside, sandboxCommand, workflowChildCommandBlockReason } from "./child-guard.ts";
 import { runWorkflowSandbox, type SandboxHost } from "./sandbox.ts";
 import { AbortableScheduler } from "./scheduler.ts";
 import { extractMeta, validateScript } from "./script-format.ts";
@@ -286,6 +286,21 @@ describe("workflow hardening primitives", () => {
 		expect(confined.output).toBeUndefined();
 		const explicit = confineAgentConfig({ name: "unsafe", description: "", systemPrompt: "" } as any, ["read", "write", "edit", "host_write", "bash"]);
 		expect(explicit.tools).toEqual(["read", "bash"]);
+	});
+
+	test("workflow children retain only the catastrophic command safety floor", () => {
+		expect(workflowChildCommandBlockReason("gh pr merge 123 --squash")).toContain("gh-pr-merge");
+		expect(workflowChildCommandBlockReason("git push --force origin main")).toContain("git-force-push-protected");
+		expect(workflowChildCommandBlockReason("git push origin main")).toContain("git-push-protected");
+		expect(workflowChildCommandBlockReason("git checkout main && git push")).toContain("git-bare-push-protected");
+		expect(workflowChildCommandBlockReason("git checkout main && git push origin HEAD")).toContain("git-push-protected");
+		expect(workflowChildCommandBlockReason('bash -c "git push origin main"')).toContain("git-push-protected");
+		expect(workflowChildCommandBlockReason("sh -c 'git push origin HEAD'")).toContain("git-push-protected");
+		expect(workflowChildCommandBlockReason("git -C . push origin main")).toContain("git-push-protected");
+		expect(workflowChildCommandBlockReason("git push origin feature/x && git -C . push origin main")).toContain("git-push-protected");
+		expect(workflowChildCommandBlockReason("git push origin feature/autonomous-workflow")).toBeUndefined();
+		expect(workflowChildCommandBlockReason("git push origin HEAD:feature/autonomous-workflow")).toBeUndefined();
+		expect(workflowChildCommandBlockReason("npm test")).toBeUndefined();
 	});
 
 	test("child path and bash guards block absolute writes outside the isolated repository", () => {

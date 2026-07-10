@@ -13,7 +13,8 @@
  * - Approval and execution use the same immutable root/dependency source snapshots.
  * - Every child uses a unique detached Git clone containing the pinned launch checkout's
  *   tracked state. Child tools are allowlisted; Bash sees only minimal runtimes plus that
- *   writable clone and is networkless unless explicitly approved; labels are never identities.
+ *   writable clone and is networkless unless explicitly requested by validated workflow source;
+ *   labels are never identities.
  * - Agent admission is process-wide, fair, abort-aware, and budget-reserved. Child failures,
  *   cancellation, timeouts, and invalid structured output are explicit terminal outcomes.
  * - Run events are sequenced and serialized; snapshots and full result artifacts are written
@@ -1407,6 +1408,14 @@ function approvalKey(workflow: PreparedWorkflow, cwd: string): string {
 	return `${cwd}|${workflow.path}|${workflow.approvalHash}`;
 }
 
+export function workflowSourceRequiresApproval(scope: WorkflowScope): boolean {
+	// Agent-authored and user-saved workflows are already constrained by lexical validation,
+	// the killable orchestration sandbox, and isolated child repositories. A second human gate
+	// adds friction without granting them additional authority. Repository-provided project
+	// sources retain their one-time immutable-snapshot trust boundary.
+	return scope === "project";
+}
+
 async function ensureApproved(workflow: PreparedWorkflow, ctx: any): Promise<boolean> {
 	if (workflow.scope !== "project") return true;
 	const approvals = readJsonFile<Record<string, boolean>>(USER_APPROVAL_FILE, {});
@@ -1421,6 +1430,17 @@ async function ensureApproved(workflow: PreparedWorkflow, ctx: any): Promise<boo
 	return true;
 }
 
+async function ensureWorkflowApproved(workflow: PreparedWorkflow, ctx: any): Promise<boolean> {
+	// A project workflow's immutable approval hash already covers its full dependency graph, so
+	// stop there rather than prompting once per nested project source. User-authored roots need
+	// no prompt, but still recurse in case they explicitly depend on repository-provided source.
+	if (workflowSourceRequiresApproval(workflow.scope)) return ensureApproved(workflow, ctx);
+	for (const dependency of workflow.dependencies.values()) {
+		if (!(await ensureWorkflowApproved(dependency, ctx))) return false;
+	}
+	return true;
+}
+
 async function runNamedWorkflow(pi: ExtensionAPI, name: string, args: string, ctx: any): Promise<void> {
 	lastCtx = ctx;
 	const workflow = discoverWorkflows(ctx.cwd).find((candidate) => candidate.name === safeName(name));
@@ -1429,7 +1449,7 @@ async function runNamedWorkflow(pi: ExtensionAPI, name: string, args: string, ct
 		return;
 	}
 	const prepared = await prepareWorkflow(workflow, ctx.cwd);
-	if (!(await ensureApproved(prepared, ctx))) {
+	if (!(await ensureWorkflowApproved(prepared, ctx))) {
 		ctx.ui.notify("Workflow cancelled: not approved.", "warning");
 		return;
 	}
@@ -1676,7 +1696,7 @@ Required shape:
 - After meta, write the orchestration body directly using the injected globals. Top-level await and a top-level return are allowed; the value you return becomes the report (return a markdown string, or an object that is rendered as JSON).
 
 Injected globals (do NOT import anything — these are already in scope):
-- agent(prompt, opts?) -> Promise<string | object | null>. Spawns ONE globally bounded subagent in a unique isolated Git clone. opts: { label, phase, schema, model, effort, agentType, allowFailure, cache, patches, network, githubAuth, returnMetadata }. With a JSON-Schema 'schema', pi-subagents validates native structured_output before returning it. patches accepts preserved .diff paths from earlier agents in the same run. Set returnMetadata:true to receive { value, agentId, workspacePath, diffPath } instead of the bare value. Child Bash networking is disabled unless network:true is visible in the approved source; githubAuth:true additionally mounts an ephemeral GitHub token and implies network. Failures throw by default; only allowFailure:true converts an ordinary child failure to null. Cache reuse is opt-in with cache:true and cannot be combined with returnMetadata.
+- agent(prompt, opts?) -> Promise<string | object | null>. Spawns ONE globally bounded subagent in a unique isolated Git clone. opts: { label, phase, schema, model, effort, agentType, allowFailure, cache, patches, network, githubAuth, returnMetadata }. With a JSON-Schema 'schema', pi-subagents validates native structured_output before returning it. patches accepts preserved .diff paths from earlier agents in the same run. Set returnMetadata:true to receive { value, agentId, workspacePath, diffPath } instead of the bare value. Child Bash networking is disabled unless network:true is visible in the validated workflow source; githubAuth:true additionally mounts an ephemeral GitHub token and implies network. Failures throw by default; only allowFailure:true converts an ordinary child failure to null. Cache reuse is opt-in with cache:true and cannot be combined with returnMetadata.
 - parallel(thunks) -> Promise<any[]>. Runs an array of () => Promise thunks concurrently and awaits them ALL (a barrier). Failures propagate. Use ONLY when you genuinely need every result together.
 - pipeline(items, stage1, stage2, ...) -> Promise<any[]>. Runs each item through all stages independently with NO barrier between stages; each stage receives (prevResult, originalItem, index). Wall-clock is the slowest single item, not the sum of stages. THIS IS THE DEFAULT for multi-stage work.
 - phase(title) -> mark the start of a named phase (use titles from meta.phases).
@@ -1704,7 +1724,7 @@ Hard constraints (the script is validated and REJECTED if violated):
 
 // Keep the always-present tool contract compact. The model explicitly requests mode:'guide'
 // before authoring, while generate mode receives the full guide in its dedicated model call.
-const WORKFLOW_RUN_DESCRIPTION = `Launch a persisted background multi-agent workflow for breadth, independent verification, or scale. Modes: saved, script, generate, and guide. Use mode:'guide' before writing a script. Script and generated workflows require interactive approval and execute in a killable, networkless, filesystem-isolated subprocess. Every child runs in a path-confined isolated Git clone. The tool returns immediately; workflow_status shows queued/running agents and transcript tails, and completion is queued back to the owner session.`;
+const WORKFLOW_RUN_DESCRIPTION = `Launch a persisted background multi-agent workflow for breadth, independent verification, or scale. Modes: saved, script, generate, and guide. Use mode:'guide' before writing a script. Script and generated workflows run autonomously after validation in a killable, networkless, filesystem-isolated subprocess. Every child runs in a path-confined isolated Git clone. Project-provided saved workflows retain one-time immutable-snapshot approval. The tool returns immediately; workflow_status shows queued/running agents and transcript tails, and completion is queued back to the owner session.`;
 
 const FLOW_GENERATOR_SYSTEM_PROMPT = `You generate workflow scripts for a deterministic multi-agent orchestrator that fans work out across many bounded-concurrency subagents. Return exactly ONE JavaScript module, no prose, no code fence.
 
@@ -1994,7 +2014,7 @@ export default function (pi: ExtensionAPI) {
 		handler: async (goal, ctx) => {
 			const trimmedGoal = (goal || "").trim();
 			if (!trimmedGoal) { ctx.ui.notify("Usage: /flow <goal>", "warning"); return; }
-			if (!ctx.hasUI) { ctx.ui.notify("/flow requires interactive UI approval.", "warning"); return; }
+			if (!ctx.hasUI) { ctx.ui.notify("/flow requires interactive UI.", "warning"); return; }
 			try {
 				ctx.ui.notify("Generating workflow script...", "info");
 				const script = await generateWorkflowScript(trimmedGoal, ctx);
@@ -2059,8 +2079,6 @@ export default function (pi: ExtensionAPI) {
 					await fs.promises.writeFile(filePath, finalScript, "utf8");
 				}
 				const prepared = await prepareWorkflow({ name, path: filePath, scope, hash: sha256(finalScript), description: meta.description }, ctx.cwd, 0, new Set(), finalScript);
-				const approved = await ctx.ui.confirm("Run immutable workflow snapshot?", `Workflow: ${prepared.name}\nHash: ${prepared.approvalHash}\nSandbox: networkless and filesystem-isolated\nChildren: path-confined isolated Git clones`);
-				if (!approved) return;
 				const run = await startRun(pi, prepared, "", ctx);
 				ctx.ui.notify(`Started generated workflow ${run.name} (${run.id}).`, "info");
 			} catch (error: any) {
@@ -2190,18 +2208,17 @@ return "## Smoke test results\\n\\n" + results.map((r, i) => "### agent " + (i +
 		],
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<any> {
 			if (params.mode === "guide") return { content: [{ type: "text", text: WORKFLOW_AUTHORING_GUIDE }], details: { mode: "guide" } };
+			const launchMode = params.mode;
 			let prepared: PreparedWorkflow;
-			if (params.mode === "saved") {
+			if (launchMode === "saved") {
 				if (!params.name) throw new Error("Saved workflow mode requires name.");
 				const requestedName = params.name;
 				const workflow = discoverWorkflows(ctx.cwd).find((candidate) => candidate.name === safeName(requestedName));
 				if (!workflow) throw new Error(`Workflow not found: ${params.name}`);
 				prepared = await prepareWorkflow(workflow, ctx.cwd);
-				if (!(await ensureApproved(prepared, ctx))) throw new Error("Workflow not approved.");
 			} else {
-				if (!ctx.hasUI) throw new Error(`${params.mode} mode requires interactive approval; approval cannot be disabled by tool input.`);
 				let source: string;
-				if (params.mode === "generate") {
+				if (launchMode === "generate") {
 					if (!params.goal) throw new Error("Generate workflow mode requires goal.");
 					source = await generateWorkflowScript(params.goal, ctx);
 				} else {
@@ -2214,14 +2231,12 @@ return "## Smoke test results\\n\\n" + results.map((r, i) => "### agent " + (i +
 				const name = safeName(meta.name);
 				const filePath = params.save ? path.join(USER_WORKFLOW_DIR, `${name}.ts`) : path.join("/virtual/pi-workflows", `${name}.js`);
 				prepared = await prepareWorkflow({ name, path: filePath, scope: "user", hash: sha256(source), description: meta.description }, ctx.cwd, 0, new Set(), source);
-				const dependencyLines = [...prepared.dependencies.entries()].map(([dependencyName, dependency]) => `- ${dependencyName}: ${dependency.hash.slice(0, 12)}`).join("\n") || "(none)";
-				const ok = await ctx.ui.confirm("Run immutable workflow snapshot?", `Workflow: ${prepared.name}\nHash: ${prepared.approvalHash}\nDependencies:\n${dependencyLines}\n\nThe script runs in a killable networkless/filesystem-isolated subprocess. Children use path-confined isolated Git clones.`);
-				if (!ok) throw new Error("Workflow not approved.");
 				if (params.save) {
 					await fs.promises.mkdir(USER_WORKFLOW_DIR, { recursive: true, mode: 0o700 });
 					await atomicWriteFile(filePath, source);
 				}
 			}
+			if (!(await ensureWorkflowApproved(prepared, ctx))) throw new Error("Workflow not approved.");
 			const run = await startRun(pi, prepared, params.args ?? "", ctx, { budget: params.budget });
 			const inFlightCount = listInFlightRuns().length;
 			return {

@@ -52,7 +52,7 @@ export interface ChildRunRequest {
 	tools?: string[];
 	timeoutMs?: number;
 	maxTokens?: number;
-	/** Explicitly approved shell-network capability; secure default is false. */
+	/** Explicitly requested shell-network capability; secure default is false. */
 	network?: boolean;
 	/** Mount an ephemeral GitHub token into Bash; implies network and must be source-approved. */
 	githubAuth?: boolean;

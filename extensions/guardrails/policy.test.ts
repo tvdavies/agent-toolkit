@@ -25,6 +25,7 @@ describe("classifyCommand — banned", () => {
 		["git push --force origin main", "git-force-push-protected"],
 		["git push -f origin master", "git-force-push-protected"],
 		["git push --force origin develop", "git-force-push-protected"],
+		["git -C . push --force origin main", "git-force-push-protected"],
 		["AGENT_TOOLKIT_ALLOW_PROTECTED_PUSH=1 git push --force origin main", "git-force-push-protected"],
 		["git push --force", "git-force-push-protected"],
 		["git push --force origin", "git-force-push-protected"],
@@ -50,6 +51,12 @@ describe("classifyCommand — ask", () => {
 		['BRANCH=main; git push origin "$BRANCH"', "git-push-protected"],
 		["git push origin ${BRANCH}", "git-push-protected"],
 		["git push origin $(git branch --show-current)", "git-push-protected"],
+		["git push origin HEAD", "git-push-protected"],
+		['bash -c "git push origin main"', "git-push-protected"],
+		["sh -c 'git push origin HEAD'", "git-push-protected"],
+		["git -C . push origin main", "git-push-protected"],
+		["git -c push.default=current push origin HEAD", "git-push-protected"],
+		["git push origin feature/x && git -C . push origin main", "git-push-protected"],
 		["git push -u origin main", "git-push-protected"],
 		["git push upstream develop", "git-push-protected"],
 		["git push origin HEAD:main", "git-push-protected"],
@@ -64,10 +71,22 @@ describe("classifyCommand — ask", () => {
 	});
 });
 
+describe("classifyCommand — destination-ambiguous child pushes", () => {
+	it("asks for bare pushes when the caller cannot trust pre-command branch state", () => {
+		expect(classifyCommand("git checkout main && git push", { currentBranch: "feature/x", assumeBarePushProtected: true }).rule).toBe("git-bare-push-protected");
+		expect(classifyCommand("git push origin", { currentBranch: "feature/x", assumeBarePushProtected: true }).rule).toBe("git-bare-push-protected");
+	});
+
+	it("still allows an explicit feature destination through to the ordinary notify tier", () => {
+		expect(classifyCommand("git push origin HEAD:feature/x", { assumeBarePushProtected: true }).rule).toBe("git-push");
+	});
+});
+
 describe("classifyCommand — confirm", () => {
 	const confirm: [string, string][] = [
 		["git push --force origin feature/x", "git-force-push"],
 		["git push --force origin feature/main-menu", "git-force-push"],
+		["git -C . push --force origin feature/x", "git-force-push"],
 		["git clean -fd", "git-clean"],
 		["npm publish", "package-publish"],
 		["cargo publish", "package-publish"],
@@ -95,6 +114,7 @@ describe("classifyCommand — notify", () => {
 		["git push origin develop-feature", "git-push"],
 		["git push origin feature/main-menu", "git-push"],
 		["git push -u origin lle-1234-fix-login", "git-push"],
+		["git -C . push origin feature/x", "git-push"],
 	])("flags %p for notify", (cmd, rule) => {
 		const c = classifyCommand(cmd, { currentBranch: "feature/x" });
 		expect(c.tier).toBe("notify");

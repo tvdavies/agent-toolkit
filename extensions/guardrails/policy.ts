@@ -34,6 +34,8 @@ export type Decision = {
 export type CommandContext = {
 	/** Current git branch for bare `git push` checks, when the caller can cheaply provide it. */
 	currentBranch?: string;
+	/** Treat destination-ambiguous pushes as protected (for compound commands in isolated children). */
+	assumeBarePushProtected?: boolean;
 };
 
 type Predicate = (command: string, context: CommandContext) => boolean;
@@ -90,30 +92,28 @@ function isProtectedBranchName(branch: string | undefined): boolean {
 
 const PUSH_OPTION_VALUE_FLAGS = new Set(["--exec", "--receive-pack", "--repo", "--push-option", "-o"]);
 const KNOWN_REMOTE_NAMES = new Set(["origin", "upstream"]);
+const GIT_PUSH_PATTERN = /\bgit(?:\s+(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace|super-prefix|config-env))\s+(?:"[^"]*"|'[^']*'|\S+)|--[A-Za-z][\w-]*(?:=(?:"[^"]*"|'[^']*'|\S+))?|-[A-Za-z]))*\s+push\b/;
 
-function isGitPush(command: string): boolean {
-	return /\bgit\s+push\b/.test(command);
-}
+type GitPushInvocation = { command: string; args: string[] };
 
 function isForcePushFlag(command: string): boolean {
 	return /(--force(?!-with-lease)|(^|\s)-f(\s|$))/.test(command);
 }
 
-function stripMatchingQuotes(text: string): string {
-	if (text.length >= 2) {
-		const first = text[0];
-		const last = text[text.length - 1];
-		if ((first === '"' && last === '"') || (first === "'" && last === "'")) return text.slice(1, -1);
-	}
-	return text;
+function normalizeRefToken(ref: string): string {
+	// Shell wrappers such as `bash -c "git push origin main"` leave only one quote attached to
+	// the final whitespace-split token. Trim edge quotes independently; quotes inside a ref stay
+	// suspicious and are handled by isDynamicRef.
+	return ref.trim().replace(/^[+'"]+/, "").replace(/['"]+$/, "");
 }
 
 function isDynamicRef(ref: string): boolean {
-	return /[$`\\]/.test(ref) || /\$\(|\$\{|\b(eval|printenv|envsubst)\b/.test(ref);
+	const normalized = normalizeRefToken(ref);
+	return /[$`\\'"]/.test(normalized) || /\$\(|\$\{|\b(eval|printenv|envsubst)\b/.test(normalized) || /^(HEAD|@)(?:[~^].*)?$/.test(normalized);
 }
 
 function refDestination(ref: string): string {
-	const unquoted = stripMatchingQuotes(ref.trim()).replace(/^\+/, "");
+	const unquoted = normalizeRefToken(ref);
 	const parts = unquoted.split(":");
 	const destination = parts.length > 1 ? (parts[parts.length - 1] ?? "") : unquoted;
 	return destination.replace(/^refs\/heads\//, "");
@@ -123,33 +123,46 @@ function isProtectedRef(ref: string): boolean {
 	return isProtectedBranchName(refDestination(ref));
 }
 
-/** Non-option words after `git push`, best-effort and intentionally conservative.
- *  Used only to catch protected/dynamic branch targets. */
-function gitPushArgs(command: string): string[] {
-	const match = /\bgit\s+push\b(?:\s+(.+))?$/.exec(command);
-	if (!match) return [];
-	const rest = (match[1] ?? "").split(/\s+(?:&&|\|\||;|\|)\s+/)[0] ?? "";
-	const tokens = rest.split(/\s+/).filter(Boolean);
-	const args: string[] = [];
-	for (let i = 0; i < tokens.length; i += 1) {
-		const token = tokens[i] ?? "";
-		if (token === "--") {
-			args.push(...tokens.slice(i + 1));
-			break;
+/** Every `git [global-options] push` invocation in a possibly compound/wrapped command.
+ *  Non-option words after each push are parsed best-effort and intentionally conservatively. */
+function gitPushInvocations(command: string): GitPushInvocation[] {
+	const matcher = new RegExp(GIT_PUSH_PATTERN.source, "g");
+	const invocations: GitPushInvocation[] = [];
+	for (const match of command.matchAll(matcher)) {
+		const tail = command.slice((match.index ?? 0) + match[0].length);
+		const boundary = tail.search(/\s*(?:&&|\|\||;|\|)\s*/);
+		const rest = (boundary >= 0 ? tail.slice(0, boundary) : tail).trim();
+		const tokens = rest.split(/\s+/).filter(Boolean);
+		const args: string[] = [];
+		for (let i = 0; i < tokens.length; i += 1) {
+			const token = tokens[i] ?? "";
+			if (token === "--") {
+				args.push(...tokens.slice(i + 1));
+				break;
+			}
+			if (token.startsWith("--")) {
+				const key = token.split("=")[0] ?? token;
+				if (!token.includes("=") && PUSH_OPTION_VALUE_FLAGS.has(key)) i += 1;
+				continue;
+			}
+			if (/^-[A-Za-z]+$/.test(token)) {
+				// Short push flags like -u/--set-upstream do not themselves name a ref.
+				if (PUSH_OPTION_VALUE_FLAGS.has(token)) i += 1;
+				continue;
+			}
+			args.push(token);
 		}
-		if (token.startsWith("--")) {
-			const key = token.split("=")[0] ?? token;
-			if (!token.includes("=") && PUSH_OPTION_VALUE_FLAGS.has(key)) i += 1;
-			continue;
-		}
-		if (/^-[A-Za-z]+$/.test(token)) {
-			// Short push flags like -u/--set-upstream do not themselves name a ref.
-			if (PUSH_OPTION_VALUE_FLAGS.has(token)) i += 1;
-			continue;
-		}
-		args.push(token);
+		invocations.push({ command: `${match[0]}${rest ? ` ${rest}` : ""}`, args });
 	}
-	return args;
+	return invocations;
+}
+
+function isGitPush(command: string): boolean {
+	return gitPushInvocations(command).length > 0;
+}
+
+function isAnyForcePush(command: string): boolean {
+	return gitPushInvocations(command).some((invocation) => isForcePushFlag(invocation.command));
 }
 
 function refArgs(args: readonly string[]): string[] {
@@ -164,14 +177,16 @@ function isRemoteOnlyPush(args: readonly string[]): boolean {
 /** Force-push that targets a protected branch, including bare/current-branch
  *  force-pushes when the current branch is protected. */
 function isForcePushProtected(command: string, context: CommandContext): boolean {
-	if (!isGitPush(command)) return false;
-	const args = gitPushArgs(command);
-	const refs = refArgs(args);
-	const plusForceRefs = refs.filter((ref) => ref.startsWith("+"));
-	if (plusForceRefs.some((ref) => isProtectedRef(ref) || (KNOWN_REMOTE_NAMES.has(args[0] ?? "") && isDynamicRef(ref)))) return true;
-	if (!isForcePushFlag(command)) return false;
-	if (refs.some((ref) => isProtectedRef(ref) || (KNOWN_REMOTE_NAMES.has(args[0] ?? "") && isDynamicRef(ref)))) return true;
-	return isProtectedBranchName(context.currentBranch) && (args.length === 0 || isRemoteOnlyPush(args));
+	for (const invocation of gitPushInvocations(command)) {
+		const { args } = invocation;
+		const refs = refArgs(args);
+		const plusForceRefs = refs.filter((ref) => ref.startsWith("+"));
+		if (plusForceRefs.some((ref) => isProtectedRef(ref) || (KNOWN_REMOTE_NAMES.has(args[0] ?? "") && isDynamicRef(ref)))) return true;
+		if (!isForcePushFlag(invocation.command)) continue;
+		if (refs.some((ref) => isProtectedRef(ref) || (KNOWN_REMOTE_NAMES.has(args[0] ?? "") && isDynamicRef(ref)))) return true;
+		if ((isProtectedBranchName(context.currentBranch) || context.assumeBarePushProtected === true) && (args.length === 0 || isRemoteOnlyPush(args))) return true;
+	}
+	return false;
 }
 
 /** A plain (non-force) push whose explicit refspec target is a protected branch,
@@ -179,20 +194,18 @@ function isForcePushProtected(command: string, context: CommandContext): boolean
  *  safe. Dynamic refs to known remotes ask rather than silently falling through
  *  to the generic git-push notify tier. */
 function isPushToProtected(command: string): boolean {
-	if (!isGitPush(command)) return false;
-	const args = gitPushArgs(command);
-	const refs = refArgs(args);
-	return refs.some((ref) => isProtectedRef(ref) || (KNOWN_REMOTE_NAMES.has(args[0] ?? "") && isDynamicRef(ref)));
+	return gitPushInvocations(command).some(({ args }) => {
+		const refs = refArgs(args);
+		return refs.some((ref) => isProtectedRef(ref) || (KNOWN_REMOTE_NAMES.has(args[0] ?? "") && isDynamicRef(ref)));
+	});
 }
 
 /** A bare or remote-only push from a protected current branch. Git's default
  *  push behaviour can target the upstream branch without spelling it out, so
  *  `git push` on main is as consequential as `git push origin main`. */
 function isBarePushFromProtectedBranch(command: string, context: CommandContext): boolean {
-	if (!isProtectedBranchName(context.currentBranch)) return false;
-	if (!isGitPush(command)) return false;
-	const args = gitPushArgs(command);
-	return args.length === 0 || isRemoteOnlyPush(args);
+	if (!isProtectedBranchName(context.currentBranch) && context.assumeBarePushProtected !== true) return false;
+	return gitPushInvocations(command).some(({ args }) => args.length === 0 || isRemoteOnlyPush(args));
 }
 
 /**
@@ -211,7 +224,7 @@ const RULES: Rule[] = [
 	{ id: "redirect-device", tier: "banned", match: />\s*\/dev\/(sd|nvme|disk|hd|mmcblk)/, reason: "Redirect over a block device." },
 	{ id: "git-force-push-protected", tier: "banned", match: isForcePushProtected, reason: "Force-push to a protected branch (main/master/develop/production…)." },
 	{ id: "git-push-protected", tier: "ask", match: isPushToProtected, reason: "Pushing straight to a protected branch requires explicit human approval." },
-	{ id: "git-bare-push-protected", tier: "ask", match: isBarePushFromProtectedBranch, reason: "Bare git push from a protected branch requires explicit human approval." },
+	{ id: "git-bare-push-protected", tier: "ask", match: isBarePushFromProtectedBranch, reason: "A destination-ambiguous git push may target a protected upstream and requires explicit human approval." },
 	{ id: "gh-pr-merge", tier: "banned", match: /\bgh\s+pr\s+merge\b/, reason: "Merging a PR is not permitted for the autonomous agent — a human merges." },
 	{ id: "git-history-rewrite", tier: "banned", match: /\bgit\s+filter-branch\b|\bgit[-\s]filter-repo\b/, reason: "Rewriting git history irreversibly." },
 	{ id: "terraform-destroy", tier: "banned", match: /\bterraform\s+destroy\b/, reason: "Tearing down infrastructure." },
@@ -219,7 +232,7 @@ const RULES: Rule[] = [
 	{ id: "remote-pipe-shell", tier: "banned", match: /\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(sh|bash|zsh|fish)\b/, reason: "Piping a remote download straight into a shell." },
 
 	// --- confirm: irreversible / consequential, but a normal part of work -------
-	{ id: "git-force-push", tier: "confirm", match: /\bgit\s+push\b[^\n]*(--force(?!-with-lease)|(\s|^)-f(\s|$))/, reason: "Force-push (history overwrite on the remote branch)." },
+	{ id: "git-force-push", tier: "confirm", match: isAnyForcePush, reason: "Force-push (history overwrite on the remote branch)." },
 	{ id: "git-clean", tier: "confirm", match: /\bgit\s+clean\b[^\n]*-[a-z]*f/, reason: "Deleting untracked files." },
 	{ id: "package-publish", tier: "confirm", match: /\b(npm|pnpm|yarn|bun)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bgh\s+release\s+create\b/, reason: "Publishing a package/release (outward, hard to retract)." },
 	{ id: "deploy", tier: "confirm", match: /\bterraform\s+apply\b|\bkubectl\b[^\n]*\bdelete\b|\bflyctl\s+deploy\b|\bvercel\b[^\n]*--prod\b|\bwrangler\s+deploy\b|\b(gcloud|aws)\b[^\n]*\bdelete\b/, reason: "Deploying or deleting cloud/infra resources." },
@@ -228,7 +241,7 @@ const RULES: Rule[] = [
 
 	// --- notify: reversible but worth recording --------------------------------
 	{ id: "git-reset-hard", tier: "notify", match: /\bgit\s+reset\s+--hard\b/, reason: "Hard reset (recoverable via reflog)." },
-	{ id: "git-push", tier: "notify", match: /\bgit\s+push\b/, reason: "Pushing to a remote." },
+	{ id: "git-push", tier: "notify", match: isGitPush, reason: "Pushing to a remote." },
 ];
 
 /** Metadata for every rule, for display by the /guard command. */

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { belongsToSession, buildFleetStateNoteFor, describeRunLine, extractMeta, inFlightRunsOf, reportsPendingOf, transitionRunStatus, type RunState, validateScript } from "./index.ts";
+import { belongsToSession, buildFleetStateNoteFor, describeRunLine, extractMeta, inFlightRunsOf, reportsPendingOf, transitionRunStatus, type RunState, validateScript, workflowSourceRequiresApproval } from "./index.ts";
 import { freshAgentSessionPath, renderSessionTail } from "./runner.ts";
 
 function makeRun(over: Partial<RunState> = {}): RunState {
@@ -107,6 +107,16 @@ describe("workflows — terminal state authority", () => {
 		transitionRunStatus(run, "running");
 		transitionRunStatus(run, "timed_out");
 		expect(run.status).toBe("timed_out");
+	});
+});
+
+describe("workflows — launch approval policy", () => {
+	test("agent-authored and user-saved workflow sources run autonomously", () => {
+		expect(workflowSourceRequiresApproval("user")).toBe(false);
+	});
+
+	test("repository-provided workflow sources retain approval", () => {
+		expect(workflowSourceRequiresApproval("project")).toBe(true);
 	});
 });
 

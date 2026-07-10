@@ -32,15 +32,15 @@ After adding or changing extensions, run `/reload` inside Pi.
 
 ## Dynamic workflows
 
-The `workflows/` extension discovers reusable workflow scripts from `.pi/workflows/*.{js,ts}` and `~/.pi/agent/workflows/*.{js,ts}`. Project workflows shadow user workflows with the same name and require approval of an immutable root/dependency hash.
+The `workflows/` extension discovers reusable workflow scripts from `.pi/workflows/*.{js,ts}` and `~/.pi/agent/workflows/*.{js,ts}`. Agent-authored `workflow_run` scripts and generated workflows run autonomously after validation; the orchestration sandbox and isolated child repositories are the security boundary rather than a routine confirmation dialog. Project workflows shadow user workflows with the same name and retain one-time approval of an immutable root/dependency hash because their source is repository-provided.
 
-Workflow JavaScript never runs in the Pi process. On Linux it executes under `bubblewrap` with an empty environment, no network or project/user filesystem, a bounded V8 heap, and authenticated access only to orchestration capabilities. There is deliberately no unsafe fallback when that sandbox is unavailable. Runs fail early outside a Git repository. Every subagent runs in a unique detached Git clone outside the launch checkout, built from one pinned tracked snapshot. A child guard limits tools to read/search plus Bash; Bash sees only minimal system runtimes and the clone, clears its environment, and has no network by default. An approved call may request `network: true`; `githubAuth: true` additionally mounts an ephemeral GitHub token. Non-ignored untracked contents are excluded to avoid copying secrets and are listed in run events.
+Workflow JavaScript never runs in the Pi process. On Linux it executes under `bubblewrap` with an empty environment, no network or project/user filesystem, a bounded V8 heap, and authenticated access only to orchestration capabilities. There is deliberately no unsafe fallback when that sandbox is unavailable. Runs fail early outside a Git repository. Every subagent runs in a unique detached Git clone outside the launch checkout, built from one pinned tracked snapshot. A child guard limits tools to read/search plus Bash; Bash sees only minimal system runtimes and the clone, clears its environment, and has no network by default. A validated workflow call may request `network: true`; `githubAuth: true` additionally mounts an ephemeral GitHub token. Even then, the child safety floor blocks catastrophic commands and protected-branch pushes while allowing ordinary autonomous work. Non-ignored untracked contents are excluded to avoid copying secrets and are listed in run events.
 
 Commands:
 
 - `/workflow <name> [args...]` — run a saved workflow in the background.
 - `/<workflow-name> [args...]` — dynamic command for discovered workflows after `/reload`.
-- `/flow <goal>` — generate a workflow script with the current model, then view/edit/save/run it after approval.
+- `/flow <goal>` — interactively generate a workflow script with the current model, then view/edit/save/run it. (Agent-authored `workflow_run` `script`/`generate` calls do not prompt.)
 - `/workflows` — list discovered workflows and recent persisted runs.
 - `/workflow-save <run-id> [user|project]` — save a run's script snapshot as a reusable workflow.
 - `/workflow-rerun <run-id> [fresh|reuse]` — rerun the persisted immutable script snapshot. Individual `agent()` calls must opt into deterministic cache reuse with `cache: true`.
