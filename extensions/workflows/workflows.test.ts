@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { belongsToSession, buildFleetStateNoteFor, describeRunLine, extractMeta, inFlightRunsOf, reportsPendingOf, transitionRunStatus, type RunState, validateScript, workflowSourceRequiresApproval } from "./index.ts";
+import { belongsToSession, buildFleetStateNoteFor, describeRunLine, extractMeta, inFlightRunsOf, reportsPendingOf, transitionRunStatus, type RunState, validateScript, workflowModeGuidance, workflowOutputSpent, workflowRetryGuidance, workflowSourceRequiresApproval } from "./index.ts";
 import { freshAgentSessionPath, renderSessionTail } from "./runner.ts";
 
 function makeRun(over: Partial<RunState> = {}): RunState {
@@ -117,6 +117,46 @@ describe("workflows — launch approval policy", () => {
 
 	test("repository-provided workflow sources retain approval", () => {
 		expect(workflowSourceRequiresApproval("project")).toBe(true);
+	});
+});
+
+describe("workflows — proportional orchestration policy", () => {
+	test("workflow mode preserves inline deliberation and small fan-out", () => {
+		const guidance = workflowModeGuidance(true);
+		expect(guidance).toContain("ESCALATION path");
+		expect(guidance).toContain("at least two genuinely independent workstreams");
+		expect(guidance).toContain("Start with at most two agents");
+		expect(guidance).toContain("Never automatically relaunch a whole failed workflow");
+		expect(guidance).not.toContain("workflow by DEFAULT");
+	});
+
+	test("disabled mode recommends one direct subagent for one specialist", () => {
+		expect(workflowModeGuidance(false)).toContain("Use one direct subagent instead");
+	});
+});
+
+describe("workflows — output budget and retry semantics", () => {
+	test("budget spending counts child output only", () => {
+		const run = makeRun({
+			budgetTotal: 10_000,
+			budgetBaselineOutput: 9_999_999,
+			agents: [
+				{ id: "a", label: "a", agent: "scout", status: "succeeded", startedAt: 0, usage: { input: 50_000, output: 700, cacheRead: 100_000, cacheWrite: 0, cost: 1, turns: 2 } },
+				{ id: "b", label: "b", agent: "reviewer", status: "succeeded", startedAt: 0, usage: { input: 80_000, output: 300, cacheRead: 200_000, cacheWrite: 0, cost: 2, turns: 3 } },
+			] as any,
+		});
+		expect(workflowOutputSpent(run)).toBe(1_000);
+	});
+
+	test("deterministic failures stop whole-workflow retries", () => {
+		expect(workflowRetryGuidance("Resource limit exceeded for reviewer")).toContain("Do not relaunch the whole workflow");
+		expect(workflowRetryGuidance('Model "anthropic/foo" not found')).toContain("deterministic");
+	});
+
+	test("transient failures permit one child retry only", () => {
+		const guidance = workflowRetryGuidance("provider overloaded with HTTP 503");
+		expect(guidance).toContain("failed child, at most once");
+		expect(guidance).toContain("do not relaunch the whole workflow");
 	});
 });
 

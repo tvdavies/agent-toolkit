@@ -49,6 +49,7 @@ Commands:
 
 Workflow authoring guidelines:
 
+- Treat workflows as an escalation path, not the default for every substantive task. Deliberate and scout inline first. Use a direct subagent when only one specialist is needed; use a workflow only for at least two independent workstreams, high-risk verification, or work too large for one context.
 - Ask `workflow_run` for `mode: "guide"` when authoring. The complete contract is intentionally omitted from ordinary turns.
 - Begin with a pure `export const meta = { version: 2, name, description, phases, dependencies? }` literal. Version 2 uses fail-fast child semantics; unversioned saved scripts retain the legacy nullable-failure behavior for compatibility. The remaining plain JavaScript body may use only injected `agent`, `parallel`, `pipeline`, `phase`, `log`, `workflow`, `args`, and `budget` globals.
 - Let subagents do every repository, shell, file, and web action. The workflow body only orchestrates.
@@ -58,7 +59,10 @@ Workflow authoring guidelines:
 - Child failures propagate by default. Use `allowFailure: true` only when a nullable ordinary failure is intentional; cancellation, timeout, budget, and sandbox failures remain terminal.
 - Labels are display text and may repeat; persisted agent IDs are the filesystem/control identity. The compatibility phrase `Worktree changes preserved at …` in child output refers to the isolated clone path.
 - Nested workflow names must be listed in `meta.dependencies`; dynamic script paths are forbidden and nesting is limited to one level.
-- Start fan-out small, prefer `pipeline` over unnecessary barriers, and expand only while novel yield justifies `budget.remaining()`.
+- Start with at most two agents; normal runs should stay within four. More than six agents or another whole-workflow attempt requires an explicit user request. Prefer parent synthesis and reserve challenger panels for genuinely high-risk work. The runtime hard-stops at 16 agents per run by default (`PI_WORKFLOW_MAX_AGENTS_PER_RUN`, capped at 64) to contain runaway scripts.
+- `budget` is an output-token ceiling for workflow children only. Input/cache traffic and parent-loop output do not consume it, and it is not forwarded to pi-subagents' broader `maxTokens` resource limit.
+- Never automatically relaunch a whole failed workflow. Retry only a failed child, at most once, for a classified transient failure; deterministic provider/model, repository, input, validation, budget, and resource failures must stop or fall back to direct execution.
+- Persisted agent state records requested model, actual model, thinking level, and model-attempt outcomes for routing diagnostics.
 - Completion execution and wake delivery are separate persisted states. `sent_unacknowledged` is honest about Pi's current lack of a durable enqueue receipt.
 
 ## Scheduling: scheduler vs cron

@@ -51,7 +51,6 @@ export interface ChildRunRequest {
 	thinking?: string;
 	tools?: string[];
 	timeoutMs?: number;
-	maxTokens?: number;
 	/** Explicitly requested shell-network capability; secure default is false. */
 	network?: boolean;
 	/** Mount an ephemeral GitHub token into Bash; implies network and must be source-approved. */
@@ -74,6 +73,9 @@ export interface ChildRunResult {
 	timedOut: boolean;
 	structuredOutput?: unknown;
 	sessionFile: string;
+	model?: string;
+	attemptedModels?: string[];
+	modelAttempts?: Array<{ model: string; success: boolean; exitCode?: number; error?: string }>;
 }
 
 const CHILD_GUARD_PATH = fileURLToPath(new URL("./child-guard.ts", import.meta.url));
@@ -133,7 +135,6 @@ export async function runWorkflowChild(req: ChildRunRequest): Promise<ChildRunRe
 			cwd: req.cwd,
 			signal: req.signal,
 			timeoutMs: req.timeoutMs,
-			maxTokens: req.maxTokens,
 			sessionFile: req.sessionFile,
 			modelOverride,
 			structuredOutput: structuredRuntime,
@@ -150,6 +151,9 @@ export async function runWorkflowChild(req: ChildRunRequest): Promise<ChildRunRe
 			timedOut: Boolean(result.timedOut),
 			structuredOutput: result.structuredOutput,
 			sessionFile: result.sessionFile ?? req.sessionFile,
+			model: result.model,
+			attemptedModels: result.attemptedModels,
+			modelAttempts: result.modelAttempts?.map((attempt) => ({ model: attempt.model, success: attempt.success, exitCode: attempt.exitCode ?? undefined, error: attempt.error })),
 		};
 	} finally {
 		try { cleanupStructuredOutputRuntime(structuredRuntime); }

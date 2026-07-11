@@ -25,10 +25,9 @@
  * Tool allowlists remain authoritative. The normal tool description is compact; mode:'guide'
  * returns the complete authoring contract only when it is needed.
  *
- * Workflow mode (/workflow-mode on, or PI_WORKFLOW_MODE) is the Pi analogue of ultracode:
- * it injects a standing directive (buildWorkflowSystemPromptAddendum) that overrides the
- * tool's default-to-yourself gate so substantive tasks are orchestrated by default. It is
- * prioritisation only and never affects the wake transport.
+ * Workflow mode (/workflow-mode on, or PI_WORKFLOW_MODE) makes orchestration available as an
+ * escalation path, not a default tax on every substantive task. Its standing directive requires
+ * inline deliberation first and keeps fan-out proportional to independently useful work.
  */
 
 import { execFile as execFileCb } from "node:child_process";
@@ -120,7 +119,6 @@ interface AgentOptions {
 	useCache?: boolean;
 	allowFailure?: boolean;
 	invocationId: string;
-	maxTokens?: number;
 	patches?: string[];
 	network?: boolean;
 	githubAuth?: boolean;
@@ -146,6 +144,9 @@ interface AgentResult {
 	outputHash?: string;
 	structuredOutputPath?: string;
 	structuredOutputHash?: string;
+	requestedModel?: string;
+	actualModel?: string;
+	modelAttempts?: Array<{ model: string; success: boolean; exitCode?: number; error?: string }>;
 }
 
 interface WorktreeResult {
@@ -186,6 +187,10 @@ interface AgentRecord {
 	structuredOutputPath?: string;
 	structuredOutputHash?: string;
 	allowedFailure?: boolean;
+	requestedModel?: string;
+	actualModel?: string;
+	thinking?: ThinkingLevel;
+	modelAttempts?: Array<{ model: string; success: boolean; exitCode?: number; error?: string }>;
 }
 
 interface PhaseRecord {
@@ -222,11 +227,13 @@ export interface RunState {
 	deliveryError?: string;
 	repositorySnapshotHash?: string;
 	repositorySnapshot?: RepositorySnapshot;
-	// Token budget (output tokens) for the whole run; null/undefined means unbounded.
+	// Token budget for subagent OUTPUT across the whole run; null/undefined means unbounded.
+	// It is intentionally not forwarded as pi-subagents' maxTokens, whose resource-limit
+	// semantics include broader token traffic and previously killed healthy long-context agents.
 	budgetTotal?: number | null;
-	// mainLoopOutputTokens snapshot when the run started, so spent() counts only main-loop
-	// output produced during the run.
+	/** Legacy persisted field; ignored by current output-only budget accounting. */
 	budgetBaselineOutput?: number;
+	/** Conservative output-capacity reservations for concurrently queued/running children. */
 	budgetReserved?: number;
 }
 
@@ -244,10 +251,17 @@ export function transitionRunStatus(run: RunState, next: RunStatus): void {
 
 const execFile = promisify(execFileCb);
 
+function parseMaxAgentsPerRun(): number {
+	const configured = Number(process.env.PI_WORKFLOW_MAX_AGENTS_PER_RUN);
+	if (!Number.isFinite(configured) || configured <= 0) return 16;
+	return Math.max(1, Math.min(64, Math.floor(configured)));
+}
+
 const MAX_CONCURRENT_AGENTS = Math.max(1, Math.min(16, os.cpus().length - 2));
-const MAX_AGENTS_PER_RUN = 1000;
+// A hard runaway ceiling, not a target. Normal guidance remains four agents or fewer.
+const MAX_AGENTS_PER_RUN = parseMaxAgentsPerRun();
 const MAX_AGENT_OUTPUT_BYTES = 50 * 1024;
-const DEFAULT_AGENT_TOKEN_RESERVATION = 16_384;
+const DEFAULT_AGENT_OUTPUT_RESERVATION = 16_384;
 const globalAgentScheduler = new AbortableScheduler(MAX_CONCURRENT_AGENTS);
 
 class WorkflowCancelledError extends Error {
@@ -258,6 +272,17 @@ class WorkflowTimedOutError extends Error {
 }
 class WorkflowBudgetError extends Error {
 	constructor(message: string) { super(message); this.name = "WorkflowBudgetError"; }
+}
+
+export function workflowRetryGuidance(error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error ?? "");
+	if (/resource limit|token budget|exhausted its token budget|no models? match|model .*not found|failed to load model|unknown agent|requires a git repository|repository changed|missing|not approved|invalid|forbidden|schema/i.test(message)) {
+		return "Retry policy: deterministic configuration/input/resource failure. Do not relaunch the whole workflow. Fix the cause or fall back to direct execution.";
+	}
+	if (/overload|rate.?limit|\b429\b|\b502\b|\b503\b|\b504\b|ECONNRESET|ETIMEDOUT|temporar/i.test(message)) {
+		return "Retry policy: potentially transient failure. Retry only the failed child, at most once; do not relaunch the whole workflow.";
+	}
+	return "Retry policy: unclassified failure. Inspect it before acting; do not automatically relaunch the whole workflow.";
 }
 
 function abortError(signal: AbortSignal): Error {
@@ -285,11 +310,6 @@ const activeRuns = new Map<string, RunState>();
 const abortControllers = new Map<string, AbortController>();
 let lastCtx: any;
 let lastPi: ExtensionAPI | undefined;
-
-// Cumulative output tokens produced by the MAIN agent loop this session, accumulated from
-// message_end events. Combined with each run's subagent output it gives budget.spent() a
-// shared pool (main loop + workflow agents), matching Claude Code's turn-level budget.
-let mainLoopOutputTokens = 0;
 
 // Prefixed to the report when a finished background workflow is delivered back into the
 // session. The delivery WAKES the agent (triggerTurn), so the framing tells it the message
@@ -467,10 +487,24 @@ async function clearWorkflowMode(): Promise<void> {
 	await fs.promises.rm(WORKFLOW_MODE_FILE, { force: true });
 }
 
-// Injected into the main agent's system prompt before each turn. When workflow mode is ON this
-// carries a STANDING orchestration directive that explicitly overrides the workflow_run tool's
-// conservative default-to-yourself gate (the Pi analogue of Claude Code's ultracode mode); when
-// OFF it states the conservative default. It also lists runnable saved workflows and subagents.
+export function workflowModeGuidance(enabled: boolean): string {
+	if (!enabled) {
+		return "Default to handling tasks yourself. Reach for workflow_run only when serial work cannot provide the required independent breadth, risk reduction, or scale. Use one direct subagent instead when only one specialist is needed. (Enable orchestration guidance with /workflow-mode on.)";
+	}
+	return [
+		"Workflow mode is ON, but workflows are an ESCALATION path rather than the default for every substantive task.",
+		"Think and scout inline first, then explicitly decide whether orchestration earns its coordination cost. Do not launch a workflow merely because a task is non-trivial or extra confidence would be nice.",
+		"Use workflow_run only when there are at least two genuinely independent workstreams, the result is high-risk enough to justify independent verification, or the work cannot fit one context. Use one direct subagent for a single specialist or focused second opinion.",
+		"Start with at most two agents and one workflow. A normal task should use no more than four total workflow agents. Expand only when the first pass identifies distinct unresolved gaps and novel yield justifies the added wall time; more than six agents or another whole-workflow attempt requires an explicit user request.",
+		"Keep adversarial verification for security, migrations, infrastructure, destructive changes, public API compatibility, or similarly costly decisions—not routine analysis or implementation.",
+		"Never automatically relaunch a whole failed workflow. Retry only a failed child, at most once, for a classified transient failure. For provider/model unavailability, invalid configuration, missing inputs, repository eligibility, or budget/resource failures, fix the cause or fall back to direct execution.",
+		"Prefer parent synthesis. Add a synthesis agent only when the reports genuinely require independent arbitration or exceed the parent's available context.",
+	].join(" ");
+}
+
+// Injected into the main agent's system prompt before each turn. Workflow mode changes the
+// decision rubric, but never removes the option to conclude that direct execution is cheaper
+// and sufficient. It also lists runnable saved workflows and subagents.
 function buildWorkflowSystemPromptAddendum(cwd: string): string | null {
 	const mode = readWorkflowMode();
 	const workflows = discoverWorkflows(cwd);
@@ -485,15 +519,7 @@ function buildWorkflowSystemPromptAddendum(cwd: string): string | null {
 		);
 	}
 
-	if (mode.enabled) {
-		sections.push(
-			"Workflow mode is ON. This is a STANDING directive that OVERRIDES the workflow_run tool's default-to-yourself decision gate. For every substantive task — anything needing breadth (a surface too large to cover serially), confidence (independent perspectives or adversarial verification before a risky output), or scale (more than one context can hold) — author and run a workflow by DEFAULT instead of doing the work serially yourself. Optimise for the most thorough correct result within an explicit budget. Scout the work-list inline first, begin with a small heterogeneous finder set, and expand only when novel yield justifies it; for multi-phase work run several workflows in sequence and act on each report as it arrives (the tool wakes you when each finishes). Handle only trivial, mechanical, or conversational turns inline. Prefer mode:'script' so you control the orchestration; use pipeline() by default and add an adversarial verification pass for anything risky.",
-		);
-	} else {
-		sections.push(
-			"Default to handling tasks yourself. Reach for workflow_run only when a task genuinely needs breadth, confidence, or scale that serial work cannot give. (Enable standing orchestration with /workflow-mode on.)",
-		);
-	}
+	sections.push(workflowModeGuidance(mode.enabled));
 
 	const workflowLines = workflows.length
 		? workflows.map((w) => `- ${w.name} (${w.scope})`).join("\n")
@@ -641,6 +667,8 @@ async function runSingleAgent(
 	const discovery = discoverAgents(options.cwd ?? run.cwd, agentScope);
 	const agent = discovery.agents.find((candidate) => candidate.name === agentName);
 	const effectiveModel = options.model ?? agent?.model ?? parentModel;
+	record.requestedModel = options.model ?? agent?.model;
+	record.thinking = options.thinking ?? (agent?.thinking as ThinkingLevel | undefined);
 	const cacheKey = agentCacheKey(run, agentName, options, agent, effectiveModel);
 	const cachedCandidate = options.useCache ? run.agentCache?.[cacheKey] : undefined;
 	let cachedOutput: string | undefined;
@@ -675,7 +703,7 @@ async function runSingleAgent(
 
 	record.status = "running";
 	record.startedAt = Date.now();
-	await persistRun(run, { type: "agent_start", agentId: record.id, label: record.label, agent: agentName, task: options.task, cacheKey });
+	await persistRun(run, { type: "agent_start", agentId: record.id, label: record.label, agent: agentName, task: options.task, cacheKey, requestedModel: record.requestedModel, effectiveModel, thinking: record.thinking });
 	updateUi(run);
 	if (!agent) {
 		const available = discovery.agents.map((candidate) => candidate.name).join(", ") || "none";
@@ -708,7 +736,6 @@ async function runSingleAgent(
 			thinking: options.thinking,
 			tools: options.tools,
 			timeoutMs: options.timeoutMs,
-			maxTokens: options.maxTokens,
 			network: options.network,
 			githubAuth: options.githubAuth,
 			schema: options.schema,
@@ -726,6 +753,8 @@ async function runSingleAgent(
 		record.endedAt = Date.now();
 		record.outputBytes = Buffer.byteLength(output, "utf8");
 		record.usage = child.usage;
+		record.actualModel = child.model;
+		record.modelAttempts = child.modelAttempts;
 		record.error = record.status === "succeeded" ? undefined : child.error || `${record.status} (exit ${child.exitCode})`;
 		const artifacts = await persistAgentArtifacts(run, record, output || record.error || "", child.structuredOutput);
 		const worktreeNote = worktreeResult.preserved ? `\n\n[Worktree changes preserved at ${worktreeResult.path}; diff: ${worktreeResult.diffPath}]` : "";
@@ -741,13 +770,16 @@ async function runSingleAgent(
 			error: record.error,
 			worktree: worktreeResult,
 			sessionFile: child.sessionFile,
+			requestedModel: record.requestedModel,
+			actualModel: record.actualModel,
+			modelAttempts: record.modelAttempts,
 			...artifacts,
 		};
 		if (result.status === "succeeded" && options.useCache) {
 			run.agentCache ??= {};
 			run.agentCache[cacheKey] = { ...result, text: truncateBytes(output, MAX_AGENT_OUTPUT_BYTES), messages: [], sessionFile: undefined, worktree: undefined };
 		}
-		await persistRun(run, { type: "agent_end", agentId: record.id, label: record.label, status: record.status, usage: child.usage, error: record.error, cacheKey: options.useCache ? cacheKey : undefined, outputPath: artifacts.outputPath, structuredOutputPath: artifacts.structuredOutputPath });
+		await persistRun(run, { type: "agent_end", agentId: record.id, label: record.label, status: record.status, usage: child.usage, error: record.error, cacheKey: options.useCache ? cacheKey : undefined, outputPath: artifacts.outputPath, structuredOutputPath: artifacts.structuredOutputPath, requestedModel: record.requestedModel, actualModel: record.actualModel, modelAttempts: record.modelAttempts, thinking: record.thinking });
 		updateUi(run);
 		return result;
 	} catch (error) {
@@ -813,13 +845,15 @@ function aggregateUsage(run: RunState): UsageStats {
 	return total;
 }
 
-// budget.spent() = output tokens spent by this run's subagents PLUS main-loop output produced
-// since the run started (a shared pool, like Claude Code). remaining() is Infinity when no
-// budget was set, otherwise max(0, total - spent).
+// budget.spent() is deliberately OUTPUT-only and scoped to this workflow's children.
+// pi-subagents' maxTokens is a broader cumulative resource limit, so forwarding this budget
+// there caused healthy long-context children to fail before producing their bounded output.
+export function workflowOutputSpent(run: RunState): number {
+	return aggregateUsage(run).output;
+}
+
 function workflowSpent(run: RunState): number {
-	const baseline = run.budgetBaselineOutput ?? mainLoopOutputTokens;
-	const mainLoopDelta = Math.max(0, mainLoopOutputTokens - baseline);
-	return aggregateUsage(run).output + mainLoopDelta;
+	return workflowOutputSpent(run);
 }
 
 function workflowRemaining(run: RunState): number {
@@ -1196,7 +1230,7 @@ async function executePreparedWorkflow(
 			const invocationId = `agent-${sequence.toString().padStart(4, "0")}`;
 			const label = typeof opts.label === "string" && opts.label.trim() ? opts.label.trim() : invocationId;
 			const allowFailure = opts.allowFailure === true || (opts.allowFailure === undefined && prepared.meta.version !== 2);
-			const reservation = run.budgetTotal == null ? 0 : Math.max(1, Math.min(DEFAULT_AGENT_TOKEN_RESERVATION, remaining));
+			const reservation = run.budgetTotal == null ? 0 : Math.max(1, Math.min(DEFAULT_AGENT_OUTPUT_RESERVATION, remaining));
 			run.budgetReserved = (run.budgetReserved ?? 0) + reservation;
 			const record: AgentRecord = {
 				id: invocationId,
@@ -1225,7 +1259,6 @@ async function executePreparedWorkflow(
 					useCache: opts.cache === true,
 					allowFailure,
 					invocationId,
-					maxTokens: reservation || undefined,
 					patches: opts.patches,
 					network: opts.network === true || opts.githubAuth === true,
 					githubAuth: opts.githubAuth === true,
@@ -1342,7 +1375,6 @@ async function startRun(pi: ExtensionAPI, prepared: PreparedWorkflow, args: stri
 		ownerSession: ctx.sessionManager?.getSessionFile?.() ?? undefined,
 		deliveryStatus: "pending",
 		budgetTotal,
-		budgetBaselineOutput: mainLoopOutputTokens,
 		budgetReserved: 0,
 		repositorySnapshotHash,
 		repositorySnapshot,
@@ -1391,7 +1423,7 @@ async function startRun(pi: ExtensionAPI, prepared: PreparedWorkflow, args: stri
 			run.endedAt = Date.now();
 			await persistRun(run, { type: "run_end", status: run.status, error: run.error });
 			await drainPersistence(run);
-			await safeSendWorkflowMessage(run, `# Workflow ${run.status}: ${run.name}\n\n${run.error}\n\nRun: ${run.id}\nDetails: ${run.runDir}`);
+			await safeSendWorkflowMessage(run, `# Workflow ${run.status}: ${run.name}\n\n${run.error}\n\n${workflowRetryGuidance(run.error)}\n\nRun: ${run.id}\nDetails: ${run.runDir}`);
 		} finally {
 			clearTimeout(runTimeout);
 			abortControllers.delete(id);
@@ -1647,6 +1679,8 @@ function workflowRunDetails(run: RunState, agentReference?: string, tailLines?: 
 			`Agent: ${agent.label} [${agent.id}] (${agent.agent})`,
 			`Status: ${agent.status}${agent.cached ? " (cached)" : ""}${agent.allowedFailure ? " (failure allowed)" : ""}`,
 			`Duration: ${formatDuration((agent.endedAt ?? Date.now()) - agent.startedAt)}`,
+			`Model: requested ${agent.requestedModel ?? "inherit"}; actual ${agent.actualModel ?? "unknown"}; thinking ${agent.thinking ?? "inherit"}`,
+			...(agent.modelAttempts?.length ? [`Model attempts: ${agent.modelAttempts.map((attempt) => `${attempt.model}:${attempt.success ? "ok" : "failed"}`).join(", ")}`] : []),
 			`Usage: ${agent.usage?.turns ?? 0} turns, $${(agent.usage?.cost ?? 0).toFixed(4)}`,
 			`Transcript: ${transcriptPath}`,
 			...(agent.outputPath ? [`Output artifact: ${agent.outputPath}`] : []),
@@ -1662,7 +1696,7 @@ function workflowRunDetails(run: RunState, agentReference?: string, tailLines?: 
 		].join("\n");
 	}
 	const phaseLines = run.phases.length ? run.phases.map((p) => `- ${p.name}: ${p.status} (${formatDuration((p.endedAt ?? Date.now()) - p.startedAt)})`).join("\n") : "(none)";
-	const agentLines = run.agents.length ? run.agents.map((a) => `- ${a.id} ${a.label} (${a.agent})${a.phase ? ` [${a.phase}]` : ""}: ${a.status}${a.cached ? " cached" : ""}${a.allowedFailure ? " allowed-failure" : ""} ${a.usage ? `$${a.usage.cost.toFixed(4)}` : ""}`).join("\n") : "(none)";
+	const agentLines = run.agents.length ? run.agents.map((a) => `- ${a.id} ${a.label} (${a.agent})${a.phase ? ` [${a.phase}]` : ""}: ${a.status}${a.cached ? " cached" : ""}${a.allowedFailure ? " allowed-failure" : ""} model=${a.actualModel ?? a.requestedModel ?? "inherit/unknown"} ${a.usage ? `$${a.usage.cost.toFixed(4)}` : ""}`).join("\n") : "(none)";
 	return [
 		`Workflow: ${run.name}`,
 		`Run: ${run.id}`,
@@ -1702,20 +1736,24 @@ Injected globals (do NOT import anything — these are already in scope):
 - phase(title) -> mark the start of a named phase (use titles from meta.phases).
 - log(message) -> emit a progress line.
 - args -> the parsed workflow arguments (a JSON value, or undefined).
-- budget -> { total, spent(), remaining() }. total is the caller's output-token target (null when none was set). spent() = output tokens spent so far across this run's subagents AND the main loop. remaining() = max(0, total - spent()) or Infinity. Once exhausted, further agent() calls THROW — so gate loops on it: while (budget.total && budget.remaining() > 50000) { ... }.
+- budget -> { total, spent(), remaining() }. total is the caller's subagent-output-token target (null when none was set). spent() counts only completed child output; parent-loop and child input/cache traffic are excluded. remaining() also subtracts conservative reservations for queued/running children. Once exhausted, further agent() calls THROW. Treat the budget as a ceiling, never as a target to consume.
 - workflow(name, args?) -> run a saved workflow declared in meta.dependencies inline as a sub-step and return its result. Dynamic script paths are forbidden; nesting is one level only.
 
 agentType selects the subagent (these are real Pi subagents): default "delegate". Specialists include scout, researcher, planner, reviewer, worker, oracle, and context-builder; Claude-style aliases map to them. Every child receives a unique detached clone containing the pinned launch checkout's tracked state. Non-ignored untracked files are deliberately omitted and listed in run events to avoid copying secrets.
 
-Orchestration patterns — pick what the task needs:
-- Pipeline by default: pipeline(items, (prev, item) => agent("find ... " + item), (found) => agent("Verify this finding: " + found, { agentType: "reviewer" })). Each item flows through its stages independently; verification of item A overlaps discovery of item B.
-- Barrier only when a stage needs the whole set: collect with await parallel([...]) before the next stage ONLY to dedup/merge across items, early-exit on a zero count, or compare items. Otherwise keep stages inside pipeline.
-- Adversarial verify: for audits, research, plans, or risky outputs, add a verification phase that spawns independent skeptics (or distinct lenses such as correctness, security, reproduction) prompted to REFUTE each finding; keep only findings that survive a majority, defaulting to rejection when uncertain.
-- Judge panel: for design or decision tasks, generate N independent attempts from different angles, score with parallel judges, synthesize from the winner.
-- Adaptive fanout: start with two heterogeneous finders, stream candidates into verification, and expand only while novel yield justifies the remaining budget. Never silently cap output; log what was omitted.
-- Loop until budget: gate every expansion on budget.remaining(); queued agents reserve output capacity so remaining() is conservative.
+Eligibility and proportionality:
+- Do not author a workflow merely because a task is substantive. Use one direct subagent outside workflow_run when only one specialist or focused second opinion is needed.
+- A workflow should begin with at most two independently useful agents. A normal run should use no more than four agents total. Expand only after the first results expose distinct unresolved gaps; more than six agents requires an explicit user request.
+- Launch one workflow, not a sequence of replacement workflows. A deterministic provider/model, repository, input, validation, budget, or resource failure must stop and fall back rather than trigger a whole-workflow retry.
+- Prefer parent synthesis. Add a synthesis child only when independent arbitration is necessary or the reports exceed the parent's usable context. Pass concise references or artifacts instead of concatenating large reports into another prompt.
 
-Scale to the goal and evidence, not adjectives alone. Prefer the smallest panel that reaches stable, independently verified coverage.
+Orchestration patterns — pick the smallest one that qualifies:
+- Pipeline by default when each item genuinely needs multiple independent stages. Each item flows without a global barrier.
+- Barrier only when the next stage must see the complete set to deduplicate, compare, or early-exit.
+- Adversarial verification only for security, migrations, infrastructure, destructive changes, public API compatibility, or similarly costly decisions. Routine analysis and implementation do not need a challenger panel.
+- Adaptive fanout starts with two finders and expands only while novel yield justifies wall time and budget. The budget is a safety ceiling, not permission to keep looping.
+
+Scale to the goal and evidence, not adjectives. Stop as soon as the smallest panel has answered the question reliably.
 
 Hard constraints (the script is validated and REJECTED if violated):
 - import nothing; only 'export const meta' may be exported.
@@ -1724,7 +1762,7 @@ Hard constraints (the script is validated and REJECTED if violated):
 
 // Keep the always-present tool contract compact. The model explicitly requests mode:'guide'
 // before authoring, while generate mode receives the full guide in its dedicated model call.
-const WORKFLOW_RUN_DESCRIPTION = `Launch a persisted background multi-agent workflow for breadth, independent verification, or scale. Modes: saved, script, generate, and guide. Use mode:'guide' before writing a script. Script and generated workflows run autonomously after validation in a killable, networkless, filesystem-isolated subprocess. Every child runs in a path-confined isolated Git clone. Project-provided saved workflows retain one-time immutable-snapshot approval. The tool returns immediately; workflow_status shows queued/running agents and transcript tails, and completion is queued back to the owner session.`;
+const WORKFLOW_RUN_DESCRIPTION = `Launch a persisted background multi-agent workflow only after inline deliberation shows at least two independent workstreams, high-risk verification needs, or work too large for one context. Prefer direct execution or one direct subagent otherwise. Start with at most two agents; normal runs should stay within four, and never relaunch a whole failed workflow automatically. Modes: saved, script, generate, and guide. Use mode:'guide' before writing a script. Runs execute autonomously after validation in a killable, networkless, filesystem-isolated subprocess. Every child runs in a path-confined isolated Git clone. Project-provided saved workflows retain one-time immutable-snapshot approval. The tool returns immediately; workflow_status shows queued/running agents and transcript tails, and completion is queued back to the owner session.`;
 
 const FLOW_GENERATOR_SYSTEM_PROMPT = `You generate workflow scripts for a deterministic multi-agent orchestrator that fans work out across many bounded-concurrency subagents. Return exactly ONE JavaScript module, no prose, no code fence.
 
@@ -1828,7 +1866,6 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		lastCtx = ctx;
-		mainLoopOutputTokens = 0;
 		// Respect the host/user's active-tool policy. In particular, do not override an explicit
 		// --tools allowlist by force-enabling workflow tools.
 		const owner = currentSessionFile();
@@ -1852,19 +1889,6 @@ export default function (pi: ExtensionAPI) {
 			await safeSendWorkflowMessage(run, `# Workflow interrupted: ${run.name}\n\n${run.error}\n\nRun: ${run.id}\nDetails: ${run.runDir}`);
 		}
 		await replayPendingDeliveries(pi, ctx.cwd);
-	});
-
-	// Accumulate the MAIN agent loop's output tokens so a workflow's budget.spent() reflects a
-	// shared pool (main loop + its subagents), matching Claude Code's turn-level budget.
-	pi.on("message_end", async (event) => {
-		try {
-			const msg = (event as { message?: { role?: string; usage?: { output?: number } } }).message;
-			if (msg?.role === "assistant" && typeof msg.usage?.output === "number") {
-				mainLoopOutputTokens += msg.usage.output;
-			}
-		} catch {
-			// Budget accounting is best-effort; never disrupt the turn.
-		}
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
@@ -2202,7 +2226,7 @@ return "## Smoke test results\\n\\n" + results.map((r, i) => "### agent " + (i +
 			"Launch a safe background multi-agent workflow, inspect status, or retrieve the authoring guide with mode:'guide'.",
 		promptGuidelines: [
 			"Use workflow_run only for breadth, confidence, or scale that changes the outcome; otherwise work inline.",
-			"Before mode:'script', call workflow_run with mode:'guide'. Prefer pipeline over barriers, start with a small heterogeneous finder set, and expand only while novel yield justifies the budget.",
+			"Before mode:'script', call workflow_run with mode:'guide'. First decide whether at least two independent workstreams or high-risk verification justify a workflow; otherwise work directly or use one direct subagent. Start with at most two agents and do not relaunch a whole failed workflow automatically.",
 			"Workflow child failures propagate unless allowFailure:true is explicit; native schemas are validated, cache is opt-in, and every child uses a path-confined isolated Git clone.",
 			"After launch, do not finalise while workflow_status reports active runs; completion is queued back to the owner session.",
 		],
