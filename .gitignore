@@ -22,3 +22,6 @@ bun.lock
 # Pi/runtime artefacts
 .pi-runs/
 .pi/
+
+# pi-subagents runtime artifacts
+.pi-subagents/
