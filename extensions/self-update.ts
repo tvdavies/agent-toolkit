@@ -8,9 +8,9 @@
  * `bun test`, commits, and restarts onto the new code; a launcher preflight rolls the
  * checkout back if the new code will not boot. See daemon/self-update.ts + lib/update.
  *
- * This is a PACKAGE extension (loaded via package.json "pi".extensions), so it is
- * available to the resident — the natural editor of the live tree. Workers run in
- * isolated worktrees and edit a copy, so they should not use it.
+ * This is a PACKAGE extension (loaded via package.json "pi".extensions), but it
+ * registers the tool only when the daemon injects its self-update capability token.
+ * Normal interactive Pi sessions and isolated workers therefore never see it.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -30,7 +30,20 @@ const schema = Type.Object({
 });
 type ApplyUpdateInput = Static<typeof schema>;
 
-export default function selfUpdateExtension(pi: ExtensionAPI): void {
+export interface SelfUpdateEnvironment {
+	[key: string]: string | undefined;
+	AGENT_TOOLKIT_SELF_UPDATE_TOKEN?: string;
+	AGENT_TOOLKIT_WORKER_RUN_ID?: string;
+}
+
+export function hasSelfUpdateCapability(env: SelfUpdateEnvironment): boolean {
+	return typeof env.AGENT_TOOLKIT_SELF_UPDATE_TOKEN === "string" && env.AGENT_TOOLKIT_SELF_UPDATE_TOKEN.length > 0;
+}
+
+export default function selfUpdateExtension(pi: ExtensionAPI, env: SelfUpdateEnvironment = process.env): void {
+	if (!hasSelfUpdateCapability(env)) return;
+	const token = env.AGENT_TOOLKIT_SELF_UPDATE_TOKEN;
+
 	pi.registerTool({
 		name: "apply_update",
 		label: "apply update (restart onto my code change)",
@@ -45,10 +58,10 @@ export default function selfUpdateExtension(pi: ExtensionAPI): void {
 			writeUpdateRequest(stateDir(), {
 				reason,
 				resumePrompt: params.resumePrompt?.trim() || undefined,
-				runId: process.env.AGENT_TOOLKIT_WORKER_RUN_ID,
+				runId: env.AGENT_TOOLKIT_WORKER_RUN_ID,
 				// Proof the request came from the resident: the daemon injects this token
 				// into the resident's env only, and refuses any request without it.
-				token: process.env.AGENT_TOOLKIT_SELF_UPDATE_TOKEN,
+				token,
 				ts: new Date().toISOString(),
 			});
 			return result(
