@@ -25,9 +25,12 @@
  * Tool allowlists remain authoritative. The normal tool description is compact; mode:'guide'
  * returns the complete authoring contract only when it is needed.
  *
- * Workflow mode (/workflow-mode on, or PI_WORKFLOW_MODE) makes orchestration available as an
- * escalation path, not a default tax on every substantive task. Its standing directive requires
- * inline deliberation first and keeps fan-out proportional to independently useful work.
+ * Workflow mode (/workflow-mode on, or PI_WORKFLOW_MODE) is the Pi analogue of Claude Code's
+ * ultracode: an explicit user opt-in that flips the default from "work inline" to "orchestrate
+ * substantive tasks". The gate lives at the mode toggle, not inside the mode — once ON, the
+ * directive is unhedged. What keeps runs fast is wall-clock discipline (bounded per-child
+ * deliverables and timeouts, pipeline over barriers, wide-and-shallow fan-out), not fan-out
+ * quotas.
  */
 
 import { execFile as execFileCb } from "node:child_process";
@@ -102,6 +105,8 @@ interface AgentRunOptions {
 	githubAuth?: boolean;
 	/** Return stable agent/workspace/diff metadata together with the ordinary value. */
 	returnMetadata?: boolean;
+	/** Per-child wall-clock limit in milliseconds. Defaults to DEFAULT_AGENT_TIMEOUT_MS. */
+	timeoutMs?: number;
 }
 
 // Internal options passed to runSingleAgent (the subagent runner).
@@ -253,13 +258,23 @@ const execFile = promisify(execFileCb);
 
 function parseMaxAgentsPerRun(): number {
 	const configured = Number(process.env.PI_WORKFLOW_MAX_AGENTS_PER_RUN);
-	if (!Number.isFinite(configured) || configured <= 0) return 16;
-	return Math.max(1, Math.min(64, Math.floor(configured)));
+	if (!Number.isFinite(configured) || configured <= 0) return 200;
+	return Math.max(1, Math.min(1000, Math.floor(configured)));
+}
+
+// Wall-clock ceiling for one child. A stuck or open-ended child must fail fast instead of
+// holding the run — and the owner session's finalisation interlock — until the run deadline.
+function parseAgentTimeoutMs(): number {
+	const minutes = Number(process.env.PI_WORKFLOW_AGENT_TIMEOUT_MINUTES);
+	if (!Number.isFinite(minutes) || minutes <= 0) return 20 * 60 * 1000;
+	return Math.max(1, Math.min(minutes, 24 * 60)) * 60 * 1000;
 }
 
 const MAX_CONCURRENT_AGENTS = Math.max(1, Math.min(16, os.cpus().length - 2));
-// A hard runaway ceiling, not a target. Normal guidance remains four agents or fewer.
+// A runaway-loop backstop set far above any real workflow, never a target. Fan-out sizing is
+// the guidance's job (scale to the ask); wall-clock discipline is the per-child timeout's job.
 const MAX_AGENTS_PER_RUN = parseMaxAgentsPerRun();
+const DEFAULT_AGENT_TIMEOUT_MS = parseAgentTimeoutMs();
 const MAX_AGENT_OUTPUT_BYTES = 50 * 1024;
 const DEFAULT_AGENT_OUTPUT_RESERVATION = 16_384;
 const globalAgentScheduler = new AbortableScheduler(MAX_CONCURRENT_AGENTS);
@@ -292,11 +307,13 @@ function abortError(signal: AbortSignal): Error {
 function throwIfAborted(signal: AbortSignal): void {
 	if (signal.aborted) throw abortError(signal);
 }
+// Default trimmed from 6h: a run that outlives two hours has almost always stalled rather
+// than progressed, and it pins the owner session's finalisation interlock the whole time.
 function parseMaxRunDurationMs(): number {
 	const raw = process.env.PI_WORKFLOW_MAX_RUN_HOURS?.trim();
-	if (!raw) return 6 * 60 * 60 * 1000;
+	if (!raw) return 2 * 60 * 60 * 1000;
 	const hours = Number(raw);
-	if (!Number.isFinite(hours) || hours <= 0) return 6 * 60 * 60 * 1000;
+	if (!Number.isFinite(hours) || hours <= 0) return 2 * 60 * 60 * 1000;
 	return Math.min(hours, 24) * 60 * 60 * 1000;
 }
 
@@ -489,22 +506,21 @@ async function clearWorkflowMode(): Promise<void> {
 
 export function workflowModeGuidance(enabled: boolean): string {
 	if (!enabled) {
-		return "Default to handling tasks yourself. Reach for workflow_run only when serial work cannot provide the required independent breadth, risk reduction, or scale. Use one direct subagent instead when only one specialist is needed. (Enable orchestration guidance with /workflow-mode on.)";
+		return "Default to handling tasks yourself. Reach for workflow_run only when serial work cannot provide the required independent breadth, risk reduction, or scale. Use one direct subagent instead when only one specialist is needed. (Enable standing orchestration with /workflow-mode on.)";
 	}
 	return [
-		"Workflow mode is ON, but workflows are an ESCALATION path rather than the default for every substantive task.",
-		"Think and scout inline first, then explicitly decide whether orchestration earns its coordination cost. Do not launch a workflow merely because a task is non-trivial or extra confidence would be nice.",
-		"Use workflow_run only when there are at least two genuinely independent workstreams, the result is high-risk enough to justify independent verification, or the work cannot fit one context. Use one direct subagent for a single specialist or focused second opinion.",
-		"Start with at most two agents and one workflow. A normal task should use no more than four total workflow agents. Expand only when the first pass identifies distinct unresolved gaps and novel yield justifies the added wall time; more than six agents or another whole-workflow attempt requires an explicit user request.",
-		"Keep adversarial verification for security, migrations, infrastructure, destructive changes, public API compatibility, or similarly costly decisions—not routine analysis or implementation.",
-		"Never automatically relaunch a whole failed workflow. Retry only a failed child, at most once, for a classified transient failure. For provider/model unavailability, invalid configuration, missing inputs, repository eligibility, or budget/resource failures, fix the cause or fall back to direct execution.",
-		"Prefer parent synthesis. Add a synthesis agent only when the reports genuinely require independent arbitration or exceed the parent's available context.",
+		"Workflow mode is ON. This is a STANDING directive: for every substantive task — anything needing breadth (a surface too large to cover serially), confidence (independent perspectives or adversarial verification before a risky output), or scale (more than one context can hold) — author and run a workflow by DEFAULT instead of doing the work serially yourself.",
+		"Handle only trivial, mechanical, or conversational turns inline, and use one direct subagent when a single specialist or focused second opinion suffices.",
+		"Optimise for wall-clock, not headcount: scout the work-list inline first, then fan out wide-and-shallow. Give every child ONE bounded deliverable it can finish in minutes, and pipeline stages instead of collecting behind barriers.",
+		"Size the fan-out to the ask — a quick check gets a couple of agents; a thorough audit gets a wide finder pool plus a verification pass. Expand only while novel yield justifies the added wall time.",
+		"For multi-phase work run several workflows in sequence and act on each report as it arrives (the tool wakes you when each finishes).",
 	].join(" ");
 }
 
-// Injected into the main agent's system prompt before each turn. Workflow mode changes the
-// decision rubric, but never removes the option to conclude that direct execution is cheaper
-// and sufficient. It also lists runnable saved workflows and subagents.
+// Injected into the main agent's system prompt before each turn. When workflow mode is ON this
+// carries a STANDING orchestrate-by-default directive (the Pi analogue of Claude Code's
+// ultracode); when OFF it states the conservative default. It also lists runnable saved
+// workflows and subagents.
 function buildWorkflowSystemPromptAddendum(cwd: string): string | null {
 	const mode = readWorkflowMode();
 	const workflows = discoverWorkflows(cwd);
@@ -1226,6 +1242,7 @@ async function executePreparedWorkflow(
 			if (opts.githubAuth !== undefined && typeof opts.githubAuth !== "boolean") throw new Error("agent githubAuth must be a boolean.");
 			if (opts.returnMetadata !== undefined && typeof opts.returnMetadata !== "boolean") throw new Error("agent returnMetadata must be a boolean.");
 			if (opts.returnMetadata && opts.cache) throw new Error("agent returnMetadata cannot be combined with cache reuse because cached calls do not own a live workspace artifact.");
+			if (opts.timeoutMs !== undefined && (typeof opts.timeoutMs !== "number" || !Number.isFinite(opts.timeoutMs) || opts.timeoutMs <= 0)) throw new Error("agent timeoutMs must be a positive number of milliseconds.");
 			const sequence = ++engine.counters.invocationSeq;
 			const invocationId = `agent-${sequence.toString().padStart(4, "0")}`;
 			const label = typeof opts.label === "string" && opts.label.trim() ? opts.label.trim() : invocationId;
@@ -1263,12 +1280,16 @@ async function executePreparedWorkflow(
 					network: opts.network === true || opts.githubAuth === true,
 					githubAuth: opts.githubAuth === true,
 					phase: record.phase,
+					timeoutMs: Math.min(opts.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS, MAX_RUN_DURATION_MS),
 				};
 				const result = await runSingleAgent(run, record.agent, options, controller.signal, parentModel, record);
 				if (result.status === "timed_out") {
-					const timeoutError = new WorkflowTimedOutError(`Agent ${label} timed out: ${result.error ?? "deadline exceeded"}`);
-					controller.abort(timeoutError);
-					throw timeoutError;
+					// The whole-run deadline arrives via the abort signal; keep propagating it.
+					if (controller.signal.aborted) throw abortError(controller.signal);
+					// A child's OWN wall-clock timeout is an ordinary child failure: fail that item
+					// fast instead of letting one stuck child take down or stall the whole run.
+					if (allowFailure) return { value: null, budget: budgetSnapshot(run) };
+					throw new Error(`Agent ${label} timed out: ${result.error ?? "wall-clock limit exceeded"}. Split the task into smaller bounded deliverables or raise opts.timeoutMs.`);
 				}
 				if (result.status === "cancelled") {
 					const cancelledError = new WorkflowCancelledError(`Agent ${label} was cancelled: ${result.error ?? "cancelled"}`);
@@ -1730,7 +1751,7 @@ Required shape:
 - After meta, write the orchestration body directly using the injected globals. Top-level await and a top-level return are allowed; the value you return becomes the report (return a markdown string, or an object that is rendered as JSON).
 
 Injected globals (do NOT import anything — these are already in scope):
-- agent(prompt, opts?) -> Promise<string | object | null>. Spawns ONE globally bounded subagent in a unique isolated Git clone. opts: { label, phase, schema, model, effort, agentType, allowFailure, cache, patches, network, githubAuth, returnMetadata }. With a JSON-Schema 'schema', pi-subagents validates native structured_output before returning it. patches accepts preserved .diff paths from earlier agents in the same run. Set returnMetadata:true to receive { value, agentId, workspacePath, diffPath } instead of the bare value. Child Bash networking is disabled unless network:true is visible in the validated workflow source; githubAuth:true additionally mounts an ephemeral GitHub token and implies network. Failures throw by default; only allowFailure:true converts an ordinary child failure to null. Cache reuse is opt-in with cache:true and cannot be combined with returnMetadata.
+- agent(prompt, opts?) -> Promise<string | object | null>. Spawns ONE globally bounded subagent in a unique isolated Git clone. opts: { label, phase, schema, model, effort, agentType, allowFailure, cache, patches, network, githubAuth, returnMetadata, timeoutMs }. With a JSON-Schema 'schema', pi-subagents validates native structured_output before returning it. patches accepts preserved .diff paths from earlier agents in the same run. Set returnMetadata:true to receive { value, agentId, workspacePath, diffPath } instead of the bare value. Child Bash networking is disabled unless network:true is visible in the validated workflow source; githubAuth:true additionally mounts an ephemeral GitHub token and implies network. Failures throw by default; only allowFailure:true converts an ordinary child failure to null. Cache reuse is opt-in with cache:true and cannot be combined with returnMetadata. Every child is killed at its wall-clock timeout (default 20 minutes) and counts as a failed child; raise opts.timeoutMs only for a single deliverable that genuinely needs longer — prefer splitting the task.
 - parallel(thunks) -> Promise<any[]>. Runs an array of () => Promise thunks concurrently and awaits them ALL (a barrier). Failures propagate. Use ONLY when you genuinely need every result together.
 - pipeline(items, stage1, stage2, ...) -> Promise<any[]>. Runs each item through all stages independently with NO barrier between stages; each stage receives (prevResult, originalItem, index). Wall-clock is the slowest single item, not the sum of stages. THIS IS THE DEFAULT for multi-stage work.
 - phase(title) -> mark the start of a named phase (use titles from meta.phases).
@@ -1741,19 +1762,22 @@ Injected globals (do NOT import anything — these are already in scope):
 
 agentType selects the subagent (these are real Pi subagents): default "delegate". Specialists include scout, researcher, planner, reviewer, worker, oracle, and context-builder; Claude-style aliases map to them. Every child receives a unique detached clone containing the pinned launch checkout's tracked state. Non-ignored untracked files are deliberately omitted and listed in run events to avoid copying secrets.
 
-Eligibility and proportionality:
-- Do not author a workflow merely because a task is substantive. Use one direct subagent outside workflow_run when only one specialist or focused second opinion is needed.
-- A workflow should begin with at most two independently useful agents. A normal run should use no more than four agents total. Expand only after the first results expose distinct unresolved gaps; more than six agents requires an explicit user request.
-- Launch one workflow, not a sequence of replacement workflows. A deterministic provider/model, repository, input, validation, budget, or resource failure must stop and fall back rather than trigger a whole-workflow retry.
-- Prefer parent synthesis. Add a synthesis child only when independent arbitration is necessary or the reports exceed the parent's usable context. Pass concise references or artifacts instead of concatenating large reports into another prompt.
+Speed and scale (wall-clock is what fails first, not token spend):
+- Wall-clock is the slowest single CHAIN of children, not the agent count. Fan out wide-and-shallow; avoid chains more than two or three stages deep.
+- Give every child ONE bounded deliverable it can finish in minutes. Split anything open-ended — a child told to "investigate everything" is the main cause of runs that take hours. The per-child timeout kills stragglers, but bound the TASK, not just the clock.
+- Size the fan-out to the ask: "find any bugs" warrants a few finders; "thoroughly audit this" warrants a wide finder pool plus a verification pass. Expand only while novel yield justifies the added wall time.
+- Route mechanical stages to fast models (opts.model, effort:'low'); reserve the strongest model for judgment-heavy verify/judge/synthesis stages.
+- Prefer parent synthesis. Pass concise references or artifacts between stages instead of concatenating large reports into another prompt; add a synthesis child only when arbitration is genuinely independent work or the reports exceed the parent's usable context.
+- Never relaunch a whole failed workflow automatically. The failure report includes a classified retry policy — follow it.
 
-Orchestration patterns — pick the smallest one that qualifies:
-- Pipeline by default when each item genuinely needs multiple independent stages. Each item flows without a global barrier.
-- Barrier only when the next stage must see the complete set to deduplicate, compare, or early-exit.
-- Adversarial verification only for security, migrations, infrastructure, destructive changes, public API compatibility, or similarly costly decisions. Routine analysis and implementation do not need a challenger panel.
-- Adaptive fanout starts with two finders and expands only while novel yield justifies wall time and budget. The budget is a safety ceiling, not permission to keep looping.
+Orchestration patterns — compose what the task needs:
+- Pipeline by default: each item flows through its stages independently with no global barrier, so verification of item A overlaps discovery of item B.
+- Barrier (parallel) only when the next stage must see the complete set to deduplicate, compare, or early-exit.
+- Adversarial verification for risky or confidence-critical outputs (security, migrations, destructive changes, public APIs, research the user will act on): independent skeptics prompted to REFUTE each finding; keep only findings that survive.
+- Judge panel for design or decision tasks: N independent attempts from different angles, scored by parallel judges, synthesized from the winner.
+- Adaptive fanout: start with a small heterogeneous finder set, stream candidates into verification, and expand only while novel yield justifies wall time and budget.
 
-Scale to the goal and evidence, not adjectives. Stop as soon as the smallest panel has answered the question reliably.
+Scale to the ask and the evidence. Stop expanding when new agents stop yielding novel results.
 
 Hard constraints (the script is validated and REJECTED if violated):
 - import nothing; only 'export const meta' may be exported.
@@ -1762,7 +1786,7 @@ Hard constraints (the script is validated and REJECTED if violated):
 
 // Keep the always-present tool contract compact. The model explicitly requests mode:'guide'
 // before authoring, while generate mode receives the full guide in its dedicated model call.
-const WORKFLOW_RUN_DESCRIPTION = `Launch a persisted background multi-agent workflow only after inline deliberation shows at least two independent workstreams, high-risk verification needs, or work too large for one context. Prefer direct execution or one direct subagent otherwise. Start with at most two agents; normal runs should stay within four, and never relaunch a whole failed workflow automatically. Modes: saved, script, generate, and guide. Use mode:'guide' before writing a script. Runs execute autonomously after validation in a killable, networkless, filesystem-isolated subprocess. Every child runs in a path-confined isolated Git clone. Project-provided saved workflows retain one-time immutable-snapshot approval. The tool returns immediately; workflow_status shows queued/running agents and transcript tails, and completion is queued back to the owner session.`;
+const WORKFLOW_RUN_DESCRIPTION = `Launch a persisted background multi-agent workflow for breadth (a surface too large to cover serially), confidence (independent or adversarial verification), or scale (more than one context can hold). Prefer direct execution or one direct subagent when a single specialist suffices. Optimise for wall-clock: give each child one bounded deliverable, pipeline stages instead of collecting behind barriers, fan out wide-and-shallow, and size the fan-out to the ask. Modes: saved, script, generate, and guide. Call mode:'guide' for the authoring contract before writing your first script of the session. Runs execute autonomously after validation in a killable, networkless, filesystem-isolated subprocess. Every child runs in a path-confined isolated Git clone. Project-provided saved workflows retain one-time immutable-snapshot approval. The tool returns immediately; workflow_status shows queued/running agents and transcript tails, and completion is queued back to the owner session.`;
 
 const FLOW_GENERATOR_SYSTEM_PROMPT = `You generate workflow scripts for a deterministic multi-agent orchestrator that fans work out across many bounded-concurrency subagents. Return exactly ONE JavaScript module, no prose, no code fence.
 
@@ -2225,8 +2249,8 @@ return "## Smoke test results\\n\\n" + results.map((r, i) => "### agent " + (i +
 		promptSnippet:
 			"Launch a safe background multi-agent workflow, inspect status, or retrieve the authoring guide with mode:'guide'.",
 		promptGuidelines: [
-			"Use workflow_run only for breadth, confidence, or scale that changes the outcome; otherwise work inline.",
-			"Before mode:'script', call workflow_run with mode:'guide'. First decide whether at least two independent workstreams or high-risk verification justify a workflow; otherwise work directly or use one direct subagent. Start with at most two agents and do not relaunch a whole failed workflow automatically.",
+			"Use workflow_run for breadth, confidence, or scale that changes the outcome; work inline or with one direct subagent otherwise.",
+			"Call workflow_run with mode:'guide' before authoring your first script of the session. Give each child one bounded deliverable and prefer pipeline over barriers so wall-clock tracks the slowest single item, not the sum of stages.",
 			"Workflow child failures propagate unless allowFailure:true is explicit; native schemas are validated, cache is opt-in, and every child uses a path-confined isolated Git clone.",
 			"After launch, do not finalise while workflow_status reports active runs; completion is queued back to the owner session.",
 		],

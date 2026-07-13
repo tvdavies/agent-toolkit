@@ -120,14 +120,16 @@ describe("workflows — launch approval policy", () => {
 	});
 });
 
-describe("workflows — proportional orchestration policy", () => {
-	test("workflow mode preserves inline deliberation and small fan-out", () => {
+describe("workflows — standing orchestration mode", () => {
+	test("workflow mode ON is an unhedged orchestrate-by-default directive", () => {
 		const guidance = workflowModeGuidance(true);
-		expect(guidance).toContain("ESCALATION path");
-		expect(guidance).toContain("at least two genuinely independent workstreams");
-		expect(guidance).toContain("Start with at most two agents");
-		expect(guidance).toContain("Never automatically relaunch a whole failed workflow");
-		expect(guidance).not.toContain("workflow by DEFAULT");
+		expect(guidance).toContain("workflow by DEFAULT");
+		expect(guidance).toContain("wall-clock");
+		expect(guidance).toContain("ONE bounded deliverable");
+		// The gate lives at the mode toggle; the ON directive must not hedge with fan-out
+		// quotas or escalation framing that reads the same as the OFF default.
+		expect(guidance).not.toContain("ESCALATION");
+		expect(guidance).not.toContain("at most two agents");
 	});
 
 	test("disabled mode recommends one direct subagent for one specialist", () => {
