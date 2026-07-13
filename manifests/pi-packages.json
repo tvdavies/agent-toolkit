@@ -4,6 +4,7 @@
     "npm:@diegopetrucci/pi-openai-fast",
     "npm:pi-interactive-shell",
     "npm:pi-subagents",
-    "npm:pi-token-speed"
+    "npm:pi-token-speed",
+    "npm:pi-xai"
   ]
 }
