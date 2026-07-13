@@ -15,8 +15,8 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
-import { stateDir } from "./lib/decisions.ts";
-import { writeUpdateRequest } from "./lib/update.ts";
+import { stateDir } from "../lib/decisions.ts";
+import { writeUpdateRequest } from "../lib/update.ts";
 
 const schema = Type.Object({
 	reason: Type.String({

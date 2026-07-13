@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import selfUpdateExtension, { hasSelfUpdateCapability } from "./self-update.ts";
+import selfUpdateExtension, { hasSelfUpdateCapability } from "./index.ts";
 
 function extensionHarness(): { pi: any; tools: Array<{ name: string }> } {
 	const tools: Array<{ name: string }> = [];
