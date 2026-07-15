@@ -53,6 +53,26 @@ Same condensed format but with a visible suggestions section (max 3 items, not c
 ---
 ```
 
+### CHANGES_SUGGESTED Template
+
+Should-fix findings but no criticals. Posted as a non-blocking comment — say so explicitly, so the author knows nothing here gates the merge.
+
+```markdown
+## 🟠 Changes Suggested (non-blocking)
+
+**{COMMIT_COUNT}** commits | **{FILE_COUNT}** files changed | **{ADDITIONS}** additions | **{DELETIONS}** deletions
+
+{SUMMARY — 1-2 punchy sentences. State that nothing blocks the merge; these are worth fixing but a human approver can weigh them.}
+
+---
+
+{SHOULD_FIX_SECTION}
+
+{SUGGESTION_SECTION — only if suggestion findings exist, max 3}
+
+---
+```
+
 ### REQUEST_CHANGES Template
 
 Full output with all severity sections.
@@ -83,6 +103,7 @@ Use these exact strings based on the verdict:
 
 - APPROVE: `**✅ Approved**`
 - APPROVE_WITH_SUGGESTIONS: `**🔵 Approved with Suggestions**`
+- CHANGES_SUGGESTED: `**🟠 Changes Suggested (non-blocking)**`
 - REQUEST_CHANGES: `**🔴 Changes Requested**`
 
 ## Ticket Compliance Section
@@ -365,8 +386,11 @@ Map the review verdict to a GitHub review event:
 | Verdict | Event |
 |---------|-------|
 | REQUEST_CHANGES | REQUEST_CHANGES |
+| CHANGES_SUGGESTED | COMMENT |
 | APPROVE_WITH_SUGGESTIONS | APPROVE |
 | APPROVE | APPROVE |
+
+CHANGES_SUGGESTED maps to COMMENT deliberately: should-fix findings inform the author and the human approver without setting a blocking review state. Inline comments are still posted for each SHOULD_FIX finding so they get resolvable threads.
 
 When `PRSMASH_APPROVAL_LINE_LIMIT` is set by automation, `post-review.sh` will downgrade `APPROVE` events to `COMMENT` for PRs whose additions + deletions are greater than or equal to that limit. The body still carries the `Approved` / `Approved with Suggestions` verdict, but includes a manual-approval banner and marker so the caller can report that a human reviewer must approve the PR manually.
 

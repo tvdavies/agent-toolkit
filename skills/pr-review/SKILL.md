@@ -421,6 +421,19 @@ Order findings by severity, then by confidence:
 2. **SHOULD_FIX** (confidence 80-89): Important, should address
 3. **SUGGESTION** (explicitly marked): Optional improvements
 
+### 3.4.1 Verdict Thresholds
+
+The verdict follows from the surviving findings. Only CRITICAL findings block a merge:
+
+| Surviving findings | Verdict | Blocking? |
+|---|---|---|
+| ≥1 CRITICAL | REQUEST_CHANGES | Yes |
+| ≥1 SHOULD_FIX, no CRITICAL | CHANGES_SUGGESTED | No — posted as a comment |
+| Only suggestions | APPROVE_WITH_SUGGESTIONS | No |
+| Nothing | APPROVE | No |
+
+CHANGES_SUGGESTED deliberately does not set a blocking review state: the findings are worth fixing, but they are not worth deadlocking the PR over — a human code owner will see them when approving. Do not inflate a SHOULD_FIX to CRITICAL to force a block; a CRITICAL must be a demonstrable defect (data loss, security, corruption, broken build, user-visible breakage) that you verified is reachable.
+
 ### 3.5 Count Totals
 
 Calculate totals per severity for the summary section.
@@ -444,7 +457,7 @@ Prompt (adapt, keep the framing):
 Handling the result:
 
 - **"No demonstrable blocker found"** — proceed to Phase 4 with the approval. Do not mention the gate in the output.
-- **Findings returned** — verify them yourself with the same rigour as any other finding (read the code, confirm reachability). Discard anything that does not survive verification. If a CRITICAL or SHOULD_FIX survives, flip the verdict to REQUEST_CHANGES and include the finding normally; surviving SUGGESTIONs join the suggestion pool (still capped at 3).
+- **Findings returned** — verify them yourself with the same rigour as any other finding (read the code, confirm reachability). Discard anything that does not survive verification. Only a surviving **CRITICAL** flips the verdict to REQUEST_CHANGES. A surviving SHOULD_FIX moves the verdict to CHANGES_SUGGESTED (non-blocking) and is included normally; surviving SUGGESTIONs join the suggestion pool (still capped at 3). The gate exists to stop demonstrable merge-blocking defects, not to relitigate the approval on judgement calls.
 - **Sub-agent failure/timeout** — proceed with the provisional verdict; note nothing.
 
 ## Phase 4: Present
@@ -469,7 +482,16 @@ Present a structured summary. The output length should match the severity of the
 4. **Suggestions**: Max 3 items, each with file/line, what, why, fix
 5. **Files Reviewed**: Collapsible list
 
-**For REQUEST_CHANGES** (at least one critical or should-fix finding):
+**For CHANGES_SUGGESTED** (should-fix findings, no criticals — non-blocking):
+
+1. **Verdict**: CHANGES_SUGGESTED
+2. **Summary**: 2-3 sentences, stating explicitly that nothing blocks the merge
+3. **Build Status**: Table of type-check and lint results
+4. **Should Fix**: Each finding with file/line, what, why, fix
+5. **Suggestions** (if any, max 3)
+6. **Files Reviewed**: Collapsible list
+
+**For REQUEST_CHANGES** (at least one critical finding):
 
 1. **Verdict**: REQUEST_CHANGES
 2. **Summary**: 2-3 sentences
@@ -524,6 +546,8 @@ After sub-agents return, classify every finding into one of three categories:
 **New** — A finding from the current review that:
 - Was not present in the previous review (different file, different line range, or different issue)
 - Applies only to code introduced in the new commits
+
+**No moving target.** A re-review is an audit of the delta, not a fresh chance to re-litigate the whole PR. A NEW finding on code that the new commits did not touch means the earlier review missed it — that is the reviewer's miss, not the author's regression. Such a finding may only be raised as a blocker if it is a verified CRITICAL (demonstrable data loss, security, corruption, or user-visible breakage), and the `why` field must acknowledge it was missed earlier. Anything below CRITICAL on untouched code is at most a SUGGESTION. Never escalate the severity floor across rounds: if earlier rounds blocked on criticals, do not block a later round on style, naming, token, or convention findings that were visible from round one.
 
 ### Present (incremental)
 
