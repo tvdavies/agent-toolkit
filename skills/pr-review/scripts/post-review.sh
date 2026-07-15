@@ -354,4 +354,29 @@ else
 
         echo "Posted inline review with ${VALID_COUNT} comment(s)."
     fi
+
+    # A COMMENT posting means this review concluded nothing blocks the merge.
+    # A previous CHANGES_REQUESTED review from us would keep blocking regardless,
+    # so dismiss it — otherwise the PR deadlocks on a stale verdict.
+    if [[ "$MANUAL_APPROVAL_REQUIRED" != true ]]; then
+        MY_LOGIN=$(gh api user --jq .login 2>/dev/null || true)
+        if [[ -n "$MY_LOGIN" ]]; then
+            STALE_BLOCKING_IDS=$(gh api --paginate --slurp "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews" 2>/dev/null \
+                | jq -r --arg me "$MY_LOGIN" '
+                    [.[] | .[] | select(.user.login == $me)] as $mine
+                    | ($mine | map(select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")) | last) as $effective
+                    | if $effective != null and $effective.state == "CHANGES_REQUESTED"
+                      then $effective.id else empty end' || true)
+            for review_id in $STALE_BLOCKING_IDS; do
+                if gh api "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" \
+                    --method PUT \
+                    -f message="Superseded: re-review found no merge-blocking issues (see latest non-blocking comment)." \
+                    -f event="DISMISS" >/dev/null 2>&1; then
+                    echo "Dismissed stale blocking review ${review_id}."
+                else
+                    echo "Warning: could not dismiss stale blocking review ${review_id}."
+                fi
+            done
+        fi
+    fi
 fi
