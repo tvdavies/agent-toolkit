@@ -138,14 +138,15 @@ echo "$prs" | jq -c '.[]' | while read -r pr; do
     | (.last_commit != null and $mine_at != null and .last_commit > $mine_at) as $pushed_since
     | (.last_other_thread_activity != null and $mine_at != null and .last_other_thread_activity > $mine_at) as $replied_since
     | if $source == "review-request" then
-        {include: (
-          .changes_requested == 0 or
-          .my_review.state != null or (
-            ([.all_cr_authors[] | select(. != "'"$REVIEW_USER"'")] | length) == 0
-            and .my_review.state == "CHANGES_REQUESTED"
-            and $pushed_since
-          )
-        ), source: $source, implicitRereview: false}
+        # Never reviewed: review unless another reviewer is already blocking
+        # (the author has work to do first). Already reviewed: only re-review
+        # when the author pushed or replied since — re-reviewing an unchanged
+        # PR on every run just re-rolls the findings dice and spams the author.
+        (if .my_review.state == null then
+          {include: (.changes_requested == 0), source: $source, implicitRereview: false}
+        else
+          {include: ($pushed_since or $replied_since), source: $source, implicitRereview: false}
+        end)
       elif (.my_review.state == "CHANGES_REQUESTED" or .my_review.state == "DISMISSED")
            and .threads_unresolved == 0
            and ($pushed_since or $replied_since) then
