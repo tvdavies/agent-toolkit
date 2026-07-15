@@ -217,6 +217,7 @@ Prompt focus:
 - Check whether the code follows project conventions from AGENTS.md/CLAUDE.md (naming, imports, file structure, British English)
 - Only flag deviations that would cause real confusion or maintenance burden — not minor stylistic preferences
 - Type safety (no `any` casts, proper type usage, `type` vs `interface`)
+- For frontend changes, check responsive behaviour at mobile, tablet, laptop, and wide desktop widths. Flag clipped controls, fixed-width layouts that cause page-level horizontal scrolling, inaccessible touch targets, dialogs/popovers that cannot fit or be dismissed, and essential functionality hidden on smaller viewports.
 - Only flag issues in changed lines, not pre-existing code
 
 ### Sub-agent 2: Security and Performance
@@ -255,6 +256,7 @@ Prompt focus:
 - Check for duplicate functionality (search if similar utility already exists)
 - Evaluate error handling, service communication, and database access patterns for correctness
 - Consistency with an existing pattern is NOT evidence of correctness. When the diff mirrors or copies a pattern from elsewhere in the codebase ("same as the X page"), treat the copied logic as new, un-reviewed code and verify it on its own merits — the original may contain the same bug. If the source of the copy has the same defect, still flag the finding in this PR and note the pre-existing occurrence as a suggested follow-up.
+- For frontend architecture, check that layout choices use established responsive patterns (`min-w-0`, wrapping, responsive grids, constrained widths, and contained scrolling) rather than desktop-only fixed sizing.
 
 Scoping: The sub-agent may read unchanged files to understand context, but must only flag issues the PR creates or worsens.
 
