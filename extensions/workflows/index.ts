@@ -379,10 +379,28 @@ function projectWorkflowDir(cwd: string): string | null {
 	return root ? path.join(root, ".pi", "workflows") : null;
 }
 
-function runBaseDir(cwd: string): string {
+// Run state lives under the home directory, never inside the project tree. Journals and
+// worktree checkouts can reach gigabytes, and anything untracked inside the repo gets
+// swept up by repo scanners (git status, pi-subagents' watchdog change signature, code
+// search), which made Pi startup hang for minutes on accumulated run data.
+export function runBaseDir(cwd: string): string {
 	const root = findProjectRoot(cwd);
-	if (root) return path.join(root, ".pi", "workflow-runs");
-	return path.join(os.homedir(), ".pi", "agent", "workflow-runs", shortHash(cwd));
+	const key = root ?? cwd;
+	return path.join(os.homedir(), ".pi", "agent", "workflow-runs", `${path.basename(key)}-${shortHash(key)}`);
+}
+
+// Older versions persisted runs in <repo>/.pi/workflow-runs and ~/.pi/agent/workflow-runs/<hash>.
+// Keep reading those so existing runs stay listable, replayable, and prunable.
+function legacyRunBaseDirs(cwd: string): string[] {
+	const root = findProjectRoot(cwd);
+	const dirs: string[] = [];
+	if (root) dirs.push(path.join(root, ".pi", "workflow-runs"));
+	dirs.push(path.join(os.homedir(), ".pi", "agent", "workflow-runs", shortHash(cwd)));
+	return dirs;
+}
+
+export function runStorageDirs(cwd: string): string[] {
+	return [runBaseDir(cwd), ...legacyRunBaseDirs(cwd)];
 }
 
 function readJsonFile<T>(filePath: string, fallback: T): T {
@@ -1510,21 +1528,57 @@ async function runNamedWorkflow(pi: ExtensionAPI, name: string, args: string, ct
 	ctx.ui.notify(`Started workflow ${run.name} (${run.id}). Details: ${run.runDir}`, "info");
 }
 
-function listPersistedRuns(cwd: string): RunState[] {
-	const base = runBaseDir(cwd);
-	if (!fs.existsSync(base)) return [];
-	const runs: RunState[] = [];
-	for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
-		if (!entry.isDirectory()) continue;
-		const state = readJsonFile<RunState | null>(path.join(base, entry.name, "state.json"), null);
-		if (state) {
-			state.eventSeq ??= 0;
-			state.budgetReserved ??= 0;
-			state.agents = (state.agents ?? []).map((agent, index) => ({ ...agent, id: agent.id || `legacy-${index + 1}` }));
-			runs.push(state);
+export function listPersistedRuns(cwd: string): RunState[] {
+	const runsById = new Map<string, RunState>();
+	for (const base of runStorageDirs(cwd)) {
+		if (!fs.existsSync(base)) continue;
+		for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const state = readJsonFile<RunState | null>(path.join(base, entry.name, "state.json"), null);
+			if (state && !runsById.has(state.id)) {
+				state.eventSeq ??= 0;
+				state.budgetReserved ??= 0;
+				state.agents = (state.agents ?? []).map((agent, index) => ({ ...agent, id: agent.id || `legacy-${index + 1}` }));
+				runsById.set(state.id, state);
+			}
 		}
 	}
-	return runs.sort((a, b) => b.startedAt - a.startedAt);
+	return [...runsById.values()].sort((a, b) => b.startedAt - a.startedAt);
+}
+
+// Journals and worktrees for a single run can reach gigabytes; without retention the run
+// store grows unbounded and slows every startup listing. Delivered terminal runs beyond
+// the retention window or count cap are removed wholesale; anything still running,
+// undelivered, or unrecognised is never touched.
+const RUN_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+const MAX_RETAINED_RUNS = 30;
+
+export async function pruneExpiredRuns(cwd: string): Promise<void> {
+	const prunable: Array<{ dir: string; id: string; endedAt: number }> = [];
+	for (const base of runStorageDirs(cwd)) {
+		if (!fs.existsSync(base)) continue;
+		for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const dir = path.join(base, entry.name);
+			const state = readJsonFile<RunState | null>(path.join(dir, "state.json"), null);
+			if (!state) continue;
+			const undelivered = state.deliveryStatus === "pending" || state.deliveryStatus === "failed";
+			if (!TERMINAL_RUN_STATUSES.has(state.status) || undelivered) continue;
+			prunable.push({ dir, id: state.id, endedAt: state.endedAt ?? state.startedAt ?? 0 });
+		}
+	}
+	prunable.sort((a, b) => b.endedAt - a.endedAt);
+	const now = Date.now();
+	for (const [index, run] of prunable.entries()) {
+		if (index < MAX_RETAINED_RUNS && now - run.endedAt <= RUN_RETENTION_MS) continue;
+		await fs.promises.rm(run.dir, { recursive: true, force: true }).catch(() => undefined);
+		// Preserved agent workspaces (finalizeAgentWorktree keeps changed ones) live outside
+		// the run dir, keyed by run id; they expire with the run.
+		if (run.id) {
+			const workspaceDir = path.join(os.homedir(), ".pi", "agent", "workflow-workspaces", run.id);
+			await fs.promises.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
+		}
+	}
 }
 
 function runScriptSnapshotPath(run: RunState): string {
@@ -1913,6 +1967,7 @@ export default function (pi: ExtensionAPI) {
 			await safeSendWorkflowMessage(run, `# Workflow interrupted: ${run.name}\n\n${run.error}\n\nRun: ${run.id}\nDetails: ${run.runDir}`);
 		}
 		await replayPendingDeliveries(pi, ctx.cwd);
+		await pruneExpiredRuns(ctx.cwd).catch(() => undefined);
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { belongsToSession, buildFleetStateNoteFor, describeRunLine, extractMeta, inFlightRunsOf, reportsPendingOf, transitionRunStatus, type RunState, validateScript, workflowModeGuidance, workflowOutputSpent, workflowRetryGuidance, workflowSourceRequiresApproval } from "./index.ts";
+import { belongsToSession, buildFleetStateNoteFor, listPersistedRuns, pruneExpiredRuns, runBaseDir, runStorageDirs, describeRunLine, extractMeta, inFlightRunsOf, reportsPendingOf, transitionRunStatus, type RunState, validateScript, workflowModeGuidance, workflowOutputSpent, workflowRetryGuidance, workflowSourceRequiresApproval } from "./index.ts";
 import { freshAgentSessionPath, renderSessionTail } from "./runner.ts";
 
 function makeRun(over: Partial<RunState> = {}): RunState {
@@ -245,5 +245,51 @@ describe("workflows — fresh session paths", () => {
 		expect(second).toBe(path.join(runDir, "agents", "scan-2.session.jsonl"));
 		fs.writeFileSync(second, "", "utf8");
 		expect(freshAgentSessionPath(runDir, "scan")).toBe(path.join(runDir, "agents", "scan-3.session.jsonl"));
+	});
+});
+
+describe("workflows — run storage location and retention", () => {
+	function gitRepo(): string {
+		const root = tmpDir();
+		fs.mkdirSync(path.join(root, ".git"));
+		return root;
+	}
+
+	function writeRun(base: string, over: Partial<RunState>): RunState {
+		const state = makeRun({ ...over, runDir: path.join(base, over.id ?? "run-a") });
+		fs.mkdirSync(state.runDir, { recursive: true });
+		fs.writeFileSync(path.join(state.runDir, "state.json"), JSON.stringify(state), "utf8");
+		return state;
+	}
+
+	test("new runs are stored under the home directory, never inside the project tree", () => {
+		const root = gitRepo();
+		const base = runBaseDir(root);
+		expect(base.startsWith(root)).toBe(false);
+		expect(base.startsWith(path.join(os.homedir(), ".pi", "agent", "workflow-runs"))).toBe(true);
+		expect(runStorageDirs(root)).toContain(path.join(root, ".pi", "workflow-runs"));
+	});
+
+	test("legacy in-repo runs remain listed alongside home-dir runs", () => {
+		const root = gitRepo();
+		const legacyBase = path.join(root, ".pi", "workflow-runs");
+		writeRun(legacyBase, { id: "legacy-run", status: "succeeded" });
+		const listed = listPersistedRuns(root);
+		expect(listed.map((run) => run.id)).toContain("legacy-run");
+	});
+
+	test("prunes delivered terminal runs past retention but keeps live and undelivered ones", async () => {
+		const root = gitRepo();
+		const legacyBase = path.join(root, ".pi", "workflow-runs");
+		const old = Date.now() - 30 * 24 * 60 * 60 * 1000;
+		const expired = writeRun(legacyBase, { id: "expired", status: "succeeded", startedAt: old, endedAt: old, deliveryStatus: "sent_unacknowledged" });
+		const undelivered = writeRun(legacyBase, { id: "undelivered", status: "succeeded", startedAt: old, endedAt: old, deliveryStatus: "pending" });
+		const live = writeRun(legacyBase, { id: "live", status: "running", startedAt: old });
+		const recent = writeRun(legacyBase, { id: "recent", status: "succeeded", endedAt: Date.now(), deliveryStatus: "sent_unacknowledged" });
+		await pruneExpiredRuns(root);
+		expect(fs.existsSync(expired.runDir)).toBe(false);
+		expect(fs.existsSync(undelivered.runDir)).toBe(true);
+		expect(fs.existsSync(live.runDir)).toBe(true);
+		expect(fs.existsSync(recent.runDir)).toBe(true);
 	});
 });
