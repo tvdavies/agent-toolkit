@@ -136,6 +136,23 @@ describe("guardrails tool_call hook", () => {
 		expect(result?.reason).toContain("git-push-protected");
 	});
 
+	it("keeps PR merges blocked headless", async () => {
+		const { toolCall } = await load();
+		const result = (await toolCall(bash("gh pr merge 104 --squash --admin"), headless)) as {
+			block?: boolean;
+			reason?: string;
+		};
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("gh-pr-merge");
+	});
+
+	it("prompts for a PR merge and allows it only when the human approves", async () => {
+		const { toolCall } = await load();
+		const result = await toolCall(bash("gh pr merge 104 --squash --admin"), interactiveApprove);
+		expect(result).toBeUndefined();
+		expect(readRecent().some((d) => d.kind === "guardrail-allow" && d.summary.includes("gh-pr-merge"))).toBe(true);
+	});
+
 	it("prompts for an ask-tier protected-branch push and allows it when approved", async () => {
 		git(dir, ["init", "-q", "-b", "main"]);
 		const { toolCall } = await load();

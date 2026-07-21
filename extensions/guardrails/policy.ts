@@ -225,7 +225,7 @@ const RULES: Rule[] = [
 	{ id: "git-force-push-protected", tier: "banned", match: isForcePushProtected, reason: "Force-push to a protected branch (main/master/develop/production…)." },
 	{ id: "git-push-protected", tier: "ask", match: isPushToProtected, reason: "Pushing straight to a protected branch requires explicit human approval." },
 	{ id: "git-bare-push-protected", tier: "ask", match: isBarePushFromProtectedBranch, reason: "A destination-ambiguous git push may target a protected upstream and requires explicit human approval." },
-	{ id: "gh-pr-merge", tier: "banned", match: /\bgh\s+pr\s+merge\b/, reason: "Merging a PR is not permitted for the autonomous agent — a human merges." },
+	{ id: "gh-pr-merge", tier: "ask", match: /\bgh\s+pr\s+merge\b/, reason: "Merging a PR requires explicit human approval." },
 	{ id: "git-history-rewrite", tier: "banned", match: /\bgit\s+filter-branch\b|\bgit[-\s]filter-repo\b/, reason: "Rewriting git history irreversibly." },
 	{ id: "terraform-destroy", tier: "banned", match: /\bterraform\s+destroy\b/, reason: "Tearing down infrastructure." },
 	{ id: "drop-database", tier: "banned", match: /\bdrop\s+database\b/i, reason: "Dropping a database." },

@@ -29,8 +29,6 @@ describe("classifyCommand — banned", () => {
 		["AGENT_TOOLKIT_ALLOW_PROTECTED_PUSH=1 git push --force origin main", "git-force-push-protected"],
 		["git push --force", "git-force-push-protected"],
 		["git push --force origin", "git-force-push-protected"],
-		["gh pr merge 5469", "gh-pr-merge"],
-		["gh pr merge --squash 5469", "gh-pr-merge"],
 		["git filter-branch --tree-filter x HEAD", "git-history-rewrite"],
 		["terraform destroy -auto-approve", "terraform-destroy"],
 		["psql -c 'DROP DATABASE prod'", "drop-database"],
@@ -63,6 +61,9 @@ describe("classifyCommand — ask", () => {
 		["git push", "git-bare-push-protected"],
 		["git push origin", "git-bare-push-protected"],
 		["git push --force-with-lease", "git-bare-push-protected"],
+		["gh pr merge 5469", "gh-pr-merge"],
+		["gh pr merge --squash 5469", "gh-pr-merge"],
+		["gh pr merge 5469 --squash --admin", "gh-pr-merge"],
 	];
 	it.each(ask)("asks for %p", (cmd, rule) => {
 		const c = classifyCommand(cmd, { currentBranch: "main" });
