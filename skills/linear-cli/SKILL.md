@@ -136,6 +136,41 @@ The script returns JSON listing all downloaded files. Then use the Read tool to 
 
 **For Loom specifically:** The high-res frames cover the first ~4 seconds; the full-play frames cover the entire video at lower resolution. View both for complete context. If a transcript exists, read it first - it's the most information-dense.
 
+### Step 2c: Assigning an Issue to a Cycle (Sprint)
+
+**There is no `--cycle` flag, and `--data '{"cycleId": …}'` is silently dropped on both
+`issues create` and `issues update`** — the CLI accepts it, reports success, and the cycle
+stays unset. Setting a cycle is the one common field that only works through the raw
+`api mutate` escape hatch. Everything else (state, assignee, priority, description) applies
+fine via `-s`/`-a`/`-p`/`-d` on create/update.
+
+Three steps: resolve the cycle ID, run the mutation, verify it stuck.
+
+```bash
+# 1. Find the target cycle's ID. Cycles have no names — identify by `number` or date range.
+#    "next cycle" = the one whose startsAt is just after today.
+linear-cli cycles list -t LLE --output json --compact --no-pager --quiet \
+  | jq -c '.cycles[] | {number, id, startsAt, endsAt}'
+
+# 2. Set it via raw GraphQL (id accepts the human identifier like LLE-11602).
+#    Use -v KEY=VALUE (repeatable). NOT --variables, NOT a JSON blob.
+linear-cli api mutate \
+  'mutation($id: String!, $cycleId: String!) {
+     issueUpdate(id: $id, input: { cycleId: $cycleId }) {
+       success issue { identifier cycle { number startsAt endsAt } }
+     }
+   }' \
+  -v id=LLE-11602 -v cycleId=<CYCLE_UUID> \
+  --output json --compact --quiet
+
+# 3. Confirm — the mutation echoes the cycle back, but verify independently too.
+linear-cli issues get LLE-11602 --output json --compact --no-pager --quiet \
+  | jq -c '{identifier, cycle: (.cycle.number // "NO CYCLE")}'
+```
+
+The same `api mutate` path is the fallback for any field the typed subcommands don't
+expose — pass its GraphQL variable names, not the CLI flag names.
+
 ### Step 3: Present Results Clearly
 
 When showing results to the user:
@@ -157,6 +192,10 @@ If `linear-cli` fails:
 
 - Avoid piping `linear-cli` output to commands that may exit early, such as `head`, because the Rust CLI can panic on a broken stdout pipe. Prefer `--limit`, `--fields`, or parse the full JSON output with `jq`.
 - When using `jq` fallback expressions, include spaces around the optional field operator and fallback operator: `(.displayName? // "")`, not `(.displayName?//"")`. The latter is parsed as an invalid token by some jq versions.
+- Setting a **cycle** on an issue does not work via `--cycle` (no such flag) or via
+  `--data '{"cycleId": …}'` (silently ignored on create and update). Use the raw
+  `api mutate` recipe in **Step 2c**. All other fields apply normally through
+  `-s`/`-a`/`-p`/`-d`.
 - For user lookup, prefer this safe pattern:
 
 ```bash
@@ -194,6 +233,8 @@ linear-cli sprint progress -t TEAM                 # Progress bar
 linear-cli sprint burndown -t TEAM                 # Burndown chart
 linear-cli sprint velocity -t TEAM                 # Velocity history
 linear-cli cycles current -t TEAM                  # Current cycle details
+linear-cli cycles list -t TEAM                     # List cycles (find IDs by number/date)
+# Assign an issue to a cycle: no flag exists — see Step 2c (raw `api mutate`)
 ```
 
 ### Git Integration
