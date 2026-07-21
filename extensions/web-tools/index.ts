@@ -83,8 +83,8 @@ type SearxngResult = {
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
-    name: "web_fetch",
-    label: "Web Fetch",
+    name: "local_web_fetch",
+    label: "Local Web Fetch",
     description:
       "Fetch a URL locally and extract readable article text. Uses direct HTTP fetch; no external AI or search API required.",
     parameters: Type.Object({
