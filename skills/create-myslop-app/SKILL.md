@@ -25,15 +25,19 @@ This creates `apps/<id>/` preconfigured with Tailwind, the shared UI, a `createA
 
 ## 2. Build the app
 
-Edit `apps/<id>/src/App.tsx`. Pattern:
+Edit `apps/<id>/src/App.tsx`. Apps render **bare content** — no card, title, or frame. The OS wraps each app in a widget frame (title bar, move/resize/close), so a self-wrapped Card would double up. Pattern:
 
 ```tsx
-import { createApp, useHost, useTheme } from "@myslop/sdk";
-import { Button, Card, CardContent, CardHeader, CardTitle } from "@myslop/ui";
+import { createApp, useHost } from "@myslop/sdk";
+import { Button } from "@myslop/ui";
 
 function MyApp() {
-  const host = useHost();          // kernel: host.theme, host.ping, host.notify
-  return <Card>…<Button onClick={() => host.notify("hi")}>Go</Button>…</Card>;
+  const host = useHost();          // kernel: host.theme, host.notify, events, storage, files, user
+  return (
+    <div className="flex flex-col gap-4 p-4">
+      <Button onClick={() => host.notify("hi")}>Go</Button>
+    </div>
+  );
 }
 export default createApp(MyApp);
 ```
@@ -50,13 +54,13 @@ Builds with `PUBLIC_ORIGIN=https://<id>.myslop.app` (required — a build withou
 
 ## 4. Register in the shell
 
-Edit `host/`:
+Widgets load at **runtime**, so registering one is a single catalog entry — no remote wiring, no lazy imports. Add to `host/src/widgets/catalog.ts`:
 
-- `host/rsbuild.config.ts` — add to `remotes`: `"<id>": "<id>@https://<id>.myslop.app/mf-manifest.json"`
-- `host/src/remotes.d.ts` — declare `module "<id>/App"`
-- `host/src/App.tsx` — `const XApp = lazy(() => import("<id>/App"))` and render `<XApp host={host} />`
+```ts
+{ scope: "<id>", name: "Display Name", entry: "https://<id>.myslop.app/mf-manifest.json", module: "./App", defaultSize: { w: 440, h: 340 } }
+```
 
-Then redeploy the host: `cd host && HELLO_ORIGIN=https://hello.myslop.app bun run build && bunx wrangler deploy`.
+Then redeploy the host (`cd host && bun run build && bunx wrangler deploy`). The widget appears in the OS "+ Add widget" menu; users place/move/resize/close it and the layout persists per user. The `scope` must match the app's rsbuild MF `name`.
 
 ## Identity / auth
 
