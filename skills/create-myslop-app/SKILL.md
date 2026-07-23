@@ -60,11 +60,30 @@ Then redeploy the host: `cd host && HELLO_ORIGIN=https://hello.myslop.app bun ru
 
 ## The mini cloud (available host services)
 
-Today the kernel (`useHost()`) provides `theme`, `ping`, and `notify`. Additional shared services are being added as Cloudflare-backed hooks — check `@myslop/sdk` for what's live before assuming:
+The kernel (`useHost()`) provides `theme`, `ping`, `notify`, and `events`. Check `@myslop/sdk` for what's live before assuming.
 
-- **events** (`useEvents`) — cross-app pub/sub via a Durable Object. *(planned)*
-- **storage / files** (`useStorage`, `useFiles`) — per-app KV + R2 (reuses `files.myslop.app`). *(planned)*
-- **database** (`useDb`) — per-app D1 query access. *(planned)*
+### Events (live) — `useEvents()`
+
+Cross-app pub/sub over a Durable Object hub (`events.myslop.app`), scoped per app:
+
+```tsx
+import { useEvents } from "@myslop/sdk";
+
+const events = useEvents();
+// Private to this app (channel app:<id>:*), isolated from other apps:
+const off = events.subscribe("counter", (data) => { /* ... */ });
+events.publish("counter", { n: 1 });
+// Shared across apps (channel shared:*):
+events.shared.subscribe("announcements", (data) => { /* ... */ });
+events.shared.publish("announcements", { from: "myapp", text: "hi" });
+```
+
+Scoping is server-enforced: an app can only reach its own `app:<id>:*` channels plus `shared:*`. The shell mints a per-app scoped token (signed server-side; the secret never reaches the browser) and injects the handle. **Trust caveat**: under Module Federation the app id isn't cryptographically proven, so scoping is a structural boundary, not a hard security one — it hardens when the shell gains a per-user session (the identity slice).
+
+### Planned
+
+- **storage / files** (`useStorage`, `useFiles`) — per-app KV + R2 (reuses `files.myslop.app`).
+- **database** (`useDb`) — per-app D1 query access.
 
 ## Gotchas (baked into the scaffold, but know them)
 
