@@ -58,9 +58,20 @@ Edit `host/`:
 
 Then redeploy the host: `cd host && HELLO_ORIGIN=https://hello.myslop.app bun run build && bunx wrangler deploy`.
 
+## Identity / auth
+
+The OS requires sign-in (shoo, `github.com/pingdotgg/shoo` — Google only for now). The shell authenticates the user and gets a shoo `id_token` (ES256 JWT); apps read the user via `useUser()`:
+
+```tsx
+import { useUser } from "@myslop/sdk";
+const user = useUser(); // { id, email?, name?, picture? } | null
+```
+
+Enforcement: `events.myslop.app/token` verifies the shoo id_token (against shoo's JWKS) before minting any scoped token, and embeds the user id. So **no data access (events/storage/files) without a signed-in user** — the per-app scoping is now user-gated, not just structural. Apps never handle the id_token; the shell does, and injects pre-scoped service handles.
+
 ## The mini cloud (available host services)
 
-The kernel (`useHost()`) provides `theme`, `ping`, `notify`, and `events`. Check `@myslop/sdk` for what's live before assuming.
+The kernel (`useHost()`) provides `theme`, `ping`, `notify`, `events`, `storage`, `files`, and `user`. Check `@myslop/sdk` for what's live before assuming.
 
 ### Events (live) — `useEvents()`
 
