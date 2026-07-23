@@ -80,9 +80,25 @@ events.shared.publish("announcements", { from: "myapp", text: "hi" });
 
 Scoping is server-enforced: an app can only reach its own `app:<id>:*` channels plus `shared:*`. The shell mints a per-app scoped token (signed server-side; the secret never reaches the browser) and injects the handle. **Trust caveat**: under Module Federation the app id isn't cryptographically proven, so scoping is a structural boundary, not a hard security one — it hardens when the shell gains a per-user session (the identity slice).
 
+### Storage (live) — `useStorage()`
+
+Durable per-app key/value storage (Workers KV via `storage.myslop.app`), isolated per app:
+
+```tsx
+import { useStorage } from "@myslop/sdk";
+
+const storage = useStorage();
+await storage.set("counter", { count: 1 }); // JSON values
+const v = await storage.get<{ count: number }>("counter"); // null if absent
+const keys = await storage.list("prefix");  // app-relative key names
+await storage.delete("counter");
+```
+
+Keys are app-relative; the service namespaces them as `app:<id>:<key>` and an app can only read/write its own. Uses the **same** scoped token as events (one identity per app across services; the shell injects it). Same structural-not-cryptographic trust caveat as events.
+
 ### Planned
 
-- **storage / files** (`useStorage`, `useFiles`) — per-app KV + R2 (reuses `files.myslop.app`).
+- **files** (`useFiles`) — per-app blob upload → public URL (reuses `files.myslop.app`, needs a scoped-upload proxy so no upload secret reaches the browser).
 - **database** (`useDb`) — per-app D1 query access.
 
 ## Gotchas (baked into the scaffold, but know them)
