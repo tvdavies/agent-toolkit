@@ -7,6 +7,12 @@ description: Scaffold, deploy, and register a new microfrontend app in the myslo
 
 The myslop OS is a Module Federation platform. The shell (`os.myslop.app`) loads apps at runtime from their own deployments; each app also runs standalone at `<id>.myslop.app`. Project root: `~/dev/tvdavies/myslop-os`. Deploys use `$CLOUDFLARE_API_TOKEN` (in `~/.config/fish/conf.d/cloudflare.fish`).
 
+Apps are built from shared building blocks so everything looks and behaves consistently:
+
+- **`@myslop/ui`** — shared shadcn/Tailwind components (`Button`, `Card`, `cn`, …) and design tokens. Use these instead of hand-rolled styles.
+- **`@myslop/sdk`** — the kernel. `createApp(Component)` wraps a plain component into an app that works embedded or standalone. Inside, use hooks: `useHost()`, `useTheme()`, `useNotify()`.
+- **Theming is automatic** — the shell toggles `.dark` on `<html>`; components styled with the shared tokens (`bg-background`, `bg-card`, `text-muted-foreground`, …) restyle for free. Don't hard-code colors.
+
 ## 1. Scaffold
 
 ```bash
@@ -15,11 +21,24 @@ bun scripts/create-app.ts <id> "Display Name"   # id: lowercase, e.g. "notes"
 bun install                                      # link the new workspace
 ```
 
-This creates `apps/<id>/` — a federated remote (exposes `./App`) that also has a standalone entry, a `wrangler.jsonc` targeting `<id>.myslop.app`, and a `_headers` file with the CORS the shell needs.
+This creates `apps/<id>/` preconfigured with Tailwind, the shared UI, a `createApp`-wrapped component, a standalone entry, a `wrangler.jsonc` targeting `<id>.myslop.app`, and a `_headers` file with the CORS the shell needs.
 
 ## 2. Build the app
 
-Edit `apps/<id>/src/App.tsx`. The component receives `{ host }: AppProps` from `@myslop/sdk`. Call `resolveHost(host)` to get the kernel API (works embedded or standalone). Available host services: `host.theme`, `host.ping(msg)`, `host.notify(msg)`. Keep it a single default-exported React component.
+Edit `apps/<id>/src/App.tsx`. Pattern:
+
+```tsx
+import { createApp, useHost, useTheme } from "@myslop/sdk";
+import { Button, Card, CardContent, CardHeader, CardTitle } from "@myslop/ui";
+
+function MyApp() {
+  const host = useHost();          // kernel: host.theme, host.ping, host.notify
+  return <Card>…<Button onClick={() => host.notify("hi")}>Go</Button>…</Card>;
+}
+export default createApp(MyApp);
+```
+
+Style with Tailwind classes + the shared tokens. Add new shared components to `packages/ui` so every app can use them.
 
 ## 3. Deploy the app
 
@@ -27,28 +46,30 @@ Edit `apps/<id>/src/App.tsx`. The component receives `{ host }: AppProps` from `
 cd apps/<id> && bun run deploy
 ```
 
-This builds with `PUBLIC_ORIGIN=https://<id>.myslop.app` (so federation chunks resolve to the app's own origin — this is required, a build without it points chunks at localhost) and runs `wrangler deploy`. Verify: `curl -s https://<id>.myslop.app/mf-manifest.json | grep publicPath` should show the app's own origin.
+Builds with `PUBLIC_ORIGIN=https://<id>.myslop.app` (required — a build without it points federation chunks at localhost) and runs `wrangler deploy`. Verify: `curl -s https://<id>.myslop.app/mf-manifest.json | grep publicPath` shows the app's own origin.
 
 ## 4. Register in the shell
 
-To make the app appear inside the OS, edit `host/`:
+Edit `host/`:
 
 - `host/rsbuild.config.ts` — add to `remotes`: `"<id>": "<id>@https://<id>.myslop.app/mf-manifest.json"`
 - `host/src/remotes.d.ts` — declare `module "<id>/App"`
-- `host/src/App.tsx` — `const XApp = lazy(() => import("<id>/App"))` and render `<XApp host={host} />` in a window
+- `host/src/App.tsx` — `const XApp = lazy(() => import("<id>/App"))` and render `<XApp host={host} />`
 
-Then redeploy the host:
+Then redeploy the host: `cd host && HELLO_ORIGIN=https://hello.myslop.app bun run build && bunx wrangler deploy`.
 
-```bash
-cd host && HELLO_ORIGIN=https://hello.myslop.app <id>_ORIGIN=... bun run build && wrangler deploy
-```
+## The mini cloud (available host services)
 
-(The host build reads each remote's origin from its rsbuild config; keep the remote origins in sync.)
+Today the kernel (`useHost()`) provides `theme`, `ping`, and `notify`. Additional shared services are being added as Cloudflare-backed hooks — check `@myslop/sdk` for what's live before assuming:
 
-## Gotchas (learned the hard way)
+- **events** (`useEvents`) — cross-app pub/sub via a Durable Object. *(planned)*
+- **storage / files** (`useStorage`, `useFiles`) — per-app KV + R2 (reuses `files.myslop.app`). *(planned)*
+- **database** (`useDb`) — per-app D1 query access. *(planned)*
 
-- **Async boundary**: entries must be `import("./bootstrap")`, never mount React directly, or Module Federation throws `loadShareSync` / RUNTIME-006.
-- **assetPrefix**: always deploy with `PUBLIC_ORIGIN` set, or the manifest bakes in `localhost` and the shell can't load the app cross-origin.
-- **Static assets need `not_found_handling: "single-page-application"`** in wrangler, or the root path returns a Cloudflare 500 (error 1104).
-- **Browser cache**: after re-deploying during development, hashed chunk URLs can hold a stale cached error. A fresh visitor is unaffected; hard-reload to re-test.
-- **Isolation**: MF runs app code in the host's origin. Do not put secrets/tokens in the shell that an app shouldn't reach until there's an isolation story.
+## Gotchas (baked into the scaffold, but know them)
+
+- **Async boundary**: entries must be `import("./bootstrap")`, never mount React directly (else MF `loadShareSync` / RUNTIME-006).
+- **assetPrefix**: always deploy with `PUBLIC_ORIGIN` set, or the manifest bakes in `localhost`.
+- **Static assets** need `not_found_handling: "single-page-application"` in wrangler or the root 500s (error 1104).
+- **Browser cache**: after redeploying in dev, hashed chunk URLs can hold a stale cached error (RUNTIME-008). A fresh visitor is unaffected; hard-reload / clear cache to re-test.
+- **Isolation**: MF runs app code in the host's origin. Don't put secrets in the shell that an app shouldn't reach until there's an isolation story.
