@@ -96,9 +96,22 @@ await storage.delete("counter");
 
 Keys are app-relative; the service namespaces them as `app:<id>:<key>` and an app can only read/write its own. Uses the **same** scoped token as events (one identity per app across services; the shell injects it). Same structural-not-cryptographic trust caveat as events.
 
+### Files (live) — `useFiles()`
+
+Upload a blob and get a durable, public URL (for PRs, Slack, sharing HTML):
+
+```tsx
+import { useFiles } from "@myslop/sdk";
+
+const files = useFiles();
+const url = await files.upload("<h1>hi</h1>", "snapshot.html", { contentType: "text/html" });
+// -> https://files.myslop.app/app/<id>/<random>/snapshot.html
+```
+
+Uploads go through a scoped-upload endpoint on `files.myslop.app` that verifies the app's scoped token (same token as events/storage) and stores under `app/<id>/…` — the R2 upload secret never reaches the browser. Unlike storage, files are **public-by-URL** (that's the point — shareable links); the per-app namespace + random prefix prevent collisions and enumeration, not read access.
+
 ### Planned
 
-- **files** (`useFiles`) — per-app blob upload → public URL (reuses `files.myslop.app`, needs a scoped-upload proxy so no upload secret reaches the browser).
 - **database** (`useDb`) — per-app D1 query access.
 
 ## Gotchas (baked into the scaffold, but know them)
