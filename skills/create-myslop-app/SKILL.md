@@ -125,9 +125,26 @@ const url = await files.upload("<h1>hi</h1>", "snapshot.html", { contentType: "t
 
 Uploads go through a scoped-upload endpoint on `files.myslop.app` that verifies the app's scoped token (same token as events/storage) and stores under `app/<id>/…` — the R2 upload secret never reaches the browser. Unlike storage, files are **public-by-URL** (that's the point — shareable links); the per-app namespace + random prefix prevent collisions and enumeration, not read access.
 
+### Reactive shared state (live) — `useSharedState()`
+
+Convex-style live shared state: a write from one app updates every app on the same key immediately (per-user Durable Object + SQLite, `state.myslop.app`). It's `useState` that's shared and reactive:
+
+```tsx
+import { useSharedState } from "@myslop/sdk";
+
+const [todos, setTodos] = useSharedState<Todo[]>("todos", []);
+setTodos([...todos, newTodo]); // every app on "todos" re-renders live
+
+// third element is an atomic shallow-merge (safe for concurrent field writes):
+const [profile, setProfile, patchProfile] = useSharedState("profile", {});
+patchProfile({ name: "Tom" });
+```
+
+`shared:*` keys span all of the user's apps; `useAppState(key, initial)` is the same but private to one app (still live across its own instances/tabs). Values are durable and hydrate for late subscribers. Same scoped token as the other services. Note: whole-value `set` is last-write-wins; use `patch` (object merge) to avoid clobbering concurrent field updates.
+
 ### Planned
 
-- **database** (`useDb`) — per-app D1 query access.
+- **database** (`useDb`) — per-app D1 for relational/queryable data (reactive documents are covered by `useSharedState`).
 
 ## Gotchas (baked into the scaffold, but know them)
 
