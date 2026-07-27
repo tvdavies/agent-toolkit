@@ -423,6 +423,16 @@ Order findings by severity, then by confidence:
 2. **SHOULD_FIX** (confidence 80-89): Important, should address
 3. **SUGGESTION** (explicitly marked): Optional improvements
 
+**The SHOULD_FIX bar.** SHOULD_FIX is not "a real defect exists". It is "a reasonable user or maintainer will hit this, and shipping without fixing it is a mistake". Apply this test before assigning it:
+
+> Can you name a plausible user, on a supported device, doing something they would actually do — not a contrived sequence — who hits this?
+
+If reaching the defect needs an improbable conjunction (a specific viewport *and* a resize *mid* animation, a race window of a few hundred milliseconds that requires deliberate timing, a state only reachable by hand-editing storage), it is a **SUGGESTION**, however real and however well-traced. Being able to construct a failure narrative is not the same as the failure being worth another review round. Depth of analysis is not evidence of severity.
+
+Likewise **SUGGESTION**, not SHOULD_FIX, for: dead or no-op code that is harmless, defensive guards that are redundant but not wrong, naming and structure preferences, and test-strength observations ("this test would still pass if the guard were deleted") unless the untested behaviour is itself CRITICAL.
+
+A review where every finding is SHOULD_FIX is a miscalibrated review. If nothing clears the bar above, the honest verdict is APPROVE_WITH_SUGGESTIONS — reach for it rather than promoting the least-weak finding to justify a non-approval.
+
 ### 3.4.1 Verdict Thresholds
 
 The verdict follows from the surviving findings. Only CRITICAL findings block a merge:
@@ -528,8 +538,8 @@ When `--since COMMIT_SHA` is provided, the review shifts from a full assessment 
 ### Context Gathering (incremental)
 
 1. Narrow the diff to `COMMIT_SHA...HEAD` — only new commits are reviewed
-2. Retrieve the previous review by reading the most recent PR review that contains "Approved", "Approved with Suggestions", or "Changes Requested" in an H2 heading (use `gh api` to list reviews)
-3. Parse the previous review to extract its findings (file, lines, title, severity)
+2. Retrieve the previous review. The summary is posted as an **issue comment**, not a review body — in headless mode the review objects themselves have empty bodies, so `pulls/N/reviews` alone will not find it. Read `issues/N/comments`, newest first, and take the most recent one whose H2 heading marks a verdict: "Approved", "Approved with Suggestions", "Changes Suggested", or "Changes Requested". Also fetch `pulls/N/comments` for the inline findings attached to that round.
+3. Parse the previous review to extract its findings (file, lines, title, severity), including which of them the author was asked to act on
 4. Run the full sub-agent analysis on the narrowed diff as normal
 
 ### Synthesise (incremental)
@@ -550,6 +560,17 @@ After sub-agents return, classify every finding into one of three categories:
 - Applies only to code introduced in the new commits
 
 **No moving target.** A re-review is an audit of the delta, not a fresh chance to re-litigate the whole PR. A NEW finding on code that the new commits did not touch means the earlier review missed it — that is the reviewer's miss, not the author's regression. Such a finding may only be raised as a blocker if it is a verified CRITICAL (demonstrable data loss, security, corruption, or user-visible breakage), and the `why` field must acknowledge it was missed earlier. Anything below CRITICAL on untouched code is at most a SUGGESTION. Never escalate the severity floor across rounds: if earlier rounds blocked on criticals, do not block a later round on style, naming, token, or convention findings that were visible from round one.
+
+**Do not review your own homework.** Most of an incremental diff is usually code the author wrote *because a previous round asked for it*. That code is "touched", so the moving-target rule above does not protect it — and without care every round produces a fresh finding inside the previous round's fix, indefinitely. The author experiences this as running in circles, and it is the single most damaging failure mode of automated re-review.
+
+Before raising a NEW finding, check the previous review's findings and determine whether the code it lands on exists to satisfy one of them. If it does:
+
+- **The bar is a verified CRITICAL.** A demonstrable defect that is worse than the problem the fix was solving. Anything else is a SUGGESTION, no matter how sound.
+- **Say so in `why`.** Name the earlier finding: "this implements the focus-restore fix requested in round 2". The author must be able to see the reviewer knows it asked for this.
+- **A good-faith fix that addresses the request is Resolved.** Mark it resolved even when you would have implemented it differently, and even when it has rough edges below the CRITICAL bar. Resolving a finding is not an assertion the code is perfect — it means the author did what was asked.
+- **Never chain.** If round N asked for X, and round N+1 finds a flaw in X, round N+2 must not find a flaw in the fix for that flaw. On the third consecutive round touching one concern, stop: mark it resolved, move any residual to SUGGESTION, and state that the thread is closed for this PR.
+
+Cost is part of severity here. Another round costs the author a context switch, a push, and a wait. If the finding is not clearly worth that, it is a SUGGESTION.
 
 ### Present (incremental)
 
