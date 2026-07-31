@@ -7,6 +7,9 @@ set -euo pipefail
 XOXC="${SLACK_MCP_XOXC_TOKEN:?SLACK_MCP_XOXC_TOKEN not set}"
 XOXD="${SLACK_MCP_XOXD_TOKEN:?SLACK_MCP_XOXD_TOKEN not set}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TO_BLOCKS="$SCRIPT_DIR/text-to-blocks.py"
+
 slack_api() {
   local method="$1"
   shift
@@ -35,6 +38,29 @@ check_error() {
     err=$(echo "$resp" | jq -r '.error // "unknown error"')
     echo "Error: $err" >&2
     return 1
+  fi
+}
+
+# Build the {text, blocks?} half of a message payload.
+#
+# "- " / "1. " lines only render as a real Slack list when sent as rich_text
+# blocks; in plain text they stay raw characters. text-to-blocks.py converts
+# those messages and leaves everything else as plain text. Pass plain=1 (or
+# --plain on send/edit) to skip conversion, and note that any conversion
+# failure falls back to plain text rather than dropping the message.
+message_fields() {
+  local text="$1"
+  local plain="${2:-0}"
+  local converted=""
+
+  if [ "$plain" != "1" ] && [ -x "$TO_BLOCKS" ]; then
+    converted=$(printf '%s' "$text" | "$TO_BLOCKS" 2>/dev/null) || converted=""
+  fi
+
+  if [ -n "$converted" ]; then
+    echo "$converted" | jq 'if .blocks then {text, blocks} else {text} end'
+  else
+    jq -n --arg txt "$text" '{text: $txt}'
   fi
 }
 
@@ -95,8 +121,14 @@ cmd_thread() {
 }
 
 cmd_send() {
-  local channel="${1:?Usage: slack.sh send <channel_id> <text|-> [thread_ts]}"
-  local text="${2:?Usage: slack.sh send <channel_id> <text|-> [thread_ts]}"
+  local plain=0
+  if [ "${1:-}" = "--plain" ]; then
+    plain=1
+    shift
+  fi
+
+  local channel="${1:?Usage: slack.sh send [--plain] <channel_id> <text|-> [thread_ts]}"
+  local text="${2:?Usage: slack.sh send [--plain] <channel_id> <text|-> [thread_ts]}"
   local thread_ts="${3:-}"
 
   if [ "$text" = "-" ]; then
@@ -104,7 +136,7 @@ cmd_send() {
   fi
 
   local payload
-  payload=$(jq -n --arg ch "$channel" --arg txt "$text" '{channel: $ch, text: $txt}')
+  payload=$(message_fields "$text" "$plain" | jq --arg ch "$channel" '. + {channel: $ch}')
   if [ -n "$thread_ts" ]; then
     payload=$(echo "$payload" | jq --arg ts "$thread_ts" '. + {thread_ts: $ts}')
   fi
@@ -219,16 +251,25 @@ cmd_unreads() {
 }
 
 cmd_edit() {
-  local channel="${1:?Usage: slack.sh edit <channel_id> <timestamp> <new_text|->}"
-  local ts="${2:?Usage: slack.sh edit <channel_id> <timestamp> <new_text|->}"
-  local text="${3:?Usage: slack.sh edit <channel_id> <timestamp> <new_text|->}"
+  local plain=0
+  if [ "${1:-}" = "--plain" ]; then
+    plain=1
+    shift
+  fi
+
+  local channel="${1:?Usage: slack.sh edit [--plain] <channel_id> <timestamp> <new_text|->}"
+  local ts="${2:?Usage: slack.sh edit [--plain] <channel_id> <timestamp> <new_text|->}"
+  local text="${3:?Usage: slack.sh edit [--plain] <channel_id> <timestamp> <new_text|->}"
 
   if [ "$text" = "-" ]; then
     text=$(cat)
   fi
 
+  local payload
+  payload=$(message_fields "$text" "$plain" | jq --arg ch "$channel" --arg ts "$ts" '. + {channel: $ch, ts: $ts}')
+
   local resp
-  resp=$(slack_post "chat.update" -d "$(jq -n --arg ch "$channel" --arg ts "$ts" --arg txt "$text" '{channel: $ch, ts: $ts, text: $txt}')")
+  resp=$(slack_post "chat.update" -d "$payload")
   check_error "$resp"
   echo "$resp" | jq '{ok: .ok, channel: .channel, ts: .ts}'
 }
@@ -279,6 +320,20 @@ cmd_react() {
   resp=$(slack_post "reactions.add" -d "$(jq -n --arg ch "$channel" --arg ts "$ts" --arg name "$emoji" '{channel: $ch, timestamp: $ts, name: $name}')")
   check_error "$resp"
   echo "Added :$emoji: to $channel @ $ts"
+}
+
+cmd_reactions() {
+  local channel="${1:?Usage: slack.sh reactions <channel_id> <timestamp>}"
+  local ts="${2:?Usage: slack.sh reactions <channel_id> <timestamp>}"
+
+  local resp
+  resp=$(slack_api "reactions.get" -d "channel=$channel" -d "timestamp=$ts")
+  check_error "$resp"
+  # Normalise: always an array, even when the message has no reactions. Skin
+  # tone variants ("+1::skin-tone-3") are folded back to their base name so
+  # callers can match on the emoji alone.
+  echo "$resp" | jq '[(.message.reactions // [])[]
+    | {name: (.name | split("::")[0]), count: .count, users: (.users // [])}]'
 }
 
 cmd_resolve_channel() {
@@ -333,17 +388,22 @@ Commands:
   channels [type]                   List channels (public_channel,private_channel,im,mpim)
   history <channel> [limit]         Read channel messages (default: 20)
   thread <channel> <thread_ts>      Read thread replies
-  send <channel> <text|-> [thread_ts]
+  send [--plain] <channel> <text|-> [thread_ts]
                                     Send a message; use '-' to read text from stdin
+                                    '- ' / '1. ' lines become real Slack lists;
+                                    --plain sends the text through untouched
   search <query> [count]            Search messages
   users [query]                     List or search users
   mark <channel> [ts]               Mark channel as read
   groups                            List user groups
   unreads [type]                    Show channels with unread messages
-  edit <channel> <ts> <new_text|->   Edit a message; use '-' to read text from stdin
+  edit [--plain] <channel> <ts> <new_text|->
+                                    Edit a message; use '-' to read text from stdin
   delete <channel> <ts>             Delete a message
   react <channel> <ts> <emoji>      Add emoji reaction to a message
   unreact <channel> <ts> <emoji>    Remove emoji reaction from a message
+  reactions <channel> <ts>          Read reactions on a message as JSON
+                                    [{name, count, users:[user_id]}]
   userinfo <user_id>                Get user details by ID
   resolve <#channel|@user|id>       Resolve name to channel ID
 
@@ -366,6 +426,7 @@ case "${1:-}" in
   delete)   shift; cmd_delete "$@" ;;
   react)    shift; cmd_react "$@" ;;
   unreact)  shift; cmd_unreact "$@" ;;
+  reactions) shift; cmd_reactions "$@" ;;
   userinfo) shift; cmd_userinfo "$@" ;;
   resolve)  shift; cmd_resolve_channel "$@" ;;
   help|--help|-h|"") usage ;;

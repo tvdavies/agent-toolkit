@@ -80,6 +80,7 @@ When drafting or sending messages as Tom, follow these rules to match his authen
 **Code & Structure**
 - Triple backticks for technical content (logs, config, code)
 - Bullet points only for structured proposals (listing options, steps, features) — not for general writing
+- Plain text has no list syntax. `- `, `* ` and a literal `•` all post as raw characters in a paragraph, never as a list. A real list is a `rich_text` block containing a `rich_text_list` element, which `slack.sh send` now builds for you — write `- ` / `1. ` lines and never a literal `•`
 - No bold, no headers, no heavy formatting in Slack messages
 - Keep formatting flat and conversational
 
@@ -219,6 +220,12 @@ slack.sh unreact <channel_id> <message_ts> <emoji_name>
 ```
 Removes an emoji reaction. Emoji name can be with or without colons.
 
+### Read Reactions
+```bash
+slack.sh reactions <channel_id> <message_ts>
+```
+Returns the message's reactions as JSON: `[{name, count, users: [user_id]}]`, or `[]` when there are none. Skin tone variants (`+1::skin-tone-3`) are folded back to the base name, so match on `name` alone. Use this to check whether a specific person reacted — resolve the user IDs in `users` with `userinfo` rather than assuming who they are.
+
 ### User Info by ID
 ```bash
 slack.sh userinfo <user_id>
@@ -276,6 +283,35 @@ slack.sh users "alice"
 DM=$(slack.sh resolve "@alice")
 slack.sh send "$DM" "Hey, quick question about the PR"
 ```
+
+### Posting a bulleted list
+
+`slack.sh send` and `slack.sh edit` convert `- ` (or `* `) and `1. ` lines into a real
+Slack `rich_text_list`. Write plain markdown-style lines and let the script do it:
+
+```bash
+slack.sh send C0123456789 - 1234567890.123456 <<'EOF2'
+That gets us what we want:
+- first point, with `code` and https://links intact
+- second point
+Next paragraph, straight after the last bullet.
+EOF2
+```
+
+Rules that matter:
+
+- never type a literal `•` yourself, the converter adds the list structure
+- no blank line before the first bullet or after the last one; the converter adds the
+  single newline Slack's own editor uses, which is what gives correct spacing
+- indent two spaces for a nested list, `1.` / `2.` for an ordered one
+- messages with no list are sent as plain text exactly as before, so normal mrkdwn
+  (backticks, `<@U123>`, `<url|label>`) still works untouched
+- `--plain` skips conversion entirely: `slack.sh send --plain <channel> <text>`
+
+Because blocks bypass mrkdwn, the converter re-encodes inline markup itself: backticks,
+bare and `<url|label>` links, `<@user>` / `<#channel>` mentions, `:emoji:`, `*bold*` and
+`_italic_`. Word-boundary rules mean `send_user_message` is left alone rather than
+italicised. Conversion failures fall back to plain text rather than dropping the message.
 
 ### Search and read context
 ```bash
