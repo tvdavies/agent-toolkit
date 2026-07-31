@@ -14,6 +14,12 @@
 #   --dry-run        Print what would be posted without actually posting
 #
 # Environment:
+#   PRSMASH_TRUSTED_AUTHORS      When set, APPROVE events are only submitted as a
+#                                real GitHub approval for PRs whose author is on
+#                                this list (comma/space separated logins,
+#                                case-insensitive). Everyone else gets the same
+#                                review posted as a comment for a human to sign
+#                                off. Unset means no author gating.
 #   PRSMASH_APPROVAL_LINE_LIMIT  When set, APPROVE events for PRs with additions
 #                                + deletions >= this value are posted as comments
 #                                so a human can approve manually.
@@ -65,14 +71,14 @@ fi
 
 if [[ -n "$PR_NUMBER_ARG" ]]; then
     # Explicit PR number provided — look it up directly
-    PR_JSON=$(gh pr view "$PR_NUMBER_ARG" --json number,headRefOid,url,additions,deletions 2>/dev/null || true)
+    PR_JSON=$(gh pr view "$PR_NUMBER_ARG" --json number,headRefOid,url,additions,deletions,author 2>/dev/null || true)
     if [[ -z "$PR_JSON" ]]; then
         echo "Error: PR #${PR_NUMBER_ARG} not found." >&2
         exit 1
     fi
 else
     # Auto-detect from current branch
-    PR_JSON=$(gh pr view --json number,headRefOid,url,additions,deletions 2>/dev/null || true)
+    PR_JSON=$(gh pr view --json number,headRefOid,url,additions,deletions,author 2>/dev/null || true)
     if [[ -z "$PR_JSON" ]]; then
         echo "Error: No open PR found for the current branch." >&2
         exit 1
@@ -84,6 +90,7 @@ COMMIT_SHA=$(echo "$PR_JSON" | jq -r '.headRefOid')
 PR_URL=$(echo "$PR_JSON" | jq -r '.url')
 PR_ADDITIONS=$(echo "$PR_JSON" | jq -r '.additions // 0')
 PR_DELETIONS=$(echo "$PR_JSON" | jq -r '.deletions // 0')
+PR_AUTHOR=$(echo "$PR_JSON" | jq -r '.author.login // ""')
 
 # Extract owner/repo from PR URL (https://github.com/OWNER/REPO/pull/N)
 OWNER_REPO=$(echo "$PR_URL" | sed -E 's|https://github.com/([^/]+/[^/]+)/pull/[0-9]+|\1|')
@@ -106,9 +113,38 @@ BODY_CONTENT=$(cat "$BODY_FILE")
 EFFECTIVE_BODY_FILE="$BODY_FILE"
 MANUAL_APPROVAL_REQUIRED=false
 MANUAL_APPROVAL_REASON=""
+MANUAL_APPROVAL_REASON_CODE=""
+MANUAL_APPROVAL_BANNER_META=""
+
+# Author trust gate. Reviews for authors outside the trusted list still get
+# posted in full, but as a comment — the approval itself stays a human decision.
+TRUSTED_AUTHORS="${PRSMASH_TRUSTED_AUTHORS:-}"
+if [[ "$EVENT" == "APPROVE" && -n "${TRUSTED_AUTHORS//[[:space:],;]/}" ]]; then
+    if [[ -z "$PR_AUTHOR" ]]; then
+        echo "Error: Could not read PR author for the trusted-author approval check." >&2
+        exit 1
+    fi
+
+    AUTHOR_TRUSTED=false
+    PR_AUTHOR_LC=$(printf '%s' "$PR_AUTHOR" | tr '[:upper:]' '[:lower:]')
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" ]] || continue
+        if [[ "$candidate" == "$PR_AUTHOR_LC" ]]; then
+            AUTHOR_TRUSTED=true
+            break
+        fi
+    done < <(printf '%s\n' "$TRUSTED_AUTHORS" | tr '[:upper:]' '[:lower:]' | tr ',;[:space:]' '\n')
+
+    if [[ "$AUTHOR_TRUSTED" != true ]]; then
+        MANUAL_APPROVAL_REQUIRED=true
+        MANUAL_APPROVAL_REASON_CODE="untrusted-author"
+        MANUAL_APPROVAL_REASON="automated approval is limited to a configured set of authors"
+        MANUAL_APPROVAL_BANNER_META="reason=untrusted-author author=${PR_AUTHOR}"
+    fi
+fi
 
 APPROVAL_LINE_LIMIT="${PRSMASH_APPROVAL_LINE_LIMIT:-${PRSMASH_APPROVAL_MAX_LINES:-}}"
-if [[ "$EVENT" == "APPROVE" && -n "$APPROVAL_LINE_LIMIT" ]]; then
+if [[ "$EVENT" == "APPROVE" && "$MANUAL_APPROVAL_REQUIRED" != true && -n "$APPROVAL_LINE_LIMIT" ]]; then
     if ! [[ "$APPROVAL_LINE_LIMIT" =~ ^[0-9]+$ ]] || [[ "$APPROVAL_LINE_LIMIT" -le 0 ]]; then
         echo "Error: PRSMASH_APPROVAL_LINE_LIMIT must be a positive integer." >&2
         exit 1
@@ -122,19 +158,21 @@ if [[ "$EVENT" == "APPROVE" && -n "$APPROVAL_LINE_LIMIT" ]]; then
     PR_CHANGED_LINES=$((PR_ADDITIONS + PR_DELETIONS))
     if [[ "$PR_CHANGED_LINES" -ge "$APPROVAL_LINE_LIMIT" ]]; then
         MANUAL_APPROVAL_REQUIRED=true
-        MANUAL_APPROVAL_REASON="${PR_CHANGED_LINES} changed lines (${PR_ADDITIONS} additions, ${PR_DELETIONS} deletions) meets or exceeds the automated approval limit of < ${APPROVAL_LINE_LIMIT} lines."
-        EVENT="COMMENT"
-        BODY_CONTENT=$(printf '<!-- manual-approval-required source=automated-review limit=%s changed_lines=%s additions=%s deletions=%s -->\n\n> ⚠️ **Manual approval required:** %s This automated review is posting its approval verdict as a comment only; a human reviewer must approve manually.\n\n%s' \
-            "$APPROVAL_LINE_LIMIT" \
-            "$PR_CHANGED_LINES" \
-            "$PR_ADDITIONS" \
-            "$PR_DELETIONS" \
-            "$MANUAL_APPROVAL_REASON" \
-            "$BODY_CONTENT")
-        TEMP_BODY_FILE=$(mktemp)
-        printf '%s\n' "$BODY_CONTENT" > "$TEMP_BODY_FILE"
-        EFFECTIVE_BODY_FILE="$TEMP_BODY_FILE"
+        MANUAL_APPROVAL_REASON_CODE="approval-line-limit"
+        MANUAL_APPROVAL_REASON="${PR_CHANGED_LINES} changed lines (${PR_ADDITIONS} additions, ${PR_DELETIONS} deletions) meets or exceeds the automated approval limit of < ${APPROVAL_LINE_LIMIT} lines"
+        MANUAL_APPROVAL_BANNER_META="reason=approval-line-limit limit=${APPROVAL_LINE_LIMIT} changed_lines=${PR_CHANGED_LINES} additions=${PR_ADDITIONS} deletions=${PR_DELETIONS}"
     fi
+fi
+
+if [[ "$MANUAL_APPROVAL_REQUIRED" == true ]]; then
+    EVENT="COMMENT"
+    BODY_CONTENT=$(printf '<!-- manual-approval-required source=automated-review %s -->\n\n> ⚠️ **Awaiting human approval:** this automated review found nothing merge-blocking, but it is not approving the PR itself because %s. A human reviewer makes the approval call.\n\n%s' \
+        "$MANUAL_APPROVAL_BANNER_META" \
+        "$MANUAL_APPROVAL_REASON" \
+        "$BODY_CONTENT")
+    TEMP_BODY_FILE=$(mktemp)
+    printf '%s\n' "$BODY_CONTENT" > "$TEMP_BODY_FILE"
+    EFFECTIVE_BODY_FILE="$TEMP_BODY_FILE"
 fi
 
 IS_REVIEW_EVENT=false
@@ -315,6 +353,7 @@ else
         if [[ "$MANUAL_APPROVAL_REQUIRED" == true ]]; then
             echo "Manual approval required: $MANUAL_APPROVAL_REASON"
             echo "PRSMASH_MANUAL_APPROVAL_REQUIRED=true"
+            echo "PRSMASH_MANUAL_APPROVAL_REASON_CODE=${MANUAL_APPROVAL_REASON_CODE}"
         fi
         if [[ "$VALID_COUNT" != "0" ]]; then
             echo "Inline comments: $VALID_COUNT"
@@ -327,6 +366,7 @@ else
     if [[ "$MANUAL_APPROVAL_REQUIRED" == true ]]; then
         echo "Manual approval required: $MANUAL_APPROVAL_REASON"
         echo "PRSMASH_MANUAL_APPROVAL_REQUIRED=true"
+        echo "PRSMASH_MANUAL_APPROVAL_REASON_CODE=${MANUAL_APPROVAL_REASON_CODE}"
     fi
 
     if [[ "$VALID_COUNT" != "0" ]]; then

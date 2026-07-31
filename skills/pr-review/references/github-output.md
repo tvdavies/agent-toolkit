@@ -392,7 +392,12 @@ Map the review verdict to a GitHub review event:
 
 CHANGES_SUGGESTED maps to COMMENT deliberately: should-fix findings inform the author and the human approver without setting a blocking review state. Inline comments are still posted for each SHOULD_FIX finding so they get resolvable threads.
 
-When `PRSMASH_APPROVAL_LINE_LIMIT` is set by automation, `post-review.sh` will downgrade `APPROVE` events to `COMMENT` for PRs whose additions + deletions are greater than or equal to that limit. The body still carries the `Approved` / `Approved with Suggestions` verdict, but includes a manual-approval banner and marker so the caller can report that a human reviewer must approve the PR manually.
+`post-review.sh` may downgrade an `APPROVE` event to `COMMENT` so that a human makes the approval call. The body still carries the `Approved` / `Approved with Suggestions` verdict, but gains a manual-approval banner and marker so the caller can report that a human reviewer must approve the PR manually. Two automation-set environment variables trigger this:
+
+- `PRSMASH_TRUSTED_AUTHORS` — comma/space separated GitHub logins, case-insensitive. When set, only PRs authored by someone on the list are approved automatically; everyone else gets the review as a comment. Reason code `untrusted-author`.
+- `PRSMASH_APPROVAL_LINE_LIMIT` — downgrades PRs whose additions + deletions are greater than or equal to the limit. Reason code `approval-line-limit`.
+
+The author gate is evaluated first. Neither variable affects `REQUEST_CHANGES` or `COMMENT` events — only the approval itself is gated.
 
 ## Posting Commands
 
