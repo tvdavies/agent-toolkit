@@ -47,6 +47,7 @@ const PROVIDER_API = "anthropic-messages" as Api;
 const CREDENTIALS_PATH = path.join(os.homedir(), ".claude", ".credentials.json");
 const REFRESH_URL = process.env.PI_CLAUDE_CODE_REFRESH_URL || "https://console.anthropic.com/v1/oauth/token";
 const PROVIDER_BASE_URL = process.env.PI_CLAUDE_CODE_BASE_URL || "https://api.anthropic.com";
+const PROVIDER_API_KEY_FILE = process.env.PI_CLAUDE_CODE_API_KEY_FILE?.replace(/^~(?=\/|$)/, os.homedir());
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const DISABLE_PI_DOCS_REWRITE = process.env.PI_CLAUDE_CODE_DISABLE_PI_DOCS_REWRITE === "1";
@@ -409,14 +410,25 @@ async function getAccessToken(): Promise<string | null> {
   return refreshPromise;
 }
 
+async function getProviderApiKey(): Promise<string | null> {
+  if (!PROVIDER_API_KEY_FILE) return getAccessToken();
+
+  try {
+    const apiKey = (await fs.readFile(PROVIDER_API_KEY_FILE, "utf8")).trim();
+    return apiKey || null;
+  } catch {
+    return null;
+  }
+}
+
 async function registerClaudeCodeProvider(pi: ExtensionAPI) {
-  const accessToken = await getAccessToken();
-  if (!accessToken) return false;
+  const apiKey = await getProviderApiKey();
+  if (!apiKey) return false;
 
   pi.registerProvider(PROVIDER_NAME, {
     baseUrl: PROVIDER_BASE_URL,
     api: PROVIDER_API,
-    apiKey: accessToken,
+    apiKey,
     models: MODELS,
   });
 
@@ -439,6 +451,33 @@ export default async function (pi: ExtensionAPI) {
   pi.registerCommand("claude-code-provider-status", {
     description: "Show Claude Code provider credential status",
     handler: async (_args, ctx) => {
+      if (PROVIDER_API_KEY_FILE) {
+        const apiKey = await getProviderApiKey();
+        if (!apiKey) {
+          ctx.ui.notify(`Claude proxy key not found: ${PROVIDER_API_KEY_FILE}`, "warning");
+          return;
+        }
+
+        try {
+          const ok = await refreshClaudeCodeProviderStatus(pi, ctx);
+          ctx.ui.notify(
+            [
+              "Claude proxy key: present",
+              `Provider: ${ok ? "registered" : "not registered"}`,
+              `API: ${PROVIDER_API}`,
+              `Base URL: ${PROVIDER_BASE_URL}`,
+              `System prompt rewrite: ${DISABLE_PI_DOCS_REWRITE ? "disabled" : SYSTEM_PROMPT_MODE}`,
+              `Source: ${PROVIDER_API_KEY_FILE}`,
+            ].join("\n"),
+            ok ? "info" : "warning",
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          ctx.ui.notify(`Claude proxy provider error: ${message}`, "error");
+        }
+        return;
+      }
+
       const token = await readTokenFile();
       if (!token) {
         ctx.ui.notify("Claude Code credentials not found", "warning");

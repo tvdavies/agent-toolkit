@@ -4,7 +4,7 @@ Custom Pi extensions bundled by the root `agent-toolkit` Pi package.
 
 ## Extensions
 
-- `anthropic-claude-code.ts` — registers an Anthropic provider using local Claude Code OAuth credentials.
+- `anthropic-claude-code.ts` — registers an Anthropic provider using local Claude Code OAuth credentials, or a proxy key file when `PI_CLAUDE_CODE_BASE_URL` and `PI_CLAUDE_CODE_API_KEY_FILE` are set.
 - `btw.ts` — adds a command for quick side-question handling.
 - `scheduler.ts` — adds `/schedule` plus tools for delayed prompts.
 - `send-user-message.ts` — adds a lightweight progress-note tool.
