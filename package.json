@@ -22,7 +22,7 @@
   "scripts": {
     "bootstrap": "./scripts/bootstrap.sh",
     "sync:pi-packages": "./scripts/sync-pi-packages.sh",
-    "test": "bun test ./daemon ./extensions ./bin",
+    "test": "bun test ./daemon ./extensions ./bin ./tests",
     "test:workflows": "bun test ./extensions/workflows",
     "test:watch": "bun test --watch",
     "typecheck": "tsc --noEmit",

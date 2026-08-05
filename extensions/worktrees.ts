@@ -22,6 +22,25 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { type Static, Type } from "typebox";
 
 const LINEAR_FLAGS = ["--output", "json", "--compact", "--no-pager", "--quiet"];
+const LINEAR_RETRY_FLAGS = ["--retry", "3", "--no-cache"];
+const LINEAR_ISSUE_FALLBACK_QUERY = `query($number: Float!, $teamKey: String!) {
+  issues(
+    filter: { number: { eq: $number }, team: { key: { eq: $teamKey } } }
+    first: 1
+  ) {
+    nodes {
+      id
+      identifier
+      title
+      description
+      url
+      branchName
+      priorityLabel
+      state { name }
+      assignee { name email }
+    }
+  }
+}`;
 const CWD_CHANGE_TYPE = "workflow-cwd-change";
 const WORKTREE_CHANGE_TYPE = "workflow-worktree-change";
 const MAIN_REPO_CHANGE_TYPE = "workflow-main-repo-change";
@@ -371,17 +390,84 @@ async function repoSlug(pi: ExtensionAPI, repoRoot: string) {
   return slug(name || basename(repoRoot));
 }
 
-async function getIssue(pi: ExtensionAPI, issueId: string) {
+export async function getIssue(pi: ExtensionAPI, issueId: string) {
+  const normalisedIssueId = issueId.trim().toUpperCase();
+  const identifierMatch = normalisedIssueId.match(
+    /^([A-Z][A-Z0-9]*)-(\d+)$/,
+  );
+  if (!identifierMatch) {
+    throw new Error(
+      `Invalid Linear issue identifier "${issueId}" (expected e.g. LLE-1234).`,
+    );
+  }
+
   const result = await pi.exec("linear-cli", [
     "issues",
     "get",
-    issueId,
     "--comments",
+    ...LINEAR_RETRY_FLAGS,
     ...LINEAR_FLAGS,
+    "--",
+    normalisedIssueId,
   ]);
-  assertOk(result, `Could not fetch Linear issue ${issueId}.`);
-  const parsed = JSON.parse(result.stdout) as LinearIssue | LinearIssue[];
-  return Array.isArray(parsed) ? parsed[0] : parsed;
+  let directParseError: string | undefined;
+  if (result.code === 0) {
+    try {
+      const parsed = JSON.parse(result.stdout) as LinearIssue | LinearIssue[];
+      const candidates = Array.isArray(parsed) ? parsed : [parsed];
+      const issue = candidates.find(
+        (candidate) =>
+          typeof candidate.id === "string" &&
+          candidate.identifier?.toUpperCase() === normalisedIssueId,
+      );
+      if (issue) return issue;
+    } catch (error) {
+      directParseError = `Could not parse direct lookup output: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  const [, teamKey, issueNumber] = identifierMatch;
+  const fallback = await pi.exec("linear-cli", [
+    "api",
+    "query",
+    "--variable",
+    `number=${issueNumber}`,
+    "--variable",
+    `teamKey=${teamKey}`,
+    ...LINEAR_RETRY_FLAGS,
+    ...LINEAR_FLAGS,
+    "--",
+    LINEAR_ISSUE_FALLBACK_QUERY,
+  ]);
+  let fallbackParseError: string | undefined;
+  if (fallback.code === 0) {
+    try {
+      const payload = JSON.parse(fallback.stdout) as {
+        data?: { issues?: { nodes?: LinearIssue[] } };
+      };
+      const issue = payload.data?.issues?.nodes?.find(
+        (candidate) =>
+          typeof candidate.id === "string" &&
+          candidate.identifier?.toUpperCase() === normalisedIssueId,
+      );
+      if (issue) return issue;
+    } catch (error) {
+      fallbackParseError = `Could not parse fallback output: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  throw new Error(
+    [
+      `Could not fetch Linear issue ${normalisedIssueId}.`,
+      output(result),
+      directParseError,
+      "Exact identifier fallback also failed.",
+      output(fallback),
+      fallbackParseError,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
 }
 
 function branchForIssue(
