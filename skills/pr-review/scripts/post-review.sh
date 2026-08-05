@@ -23,6 +23,10 @@
 #   PRSMASH_APPROVAL_LINE_LIMIT  When set, APPROVE events for PRs with additions
 #                                + deletions >= this value are posted as comments
 #                                so a human can approve manually.
+#   PRSMASH_REVIEW_RESULT_FILE   Optional path for an atomic machine-readable
+#                                posting result consumed by prsmash.
+#   PRSMASH_REVIEW_EXPECTED_HEAD When set, refuse to post if the PR moved beyond
+#                                the commit that was actually reviewed.
 #
 # Dependencies: bash, gh, jq, python3
 
@@ -95,7 +99,36 @@ PR_AUTHOR=$(echo "$PR_JSON" | jq -r '.author.login // ""')
 # Extract owner/repo from PR URL (https://github.com/OWNER/REPO/pull/N)
 OWNER_REPO=$(echo "$PR_URL" | sed -E 's|https://github.com/([^/]+/[^/]+)/pull/[0-9]+|\1|')
 
+if [[ -n "${PRSMASH_REVIEW_EXPECTED_HEAD:-}" && "$COMMIT_SHA" != "$PRSMASH_REVIEW_EXPECTED_HEAD" ]]; then
+    echo "Error: PR head moved from reviewed commit ${PRSMASH_REVIEW_EXPECTED_HEAD} to ${COMMIT_SHA}; refusing to post a stale review." >&2
+    exit 1
+fi
+
 echo "PR #${PR_NUMBER} | commit ${COMMIT_SHA:0:8} | ${OWNER_REPO}"
+
+write_prsmash_result() {
+    local posting=$1 submitted_event=$2 target tmp
+    target="${PRSMASH_REVIEW_RESULT_FILE:-}"
+    [[ -n "$target" ]] || return 0
+    mkdir -p "$(dirname "$target")"
+    tmp=$(mktemp "${target}.tmp.XXXXXX")
+    if jq -n \
+        --arg repo "$OWNER_REPO" \
+        --argjson pr "$PR_NUMBER" \
+        --arg head "$COMMIT_SHA" \
+        --arg posting "$posting" \
+        --arg event "$submitted_event" \
+        --argjson manualApprovalRequired "$MANUAL_APPROVAL_REQUIRED" \
+        --arg postedAt "$(date -Is)" \
+        '{repo: $repo, pr: $pr, head: $head, posting: $posting, event: $event,
+          manualApprovalRequired: $manualApprovalRequired, postedAt: $postedAt}' \
+        > "$tmp"; then
+        mv "$tmp" "$target"
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+}
 
 # --- Determine posting strategy ---
 #
@@ -138,7 +171,7 @@ if [[ "$EVENT" == "APPROVE" && -n "${TRUSTED_AUTHORS//[[:space:],;]/}" ]]; then
     if [[ "$AUTHOR_TRUSTED" != true ]]; then
         MANUAL_APPROVAL_REQUIRED=true
         MANUAL_APPROVAL_REASON_CODE="untrusted-author"
-        MANUAL_APPROVAL_REASON="automated approval is limited to a configured set of authors"
+        MANUAL_APPROVAL_REASON="final human sign-off is required"
         MANUAL_APPROVAL_BANNER_META="reason=untrusted-author author=${PR_AUTHOR}"
     fi
 fi
@@ -166,9 +199,8 @@ fi
 
 if [[ "$MANUAL_APPROVAL_REQUIRED" == true ]]; then
     EVENT="COMMENT"
-    BODY_CONTENT=$(printf '<!-- manual-approval-required source=automated-review %s -->\n\n> ⚠️ **Awaiting human approval:** this automated review found nothing merge-blocking, but it is not approving the PR itself because %s. A human reviewer makes the approval call.\n\n%s' \
+    BODY_CONTENT=$(printf '<!-- manual-approval-required source=automated-review %s -->\n\n> ⚠️ **Awaiting human approval:** this automated review found nothing merge-blocking. A human reviewer makes the final approval call.\n\n%s' \
         "$MANUAL_APPROVAL_BANNER_META" \
-        "$MANUAL_APPROVAL_REASON" \
         "$BODY_CONTENT")
     TEMP_BODY_FILE=$(mktemp)
     printf '%s\n' "$BODY_CONTENT" > "$TEMP_BODY_FILE"
@@ -189,6 +221,7 @@ if [[ "$EDIT_LAST" == true ]]; then
         echo "Body size: ${#BODY_CONTENT} chars"
     else
         gh pr comment "$PR_NUMBER" --edit-last --body-file "$EFFECTIVE_BODY_FILE"
+        write_prsmash_result issue-comment COMMENT
         echo "Updated existing PR comment."
     fi
     echo "Skipping inline comments (--edit-last mode)."
@@ -342,6 +375,7 @@ if [[ "$IS_REVIEW_EVENT" == true ]]; then
     if [[ -n "$REVIEW_URL" ]]; then
         echo "$REVIEW_URL"
     fi
+    write_prsmash_result github-review "$EVENT"
     echo "Posted ${EVENT} review with ${VALID_COUNT} inline comment(s)."
 
 else
@@ -362,6 +396,7 @@ else
     fi
 
     gh pr comment "$PR_NUMBER" --body-file "$EFFECTIVE_BODY_FILE"
+    write_prsmash_result issue-comment COMMENT
     echo "Posted new PR comment."
     if [[ "$MANUAL_APPROVAL_REQUIRED" == true ]]; then
         echo "Manual approval required: $MANUAL_APPROVAL_REASON"
