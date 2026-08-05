@@ -10,9 +10,18 @@ metadata:
 
 Manage Linear issues, projects, sprints, and workflows via `linear-cli`.
 
-## Important: Default Team
+## Important: Issue Creation Defaults
 
-The default team is **LLE** (Lleverage). When the user doesn't specify a team, use LLE. Other available teams: LEG, LLEV, DES, EDU, FDE.
+Unless the user explicitly asks otherwise, create new issues with all of these defaults:
+
+- Team: **LLE** (Lleverage)
+- Status: **To Do** (never rely on Linear's implicit default, which sends issues to Triage)
+- Assignee: **me**
+- Cycle: **the team's current cycle**
+
+Use `scripts/quick-create.sh` for this standard path because it applies all four defaults. Other available teams are LEG, LLEV, DES, EDU, and FDE; the same status, assignee, and current-cycle defaults still apply when another team is specified.
+
+**Triage is an explicit exception, not the default.** Use it when the user asks for Triage or when recording an externally raised bug that genuinely needs triage. In that case, leave it unassigned and out of the current cycle unless the user says otherwise (`quick-create.sh --triage`).
 
 ## Important: Agent Output Conventions
 
@@ -66,8 +75,9 @@ linear-cli issues list --mine --output json --compact --no-pager --quiet
 # Get issue details
 linear-cli issues get LIN-123 --output json --compact --no-pager --quiet
 
-# Create an issue
-linear-cli issues create "Title" -t TEAM -p 3 --output json --compact --no-pager --quiet
+# Create without the wrapper (you must explicitly set To Do and assign to yourself)
+linear-cli issues create "Title" -t TEAM -s "To Do" -a me -p 3 --output json --compact --no-pager --quiet
+# Then add it to the current cycle using Step 2c.
 
 # Search
 linear-cli search issues "query" --output json --compact --no-pager --quiet
@@ -91,8 +101,11 @@ bash scripts/finish-issue.sh
 # Triage unassigned work
 bash scripts/triage.sh TEAM
 
-# Quick create (use flags for options, not positional args)
-bash scripts/quick-create.sh TEAM "Title" -p 3 -a me
+# Quick create: defaults to To Do, assigned to me, and the current cycle
+bash scripts/quick-create.sh TEAM "Title" -p 3
+
+# Explicit exception for an externally raised bug that needs triage
+bash scripts/quick-create.sh TEAM "Title" --triage -l bug
 ```
 
 ### Step 2a: Attaching Local Files to Issues
@@ -136,7 +149,9 @@ The script returns JSON listing all downloaded files. Then use the Read tool to 
 
 **For Loom specifically:** The high-res frames cover the first ~4 seconds; the full-play frames cover the entire video at lower resolution. View both for complete context. If a transcript exists, read it first - it's the most information-dense.
 
-### Step 2c: Assigning an Issue to a Cycle (Sprint)
+### Step 2c: Assigning an Issue to Yourself and the Current Cycle (Sprint)
+
+The normal creation path is `scripts/quick-create.sh`, which assigns to `me` and adds the issue to the current cycle automatically. When creating directly, pass `-a me` during creation (or run `linear-cli issues assign ID --assignee me` afterwards), then use the cycle mutation below.
 
 **There is no `--cycle` flag, and `--data '{"cycleId": …}'` is silently dropped on both
 `issues create` and `issues update`** — the CLI accepts it, reports success, and the cycle
@@ -147,10 +162,10 @@ fine via `-s`/`-a`/`-p`/`-d` on create/update.
 Three steps: resolve the cycle ID, run the mutation, verify it stuck.
 
 ```bash
-# 1. Find the target cycle's ID. Cycles have no names — identify by `number` or date range.
-#    "next cycle" = the one whose startsAt is just after today.
-linear-cli cycles list -t LLE --output json --compact --no-pager --quiet \
-  | jq -c '.cycles[] | {number, id, startsAt, endsAt}'
+# 1. Find the current cycle's ID (the cycle whose date range contains now).
+NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+CYCLE_ID="$(linear-cli cycles list -t LLE --output json --compact --no-pager --quiet \
+  | jq -r --arg now "$NOW" '[.cycles[] | select(.startsAt <= $now and .endsAt >= $now)][0].id // empty')"
 
 # 2. Set it via raw GraphQL (id accepts the human identifier like LLE-11602).
 #    Use -v KEY=VALUE (repeatable). NOT --variables, NOT a JSON blob.
@@ -160,7 +175,7 @@ linear-cli api mutate \
        success issue { identifier cycle { number startsAt endsAt } }
      }
    }' \
-  -v id=LLE-11602 -v cycleId=<CYCLE_UUID> \
+  -v id=LLE-11602 -v cycleId="$CYCLE_ID" \
   --output json --compact --quiet
 
 # 3. Confirm — the mutation echoes the cycle back, but verify independently too.
@@ -211,7 +226,7 @@ linear-cli issues list --mine                     # My issues
 linear-cli issues list -t TEAM -s "In Progress"   # Team + status filter
 linear-cli issues list --mine --group-by state     # Grouped by status
 linear-cli issues get ID                           # Issue details
-linear-cli issues create "Title" -t TEAM           # Create
+linear-cli issues create "Title" -t TEAM -s "To Do" -a me  # Create explicitly in To Do and assign to me
 linear-cli issues update ID -s Done                # Update status
 linear-cli issues start ID                         # Start (In Progress + assign)
 linear-cli issues close ID                         # Mark done
@@ -284,9 +299,10 @@ Actions:
 ### Example 2: "Create a bug ticket"
 User says: "Create a bug for the login page not loading"
 Actions:
-1. Use LLE unless user specifies another team (LEG, LLEV, DES, EDU, FDE)
-2. Run: `linear-cli issues create "Login page not loading" -t LLE -l bug -p 2 --output json --compact --no-pager --quiet`
-3. Report the created issue ID and link
+1. Use LLE unless the user specifies another team (LEG, LLEV, DES, EDU, FDE).
+2. For an internally raised bug, run `bash scripts/quick-create.sh LLE "Login page not loading" -l bug -p 2 --json`. This creates it in To Do, assigns it to me, and adds it to the current cycle.
+3. Only if it is externally raised and needs triage, run `bash scripts/quick-create.sh LLE "Login page not loading" --triage -l bug -p 2 --json`.
+4. Report the created issue ID and link.
 
 ### Example 3: "Start working on LIN-123"
 User says: "I'm going to work on LIN-123"
