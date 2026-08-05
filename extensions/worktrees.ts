@@ -2,6 +2,7 @@ import {
   DynamicBorder,
   type ExtensionAPI,
   type ExtensionCommandContext,
+  type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
   Container,
@@ -16,31 +17,15 @@ import {
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { type Static, Type } from "typebox";
 
-const LINEAR_FLAGS = ["--output", "json", "--compact", "--no-pager", "--quiet"];
-const LINEAR_RETRY_FLAGS = ["--retry", "3", "--no-cache"];
-const LINEAR_ISSUE_FALLBACK_QUERY = `query($number: Float!, $teamKey: String!) {
-  issues(
-    filter: { number: { eq: $number }, team: { key: { eq: $teamKey } } }
-    first: 1
-  ) {
-    nodes {
-      id
-      identifier
-      title
-      description
-      url
-      branchName
-      priorityLabel
-      state { name }
-      assignee { name email }
-    }
-  }
-}`;
+const START_TICKET_SKILL_PATH = fileURLToPath(
+  new URL("../skills/start-ticket/SKILL.md", import.meta.url),
+);
 const CWD_CHANGE_TYPE = "workflow-cwd-change";
 const WORKTREE_CHANGE_TYPE = "workflow-worktree-change";
 const MAIN_REPO_CHANGE_TYPE = "workflow-main-repo-change";
@@ -64,19 +49,6 @@ type PullRequestBranch = {
   title?: string;
   url?: string;
   headRefName?: string;
-};
-
-type LinearIssue = {
-  id?: string;
-  identifier?: string;
-  title?: string;
-  description?: string;
-  url?: string;
-  branchName?: string;
-  gitBranchName?: string;
-  state?: { name?: string } | string;
-  assignee?: { name?: string; email?: string } | string | null;
-  priorityLabel?: string;
 };
 
 type WorktreeConfig = {
@@ -190,6 +162,38 @@ function parseFlags(args: string) {
   const flags = new Set(parts.filter((part) => part.startsWith("--")));
   const positional = parts.filter((part) => !part.startsWith("--"));
   return { flags, positional };
+}
+
+export function normaliseTicketIdentifier(input: string) {
+  const identifier = input.trim().toUpperCase();
+  if (!/^[A-Z][A-Z0-9]*-\d+$/.test(identifier)) {
+    throw new Error(
+      `Invalid Linear issue identifier "${input}" (expected e.g. LLE-1234).`,
+    );
+  }
+  return identifier;
+}
+
+export function startTicketPrompt(input: string) {
+  const identifier = normaliseTicketIdentifier(input);
+  return [
+    `Read and follow the start-ticket Agent Skill at ${START_TICKET_SKILL_PATH}.`,
+    `Ticket: ${identifier}`,
+    "Load the full skill instructions before acting and carry the ticket through its defined completion contract.",
+  ].join("\n");
+}
+
+async function launchStartTicket(
+  pi: ExtensionAPI,
+  args: string,
+  ctx: ExtensionCommandContext,
+) {
+  await ctx.waitForIdle();
+  const input =
+    args.trim() ||
+    (await ctx.ui.input("Linear ticket", "Ticket ID, e.g. LLE-1234"));
+  if (!input) return;
+  pi.sendUserMessage(startTicketPrompt(input));
 }
 
 function getConfig(): WorktreeConfig {
@@ -390,100 +394,6 @@ async function repoSlug(pi: ExtensionAPI, repoRoot: string) {
   return slug(name || basename(repoRoot));
 }
 
-export async function getIssue(pi: ExtensionAPI, issueId: string) {
-  const normalisedIssueId = issueId.trim().toUpperCase();
-  const identifierMatch = normalisedIssueId.match(
-    /^([A-Z][A-Z0-9]*)-(\d+)$/,
-  );
-  if (!identifierMatch) {
-    throw new Error(
-      `Invalid Linear issue identifier "${issueId}" (expected e.g. LLE-1234).`,
-    );
-  }
-
-  const result = await pi.exec("linear-cli", [
-    "issues",
-    "get",
-    "--comments",
-    ...LINEAR_RETRY_FLAGS,
-    ...LINEAR_FLAGS,
-    "--",
-    normalisedIssueId,
-  ]);
-  let directParseError: string | undefined;
-  if (result.code === 0) {
-    try {
-      const parsed = JSON.parse(result.stdout) as LinearIssue | LinearIssue[];
-      const candidates = Array.isArray(parsed) ? parsed : [parsed];
-      const issue = candidates.find(
-        (candidate) =>
-          typeof candidate.id === "string" &&
-          candidate.identifier?.toUpperCase() === normalisedIssueId,
-      );
-      if (issue) return issue;
-    } catch (error) {
-      directParseError = `Could not parse direct lookup output: ${error instanceof Error ? error.message : String(error)}`;
-    }
-  }
-
-  const [, teamKey, issueNumber] = identifierMatch;
-  const fallback = await pi.exec("linear-cli", [
-    "api",
-    "query",
-    "--variable",
-    `number=${issueNumber}`,
-    "--variable",
-    `teamKey=${teamKey}`,
-    ...LINEAR_RETRY_FLAGS,
-    ...LINEAR_FLAGS,
-    "--",
-    LINEAR_ISSUE_FALLBACK_QUERY,
-  ]);
-  let fallbackParseError: string | undefined;
-  if (fallback.code === 0) {
-    try {
-      const payload = JSON.parse(fallback.stdout) as {
-        data?: { issues?: { nodes?: LinearIssue[] } };
-      };
-      const issue = payload.data?.issues?.nodes?.find(
-        (candidate) =>
-          typeof candidate.id === "string" &&
-          candidate.identifier?.toUpperCase() === normalisedIssueId,
-      );
-      if (issue) return issue;
-    } catch (error) {
-      fallbackParseError = `Could not parse fallback output: ${error instanceof Error ? error.message : String(error)}`;
-    }
-  }
-
-  throw new Error(
-    [
-      `Could not fetch Linear issue ${normalisedIssueId}.`,
-      output(result),
-      directParseError,
-      "Exact identifier fallback also failed.",
-      output(fallback),
-      fallbackParseError,
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  );
-}
-
-function branchForIssue(
-  issue: LinearIssue,
-  fallbackIssueId: string,
-  config: WorktreeConfig,
-) {
-  const raw =
-    issue.branchName ??
-    issue.gitBranchName ??
-    `${issue.identifier ?? fallbackIssueId}-${slug(issue.title ?? "work")}`;
-  return raw.startsWith(config.branchPrefix)
-    ? raw
-    : `${config.branchPrefix}${slug(raw)}`;
-}
-
 function normaliseBranchName(input: string) {
   return input.trim().replace(/^origin\//, "");
 }
@@ -536,15 +446,11 @@ function pathFromWorktreeLabel(label: string) {
   return label.split(" — ").at(-1);
 }
 
-type KeybindingsLike = {
-  matches: (keyData: string, action: string) => boolean;
-};
-
 type SearchableSelectDialogOptions = {
   title: string;
   items: SelectItem[];
   getMaxVisible: () => number;
-  keybindings: KeybindingsLike;
+  keybindings: KeybindingsManager;
   theme: SelectListTheme;
   getSearchText: (item: SelectItem) => string;
   formatTitle: (text: string) => string;
@@ -1024,39 +930,6 @@ async function switchCwd(
   else ctx.ui.setStatus("worktree", undefined);
   ctx.ui.notify(`Working in ${resolvedWorktreePath}`, "info");
   if (kickoff) pi.sendUserMessage(kickoff, { deliverAs: "followUp" });
-}
-
-function issueContext(
-  issue: LinearIssue,
-  branchName: string,
-  worktreePath: string,
-) {
-  const state =
-    typeof issue.state === "string" ? issue.state : issue.state?.name;
-  const assignee =
-    typeof issue.assignee === "string"
-      ? issue.assignee
-      : (issue.assignee?.name ?? issue.assignee?.email);
-  return [
-    `We are starting work in git worktree: ${worktreePath}`,
-    `Branch: ${branchName}`,
-    issue.identifier ? `Issue: ${issue.identifier}` : undefined,
-    issue.title ? `Title: ${issue.title}` : undefined,
-    state ? `State: ${state}` : undefined,
-    assignee ? `Assignee: ${assignee}` : undefined,
-    issue.priorityLabel ? `Priority: ${issue.priorityLabel}` : undefined,
-    issue.url ? `URL: ${issue.url}` : undefined,
-    issue.description ? `\nDescription:\n${issue.description}` : undefined,
-    "\nCompletion contract:",
-    "- The deliverable is a GitHub pull request ready for review, not just a local implementation.",
-    "- Implement the ticket, run the relevant checks, inspect the final diff, commit all intended changes, and push this branch.",
-    "- Create a ready-for-review (non-draft) PR, or update the existing PR for this branch. Do not stop after coding while changes are uncommitted, unpushed, or lack a PR.",
-    "- Use a clear title that identifies the ticket and change. Write a well-documented PR body with the ticket link, summary, implementation details and key decisions, validation commands and results, risks or caveats, and screenshots for UI changes.",
-    "- Keep the PR focused on this ticket. Before finishing, verify the working tree is clean and return the PR URL.",
-    "- If a genuine blocker prevents committing, pushing, or creating the PR, report the exact blocker and the commands attempted instead of silently stopping.",
-  ]
-    .filter(Boolean)
-    .join("\n");
 }
 
 function adoptContext(
@@ -1664,40 +1537,15 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("wt-ticket", {
+  pi.registerCommand("start-ticket", {
     description:
-      "Create a pi-managed worktree for a Linear ticket and switch into it",
-    handler: async (args, ctx) => {
-      await ctx.waitForIdle();
-      const issueId =
-        args.trim() ||
-        (await ctx.ui.input("Linear ticket", "Ticket ID, e.g. LLE-1234"));
-      if (!issueId) return;
-      const config = getConfig();
-      const repoRoot = await getGitRoot(pi, getEffectiveCwd(ctx));
-      const issue = await withLoading(ctx, `Loading ${issueId}…`, () =>
-        getIssue(pi, issueId),
-      );
-      const base = await chooseBaseRef(pi, ctx, repoRoot, undefined, config);
-      if (!base) return;
-      const branch = branchForIssue(issue, issueId, config);
-      await withLoading(ctx, `Creating worktree ${branch}…`, async () => {
-        const worktreePath = await ensureWorktree(
-          pi,
-          repoRoot,
-          branch,
-          base,
-          config,
-        );
-        await switchCwd(
-          pi,
-          ctx,
-          worktreePath,
-          branch,
-          issueContext(issue, branch, worktreePath),
-        );
-      });
-    },
+      "Start a Linear ticket using the shared end-to-end delivery skill",
+    handler: async (args, ctx) => launchStartTicket(pi, args, ctx),
+  });
+
+  pi.registerCommand("wt-ticket", {
+    description: "Compatibility alias for /start-ticket",
+    handler: async (args, ctx) => launchStartTicket(pi, args, ctx),
   });
 
   pi.registerCommand("wt-adopt", {

@@ -182,7 +182,7 @@ function main(): void {
 		}
 		args.text = buildDrivePrPrompt(n, {
 			repo: args.repo.trim(),
-			scriptsDir: join(repoDir, "skills", "address-pr-feedback", "scripts"),
+			readinessDir: join(repoDir, "skills", "_shared", "pr-readiness"),
 		});
 		args.source = args.source ?? "drive-pr";
 		args.dedupeKey = args.dedupeKey ?? `drive-pr:${n}`;

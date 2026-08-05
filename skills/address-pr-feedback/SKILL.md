@@ -20,6 +20,10 @@ End-to-end workflow that takes a GitHub PR from "blocked" to "mergeable": triage
 - **Bot reviewers vs. human reviewers.** Threads from bots (CodeRabbit, Copilot, Greptile, Sourcery, etc. — the script flags these as `isBot: true`) should be resolved on every action — apply, discuss, decline — because bots will not re-engage. Threads from humans should only auto-resolve on `apply`; leave `discuss` / `decline` open so the reviewer can engage and resolve themselves.
 - **Hand off merge conflicts to the `dev-bot:resolve-conflicts` skill** instead of resolving manually here.
 
+## Shared readiness protocol
+
+Resolve this skill's directory from the loaded `SKILL.md` path. The canonical blocker scripts and readiness rules are in `../_shared/pr-readiness/` relative to this skill. Read `../_shared/pr-readiness/PROTOCOL.md` before triage. It is the source of truth for blocker classification, push-before-resolve ordering, bot/human thread handling, authoritative GitHub state, and ready-to-merge criteria. This skill adds the user-approval gate; it does not redefine that protocol.
+
 ## Step 1: Identify the PR
 
 In order:
@@ -31,7 +35,7 @@ In order:
 
 Run the bundled script:
 
-    bash ~/.claude/skills/address-pr-feedback/scripts/fetch-pr-blockers.sh <pr-number>
+    bash "$SKILL_DIR/../_shared/pr-readiness/scripts/fetch-pr-blockers.sh" <pr-number>
 
 It prints one JSON document with five sections:
 - `pr` — number, title, base/head refs, `mergeable`, `mergeStateStatus`, `isDraft`, `url`
@@ -83,7 +87,7 @@ Order matters:
 3. **Commit and push** to the PR branch. Clear messages, no force-push without asking the user.
 4. **For each thread**, run:
 
-       bash ~/.claude/skills/address-pr-feedback/scripts/reply-and-resolve.sh <pr> <thread-id> <first-comment-database-id> "<reply body>" [--no-resolve]
+       bash "$SKILL_DIR/../_shared/pr-readiness/scripts/reply-and-resolve.sh" <pr> <thread-id> <first-comment-database-id> "<reply body>" [--no-resolve]
 
    Pass `--no-resolve` when the thread should stay open. Decision matrix:
 

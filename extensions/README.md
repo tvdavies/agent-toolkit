@@ -10,7 +10,7 @@ Custom Pi extensions bundled by the root `agent-toolkit` Pi package.
 - `send-user-message.ts` — adds a lightweight progress-note tool.
 - `delegation-policy/` — instructs agents to delegate through `subagent` or `workflow_run`, never by launching agent harnesses through shell tools.
 - `web-tools/` — adds local web search/fetch tools.
-- `worktrees.ts` — adds personal worktree commands.
+- `worktrees.ts` — adds deterministic worktree tools and personal commands; `/start-ticket` and legacy `/wt-ticket` are thin adapters to the shared `start-ticket` skill.
 - `workflows/` — adds dynamic workflow commands for saved multi-subagent TypeScript workflow scripts.
 - `brain/` — durable memory as an Open Knowledge Format (OKF) markdown bundle queried by ripgrep and committed to git. Registers `brain_query`/`brain_remember`/`brain_forget` tools, injects recalled context on each turn, and adds `/brain`.
 - `guardrails/` — the safety floor for autonomous operation: blocks destructive/banned tool calls and requires human-only approval for consequential actions such as PR merges via the `tool_call` hook, with autonomy levels (`high`/`balanced`/`conservative`) and `/guard`.

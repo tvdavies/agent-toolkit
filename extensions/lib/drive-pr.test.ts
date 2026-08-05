@@ -3,7 +3,7 @@ import { buildDrivePrPrompt, DRIVE_PR_MARKER, isDrivePrPrompt, parseDrivePrNumbe
 
 describe("drive-pr protocol", () => {
 	it("recognises and parses a drive-pr prompt", () => {
-		const p = buildDrivePrPrompt(4988, { repo: "/repos/x", scriptsDir: "/s" });
+		const p = buildDrivePrPrompt(4988, { repo: "/repos/x", readinessDir: "/shared/pr-readiness" });
 		expect(p.startsWith(DRIVE_PR_MARKER)).toBe(true);
 		expect(isDrivePrPrompt(p)).toBe(true);
 		expect(isDrivePrPrompt("do something else")).toBe(false);
@@ -11,33 +11,29 @@ describe("drive-pr protocol", () => {
 		expect(parseDrivePrNumber("not a drive-pr")).toBeUndefined();
 	});
 
-	it("embeds the PR, scripts, repo, park loop, and safety rails", () => {
-		const p = buildDrivePrPrompt(123, { repo: "/home/me/proj", scriptsDir: "/opt/scripts" });
+	it("delegates blocker semantics to the shared protocol", () => {
+		const p = buildDrivePrPrompt(123, { repo: "/home/me/proj", readinessDir: "/opt/readiness" });
 		expect(p).toContain("#123");
 		expect(p).toContain("/home/me/proj");
-		expect(p).toContain("/opt/scripts/fetch-pr-blockers.sh");
-		expect(p).toContain("/opt/scripts/reply-and-resolve.sh");
-		expect(p).toContain("worktree_adopt");
-		expect(p).toContain("park");
-		expect(p).toContain("isBot");
-		expect(p).toContain("ESCALATE");
+		expect(p).toContain("/opt/readiness/PROTOCOL.md");
+		expect(p).toContain("/opt/readiness/scripts/fetch-pr-blockers.sh");
+		expect(p).toContain("/opt/readiness/scripts/reply-and-resolve.sh");
+		expect(p).toContain("It is authoritative");
 	});
 
-	it("verifies green authoritatively, not by absence of blockers", () => {
-		const p = buildDrivePrPrompt(5, { repo: "/r", scriptsDir: "/s" });
-		// must check the real check rollup + review decision + CodeRabbit-reviewed, not just "no failing checks"
-		expect(p).toContain("statusCheckRollup");
-		expect(p).toContain("reviewDecision");
-		expect(p).toContain("coderabbitai");
-		expect(p).toMatch(/do NOT treat .*no failing checks.* as green/i);
-		// anchors commands to the worktree (bash cwd is not sticky)
+	it("adds only worktree and park-resume control policy", () => {
+		const p = buildDrivePrPrompt(5, { repo: "/r", readinessDir: "/readiness" });
+		expect(p).toContain("worktree_adopt");
 		expect(p).toContain('cd "<WT>"');
+		expect(p).toContain("park");
+		expect(p).toContain("READY TO MERGE");
+		expect(p).toContain("no-progress");
 	});
 
 	it("forbids merge, force-push, and pushing to a protected branch", () => {
-		const p = buildDrivePrPrompt(9, { repo: "/r", scriptsDir: "/s" });
-		expect(p).toContain("NEVER merge");
-		expect(p).toContain("NEVER force-push");
+		const p = buildDrivePrPrompt(9, { repo: "/r", readinessDir: "/readiness" });
+		expect(p).toContain("Never merge");
+		expect(p).toContain("Never force-push");
 		expect(p).toContain("protected/base branch");
 	});
 });
