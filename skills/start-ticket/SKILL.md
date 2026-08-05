@@ -145,7 +145,7 @@ If a PR already exists for the ticket branch, update it instead of opening a dup
 
 ## Phase 7: Drive feedback to merge readiness
 
-Read the canonical protocol at `$SKILL_DIR/../_shared/pr-readiness/PROTOCOL.md` and follow it exactly. Use its shared scripts:
+Read the canonical protocol at `$SKILL_DIR/../_shared/pr-readiness/PROTOCOL.md` and follow it exactly. Before posting any PR reply or top-level comment, read `$SKILL_DIR/../writing-for-humans/SKILL.md` and apply its send-ready process to the final draft. Use the shared readiness scripts:
 
 ```bash
 bash "$SKILL_DIR/../_shared/pr-readiness/scripts/fetch-pr-blockers.sh" PR_NUMBER

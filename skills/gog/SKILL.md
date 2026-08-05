@@ -77,6 +77,7 @@ Calendar Colors
 
 Email Formatting
 
+- Before sending or creating a draft, read `../writing-for-humans/SKILL.md` relative to this skill and apply its send-ready process to the subject and body.
 - Prefer plain text. Use `--body-file` for multi-paragraph messages (or `--body-file -` for stdin).
 - Same `--body-file` pattern works for drafts and replies.
 - `--body` does not unescape `\n`. If you need inline newlines, use a heredoc or `$'Line 1\n\nLine 2'`.

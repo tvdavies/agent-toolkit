@@ -35,6 +35,10 @@ When running `linear-cli` commands:
 
 Standard agent flags: `--output json --compact --no-pager --quiet`
 
+## Human-Facing Comments
+
+Before creating or updating a Linear comment, read `../writing-for-humans/SKILL.md` relative to this skill and apply its send-ready process to the final draft. Complete that pass before running `linear-cli issues comment`. Preserve issue identifiers, links, mentions, and technical details that affect the decision or next action.
+
 ## Wrapper Scripts
 
 Helper scripts are in `scripts/` within this skill directory. They accept both human-friendly (table) and agent-friendly (json) output.

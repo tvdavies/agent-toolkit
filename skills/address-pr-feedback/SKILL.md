@@ -85,7 +85,8 @@ Order matters:
 1. **Resolve conflicts first** if any (clean working tree before applying changes).
 2. **Apply code changes** for "apply" rows. Group by logical change, not by comment. Run the project's typecheck/test/lint locally if quick; if anything breaks, stop and re-triage instead of barrelling through.
 3. **Commit and push** to the PR branch. Clear messages, no force-push without asking the user.
-4. **For each thread**, run:
+4. **Prepare human-facing replies.** Read `../writing-for-humans/SKILL.md` relative to this skill and apply its send-ready process before posting any threaded reply or top-level comment. Keep simple acknowledgements such as `Done in <short-sha>.` to one line.
+5. **For each thread**, run:
 
        bash "$SKILL_DIR/../_shared/pr-readiness/scripts/reply-and-resolve.sh" <pr> <thread-id> <first-comment-database-id> "<reply body>" [--no-resolve]
 
@@ -101,8 +102,8 @@ Order matters:
    - For `discuss`: reply with the question.
    - For `decline`: reply with the reasoning.
 
-5. **For non-threaded review items**, do not leave a top-level PR comment by default. Track what was fixed, declined, or left for re-review in the final user summary. If the user explicitly wants a public response, or a human reviewer needs an answer that cannot be posted in-thread, use `gh pr comment`.
-6. **For CI failures fixed by code**, the new push triggers reruns automatically. For pure flakes, `gh run rerun <run-id>`.
+6. **For non-threaded review items**, do not leave a top-level PR comment by default. Track what was fixed, declined, or left for re-review in the final user summary. If the user explicitly wants a public response, or a human reviewer needs an answer that cannot be posted in-thread, use `gh pr comment`.
+7. **For CI failures fixed by code**, the new push triggers reruns automatically. For pure flakes, `gh run rerun <run-id>`.
 
 ## Step 6: Verify
 

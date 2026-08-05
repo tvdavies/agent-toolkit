@@ -519,6 +519,8 @@ When the user requests posting to GitHub:
 
 Before formatting GitHub output, initialise `REVIEW_TMPDIR` exactly as described in the Review Temporary Directory section and write every generated artifact there.
 
+Read `../writing-for-humans/SKILL.md` relative to this skill and apply its send-ready process to summaries, findings, and inline comments. Preserve the required review template, verdict labels, severity labels, and finding structure.
+
 1. Read `references/github-output.md` for the complete template, formatting rules, and inline comment format
 2. Format the synthesised findings into body markdown and write to `$REVIEW_TMPDIR/pr-review.md`
 3. For each CRITICAL and SHOULD_FIX finding, format an inline comment using the inline comment template from `references/github-output.md` and collect into `$REVIEW_TMPDIR/pr-review-inline.json`. SUGGESTION findings do NOT get inline comments.

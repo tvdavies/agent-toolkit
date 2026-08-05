@@ -16,6 +16,7 @@ Interact with Slack using the skill-local script `scripts/slack.sh` (calls Slack
 - **Never guess user identities from IDs.** Always resolve user IDs to names using `slack.sh userinfo <user_id>` before attributing messages to anyone. Do not assume a user ID belongs to a particular person — look it up every time.
 - When displaying messages to the user, format them readably with timestamps, usernames, and content.
 - For sending messages, always confirm with the user before executing `slack.sh send`, unless the user explicitly asks you to send a specific message immediately.
+- Before sending, read `../writing-for-humans/SKILL.md` relative to this skill and apply its send-ready process. The Voice & Style Guide below is the channel-specific source of truth when the guidance differs.
 - For multiline Slack messages, do **not** pass literal `\n` sequences inside a normal quoted shell argument. Slack will receive backslash+n text instead of real line breaks. Use stdin with `send ... -` / `edit ... -` and a quoted heredoc, or use Bash ANSI-C quoting (`$'line 1\nline 2'`). Prefer the stdin heredoc pattern for reliability.
 - Channel IDs look like `C...` (channels), `D...` (DMs), `G...` (group DMs/private channels).
 
