@@ -46,13 +46,14 @@ Commands:
 - `/workflow-rerun <run-id> [fresh|reuse]` — rerun the persisted immutable script snapshot. Individual `agent()` calls must opt into deterministic cache reuse with `cache: true`.
 - `/workflow-apply <run-id> <agent-id> [cwd] [--check]` — check or apply an isolated-clone agent patch. Apply refuses repository drift since launch.
 - `/workflow-stop <run-id>` — cancel an active run.
+- `/workflow-mode explicit|proactive|ultracode|auto|status` — choose the orchestration policy. `ultracode` lasts only for the current session; `on`/`off` remain aliases for `proactive`/`explicit`. Legacy persisted boolean settings expire to `explicit` because their policy meaning changed.
 
 Workflow authoring guidelines:
 
-- Use workflows for breadth, confidence, or scale that serial work cannot give; use a direct subagent when only one specialist is needed. With `/workflow-mode on` (the Pi analogue of Claude Code's ultracode) substantive tasks are orchestrated by default — the opt-in gate lives at the mode toggle, and the ON directive is deliberately unhedged.
+- Workflow selection is graduated: `explicit` is the default and requires a direct user request; `proactive` delegates only when several independent agents or repeatable orchestration materially improve the outcome; `ultracode` is a session-only opt-in for orchestration-heavy work and temporarily raises reasoning to `xhigh`. A few delegated tasks belong in direct subagents.
 - Ask `workflow_run` for `mode: "guide"` when authoring. The complete contract is intentionally omitted from ordinary turns.
 - Begin with a pure `export const meta = { version: 2, name, description, phases, dependencies? }` literal. Version 2 uses fail-fast child semantics; unversioned saved scripts retain the legacy nullable-failure behavior for compatibility. The remaining plain JavaScript body may use only injected `agent`, `parallel`, `pipeline`, `phase`, `log`, `workflow`, `args`, and `budget` globals.
-- Let subagents do every repository, shell, file, and web action. The workflow body only orchestrates.
+- Let subagents do every repository, shell, file, and web action. The workflow body only orchestrates. Children see isolated tracked repository clones, not host home directories, global configuration, host-installed CLIs, or untracked files.
 - `agent(prompt, { schema })` uses pi-subagents' native `structured_output` validation. Invalid or missing structured output fails explicitly before display truncation.
 - `agent(prompt, { patches: [diffPath] })` seeds preserved diffs from earlier agents in the same run into a fresh writable clone for isolated review/fix stages. Use `returnMetadata: true` to receive `{ value, agentId, workspacePath, diffPath }` without scraping display text.
 - Child Bash is networkless by default. `network: true` is explicit source-approved authority; `githubAuth: true` additionally provides the host's GitHub token and implies network.
@@ -60,8 +61,9 @@ Workflow authoring guidelines:
 - Labels are display text and may repeat; persisted agent IDs are the filesystem/control identity. The compatibility phrase `Worktree changes preserved at …` in child output refers to the isolated clone path.
 - Nested workflow names must be listed in `meta.dependencies`; dynamic script paths are forbidden and nesting is limited to one level.
 - Optimise for wall-clock, not headcount: give every child one bounded deliverable it can finish in minutes, fan out wide-and-shallow, and size the fan-out to the ask. Each child is killed at its wall-clock timeout (default 20 minutes; `PI_WORKFLOW_AGENT_TIMEOUT_MINUTES`, or per-call `timeoutMs`) and counts as an ordinary child failure. Runs deadline at 2 hours by default (`PI_WORKFLOW_MAX_RUN_HOURS`, up to 24). The per-run agent cap is a runaway backstop, not a target (default 200; `PI_WORKFLOW_MAX_AGENTS_PER_RUN`, up to 1000).
-- `budget` is an output-token ceiling for workflow children only. Input/cache traffic and parent-loop output do not consume it, and it is not forwarded to pi-subagents' broader `maxTokens` resource limit.
-- Never automatically relaunch a whole failed workflow. Retry only a failed child, at most once, for a classified transient failure; deterministic provider/model, repository, input, validation, budget, and resource failures must stop or fall back to direct execution.
+- `budget` is an output-token ceiling for workflow children only. Input/cache traffic and parent-loop output do not consume it, and it is not forwarded to pi-subagents' broader `maxTokens` resource limit. Concurrent children reserve a modest 2,048 output tokens each for admission rather than monopolising a small whole-run budget.
+- Never automatically relaunch a whole failed workflow. A deterministic failure blocks further agent-initiated workflow launches until the next human request. Retry only a failed child, at most once, for a classified transient failure.
+- After launching a workflow, end the turn and wait for its completion wakeup. `workflow_status` is for user-requested status and troubleshooting, not waiting; automatic active-run checks are cooled down for 60 seconds.
 - Persisted agent state records requested model, actual model, thinking level, and model-attempt outcomes for routing diagnostics.
 - Completion execution and wake delivery are separate persisted states. `sent_unacknowledged` is honest about Pi's current lack of a durable enqueue receipt.
 

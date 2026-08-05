@@ -25,12 +25,11 @@
  * Tool allowlists remain authoritative. The normal tool description is compact; mode:'guide'
  * returns the complete authoring contract only when it is needed.
  *
- * Workflow mode (/workflow-mode on, or PI_WORKFLOW_MODE) is the Pi analogue of Claude Code's
- * ultracode: an explicit user opt-in that flips the default from "work inline" to "orchestrate
- * substantive tasks". The gate lives at the mode toggle, not inside the mode — once ON, the
- * directive is unhedged. What keeps runs fast is wall-clock discipline (bounded per-child
- * deliverables and timeouts, pipeline over barriers, wide-and-shallow fan-out), not fan-out
- * quotas.
+ * Workflow selection mirrors Codex/Claude's graduated policy: explicit-only by default,
+ * conservative proactive delegation when several independent agents materially improve the
+ * outcome, and session-only ultracode for deliberate orchestration-heavy work. The runtime
+ * remains available independently of selection policy; bounded children, isolated clones,
+ * delivery wakeups, and budgets are enforcement rather than permission to broaden scope.
  */
 
 import { execFile as execFileCb } from "node:child_process";
@@ -276,7 +275,9 @@ const MAX_CONCURRENT_AGENTS = Math.max(1, Math.min(16, os.cpus().length - 2));
 const MAX_AGENTS_PER_RUN = parseMaxAgentsPerRun();
 const DEFAULT_AGENT_TIMEOUT_MS = parseAgentTimeoutMs();
 const MAX_AGENT_OUTPUT_BYTES = 50 * 1024;
-const DEFAULT_AGENT_OUTPUT_RESERVATION = 16_384;
+// Admission estimate, not a per-child output target. Keep it small enough that a modest
+// whole-run budget can admit several bounded children; actual completed output is still charged.
+const DEFAULT_AGENT_OUTPUT_RESERVATION = 2_048;
 const globalAgentScheduler = new AbortableScheduler(MAX_CONCURRENT_AGENTS);
 
 class WorkflowCancelledError extends Error {
@@ -289,12 +290,21 @@ class WorkflowBudgetError extends Error {
 	constructor(message: string) { super(message); this.name = "WorkflowBudgetError"; }
 }
 
-export function workflowRetryGuidance(error: unknown): string {
+export type WorkflowFailureClass = "deterministic" | "transient" | "unknown";
+
+export function workflowFailureClass(error: unknown): WorkflowFailureClass {
 	const message = error instanceof Error ? error.message : String(error ?? "");
-	if (/resource limit|token budget|exhausted its token budget|no models? match|model .*not found|failed to load model|unknown agent|requires a git repository|repository changed|missing|not approved|invalid|forbidden|schema/i.test(message)) {
-		return "Retry policy: deterministic configuration/input/resource failure. Do not relaunch the whole workflow. Fix the cause or fall back to direct execution.";
+	if (/resource limit|token budget|exhausted its token budget|no models? match|model .*not found|failed to load model|unknown agent|requires a git repository|repository changed|missing|not approved|invalid|forbidden|schema/i.test(message)) return "deterministic";
+	if (/overload|rate.?limit|\b429\b|\b502\b|\b503\b|\b504\b|ECONNRESET|ETIMEDOUT|temporar/i.test(message)) return "transient";
+	return "unknown";
+}
+
+export function workflowRetryGuidance(error: unknown): string {
+	const failureClass = workflowFailureClass(error);
+	if (failureClass === "deterministic") {
+		return "Retry policy: deterministic configuration/input/resource failure. This session is blocked from automatically launching another workflow until a new human request arrives. Fix the cause inline or report it.";
 	}
-	if (/overload|rate.?limit|\b429\b|\b502\b|\b503\b|\b504\b|ECONNRESET|ETIMEDOUT|temporar/i.test(message)) {
+	if (failureClass === "transient") {
 		return "Retry policy: potentially transient failure. Retry only the failed child, at most once; do not relaunch the whole workflow.";
 	}
 	return "Retry policy: unclassified failure. Inspect it before acting; do not automatically relaunch the whole workflow.";
@@ -332,7 +342,7 @@ let lastPi: ExtensionAPI | undefined;
 // session. The delivery WAKES the agent (triggerTurn), so the framing tells it the message
 // is an automated completion notification it should act on — not a user prompt.
 const WORKFLOW_RESULT_BANNER =
-	"[Automated background notification — NOT a user message. A workflow you launched has finished. Read the fleet-state note at the END of this message before responding: if OTHER runs you launched are still active, do NOT produce a final answer or complete report — acknowledge progress at most and wait to be woken again. Only when the fleet-state note says all reports are in should you act on the combined results (e.g. launch the next phase) or produce the final synthesis for the user.]";
+	"[Automated background notification — NOT a user message. Read the fleet-state note at the END. If other runs remain active, acknowledge briefly and end the turn without polling. If this result was already handled, superseded, or reported to the user, produce no additional user-visible message. Do not launch another workflow unless a new human request explicitly asks for it.]";
 
 function parseBudgetEnv(): number | null {
 	const raw = process.env.PI_WORKFLOW_BUDGET?.trim();
@@ -494,66 +504,161 @@ export async function prepareWorkflow(
 	};
 }
 
-type WorkflowMode = { enabled: boolean; source: "command" | "env" | "default" };
+export type WorkflowModeName = "explicit" | "proactive" | "ultracode";
+type WorkflowMode = { name: WorkflowModeName; source: "command" | "env" | "session" | "default" };
+type StoredWorkflowMode = { mode?: unknown; enabled?: unknown } | null;
 
-function parseEnvFlag(raw: string | undefined): boolean | undefined {
-	if (raw === undefined) return undefined;
+const sessionWorkflowModes = new Map<string, WorkflowModeName>();
+const sessionPreviousThinkingLevels = new Map<string, ThinkingLevel>();
+const currentTurnPrompts = new Map<string, string>();
+const deterministicFailureBlocks = new Map<string, { runId: string; reason: string }>();
+const workflowStatusChecks = new Map<string, number>();
+
+function sessionKey(ctx?: any): string {
+	try { return ctx?.sessionManager?.getSessionFile?.() ?? "unknown-session"; } catch { return "unknown-session"; }
+}
+
+export function parseWorkflowModeValue(raw: unknown): WorkflowModeName | undefined {
+	if (typeof raw === "boolean") return raw ? "proactive" : "explicit";
+	if (typeof raw !== "string") return undefined;
 	const value = raw.trim().toLowerCase();
-	if (["1", "true", "on", "yes"].includes(value)) return true;
-	if (["0", "false", "off", "no", ""].includes(value)) return false;
+	if (["1", "true", "on", "yes", "proactive"].includes(value)) return "proactive";
+	if (["0", "false", "off", "no", "", "explicit", "explicit-only"].includes(value)) return "explicit";
+	if (["ultra", "ultracode"].includes(value)) return "ultracode";
 	return undefined;
 }
 
-// Standing workflow mode: an explicit /workflow-mode choice (persisted) wins; otherwise the
-// PI_WORKFLOW_MODE env var sets the default for headless/automation runs; otherwise off.
-function readWorkflowMode(): WorkflowMode {
-	const stored = readJsonFile<{ enabled?: unknown } | null>(WORKFLOW_MODE_FILE, null);
-	if (stored && typeof stored.enabled === "boolean") return { enabled: stored.enabled, source: "command" };
-	const envFlag = parseEnvFlag(process.env.PI_WORKFLOW_MODE);
-	if (envFlag !== undefined) return { enabled: envFlag, source: "env" };
-	return { enabled: false, source: "default" };
+export function resolveStoredWorkflowMode(stored: StoredWorkflowMode): WorkflowModeName | undefined {
+	if (!stored) return undefined;
+	const namedMode = parseWorkflowModeValue(stored.mode);
+	if (namedMode) return namedMode;
+	// Old boolean consent covered a policy whose meaning changed repeatedly. Expire it safely;
+	// users can opt into the new, named proactive mode with informed semantics.
+	if (typeof stored.enabled === "boolean") return "explicit";
+	return undefined;
 }
 
-async function writeWorkflowMode(enabled: boolean): Promise<void> {
-	await writeJsonFile(WORKFLOW_MODE_FILE, { enabled });
+// A session-only ultracode choice wins. Persisted and environment settings may select only the
+// conservative explicit/proactive modes; legacy boolean settings expire to explicit-only.
+function readWorkflowMode(ctx?: any): WorkflowMode {
+	const key = sessionKey(ctx ?? lastCtx);
+	const sessionMode = sessionWorkflowModes.get(key);
+	if (sessionMode) return { name: sessionMode, source: "session" };
+	const stored = resolveStoredWorkflowMode(readJsonFile<StoredWorkflowMode>(WORKFLOW_MODE_FILE, null));
+	if (stored) return { name: stored === "ultracode" ? "proactive" : stored, source: "command" };
+	const envMode = parseWorkflowModeValue(process.env.PI_WORKFLOW_MODE);
+	if (envMode) return { name: envMode === "ultracode" ? "proactive" : envMode, source: "env" };
+	return { name: "explicit", source: "default" };
+}
+
+async function writeWorkflowMode(mode: Exclude<WorkflowModeName, "ultracode">): Promise<void> {
+	await writeJsonFile(WORKFLOW_MODE_FILE, { mode });
 }
 
 async function clearWorkflowMode(): Promise<void> {
 	await fs.promises.rm(WORKFLOW_MODE_FILE, { force: true });
 }
 
-export function workflowModeGuidance(enabled: boolean): string {
-	if (!enabled) {
-		return "Default to handling tasks yourself. Reach for workflow_run only when serial work cannot provide the required independent breadth, risk reduction, or scale. Use one direct subagent instead when only one specialist is needed. (Enable standing orchestration with /workflow-mode on.)";
+const WORKFLOW_SCOPE_DISCIPLINE =
+	"Scope discipline: diagnosing, explaining, reviewing, or reporting does not authorise implementation, unrelated investigation, or extra verification. Coordination has a real latency and token cost; use it only when it materially changes the outcome.";
+
+export function explicitWorkflowRequested(prompt: string): boolean {
+	if (!prompt || prompt.startsWith(WORKFLOW_RESULT_BANNER)) return false;
+	return /\bultracode\b|\bworkflow_run\b|\b(?:use|run|launch|create|write|author|start)\b[^\n]{0,40}\bworkflows?\b|\bparallel\s+(?:agent|subagent)\s*work\b/i.test(prompt);
+}
+
+export function explicitWorkflowStatusRequested(prompt: string): boolean {
+	if (!prompt || prompt.startsWith(WORKFLOW_RESULT_BANNER)) return false;
+	return /\b(?:check|show|inspect|what(?:'s| is))\b[^\n]{0,40}\bworkflow\s+(?:status|progress)|\bworkflow_status\b/i.test(prompt);
+}
+
+export function workflowHostDependencyReason(source: string, args = ""): string | undefined {
+	const text = `${source}\n${args}`;
+	if (/(?:^|[\s"'`(])(?:~\/|\$HOME\/|\/home\/|\/Users\/|\/root\/|~\/\.pi|~\/\.config)/m.test(text)) {
+		return "Workflow children run in isolated repository clones and cannot access host home directories or absolute host paths. Inspect that state directly or use one direct subagent with the required access.";
+	}
+	if (/\b(?:host|global)\s+(?:configuration|config|environment|installation)\b|\binstalled\s+(?:CLI|binary|tool)\b/i.test(text)) {
+		return "This workflow asks children to inspect host-only configuration or installed tools, which isolated workflow clones cannot access. Perform that investigation directly.";
+	}
+	return undefined;
+}
+
+const WORKFLOW_STATUS_COOLDOWN_MS = 60_000;
+
+export function workflowStatusCooldownRemaining(lastCheckedAt: number | undefined, now = Date.now()): number {
+	if (!lastCheckedAt) return 0;
+	return Math.max(0, WORKFLOW_STATUS_COOLDOWN_MS - (now - lastCheckedAt));
+}
+
+export function workflowHasOrchestrationScale(source: string): boolean {
+	if (/\b(?:pipeline|workflow)\s*\(/.test(source)) return true;
+	return (source.match(/\bagent\s*\(/g) ?? []).length >= 3;
+}
+
+export function workflowLaunchPolicyReason(input: {
+	mode: WorkflowModeName;
+	prompt: string;
+	deterministicBlock?: { runId: string; reason: string };
+	source?: string;
+	args?: string;
+}): string | undefined {
+	if (input.deterministicBlock) {
+		return `Workflow relaunch blocked after deterministic failure ${input.deterministicBlock.runId}: ${input.deterministicBlock.reason}\nWait for a new human request and work inline instead.`;
+	}
+	const explicitlyRequested = explicitWorkflowRequested(input.prompt);
+	if (input.mode === "explicit" && !explicitlyRequested) {
+		return "Workflow mode is explicit-only and the current human request did not ask for workflow orchestration. Work inline or use one direct subagent.";
+	}
+	if (input.source !== undefined) {
+		const hostReason = workflowHostDependencyReason(input.source, input.args ?? "");
+		if (hostReason) return hostReason;
+		if (input.mode === "proactive" && !explicitlyRequested && !workflowHasOrchestrationScale(input.source)) {
+			return "Proactive mode rejected a workflow that does not demonstrate workflow-scale orchestration. Use direct execution or one focused subagent; reserve workflows for a pipeline, nested workflow, or at least three independent agents.";
+		}
+	}
+	return undefined;
+}
+
+export function workflowModeGuidance(mode: WorkflowModeName): string {
+	if (mode === "explicit") {
+		return [
+			"Workflow mode is EXPLICIT-ONLY. Do not launch workflow_run unless the user explicitly asks for a workflow, ultracode, or parallel multi-agent work.",
+			"Handle ordinary investigation, implementation, review, and verification directly. One focused direct subagent remains appropriate when its isolated context materially helps.",
+			WORKFLOW_SCOPE_DISCIPLINE,
+		].join(" ");
+	}
+	if (mode === "proactive") {
+		return [
+			"Proactive workflow mode is active. Use workflow_run only when parallel work would materially improve speed or quality and the job needs several independent agents, codified/repeatable orchestration, or work too large for one conversation.",
+			"A few delegated tasks belong in direct subagents, not a workflow. Confidence alone is not a trigger; reserve independent verification for security, migrations, infrastructure, destructive changes, public contracts, or similarly costly decisions.",
+			"Never relaunch a whole workflow after a deterministic failure. Work inline or wait for a new explicit user request.",
+			WORKFLOW_SCOPE_DISCIPLINE,
+		].join(" ");
 	}
 	return [
-		"Workflow mode is ON. This is a STANDING directive: for every substantive task — anything needing breadth (a surface too large to cover serially), confidence (independent perspectives or adversarial verification before a risky output), or scale (more than one context can hold) — author and run a workflow by DEFAULT instead of doing the work serially yourself.",
-		"Handle only trivial, mechanical, or conversational turns inline, and use one direct subagent when a single specialist or focused second opinion suffices.",
-		"Optimise for wall-clock, not headcount: scout the work-list inline first, then fan out wide-and-shallow. Give every child ONE bounded deliverable it can finish in minutes, and pipeline stages instead of collecting behind barriers.",
-		"Size the fan-out to the ask — a quick check gets a couple of agents; a thorough audit gets a wide finder pool plus a verification pass. Expand only while novel yield justifies the added wall time.",
-		"For multi-phase work run several workflows in sequence and act on each report as it arrives (the tool wakes you when each finishes).",
+		"Ultracode workflow mode is active for THIS SESSION ONLY. Plan workflows for substantive tasks when several agents or codified orchestration genuinely fit; routine, sequential, host-environment, and single-review tasks still stay direct.",
+		"Optimise for bounded wall-clock and use lower effort for mechanical stages. Never relaunch after a deterministic failure, and stop expanding when new agents no longer add evidence.",
+		WORKFLOW_SCOPE_DISCIPLINE,
 	].join(" ");
 }
 
-// Injected into the main agent's system prompt before each turn. When workflow mode is ON this
-// carries a STANDING orchestrate-by-default directive (the Pi analogue of Claude Code's
-// ultracode); when OFF it states the conservative default. It also lists runnable saved
-// workflows and subagents.
-function buildWorkflowSystemPromptAddendum(cwd: string): string | null {
-	const mode = readWorkflowMode();
+// Inject the selected routing policy, active-run lifecycle, and available workflow roster.
+// Explicit mode stays quiet when no workflow surface is present.
+function buildWorkflowSystemPromptAddendum(cwd: string, ctx?: any): string | null {
+	const mode = readWorkflowMode(ctx);
 	const workflows = discoverWorkflows(cwd);
-	if (!mode.enabled && workflows.length === 0 && listInFlightRuns().length === 0) return null;
+	if (mode.name === "explicit" && workflows.length === 0 && listInFlightRuns().length === 0) return null;
 
 	const sections: string[] = ["## Workflow orchestration (workflow_run tool)"];
 
 	const inFlight = listInFlightRuns();
 	if (inFlight.length > 0) {
 		sections.push(
-			`ACTIVE workflow runs (their reports have NOT been delivered yet):\n${inFlight.map(describeRunLine).join("\n")}\nThese runs are still executing, so their results do not exist yet. Do NOT present final conclusions or a complete report this turn — deliver at most a partial summary that explicitly names the runs still pending. You will be woken with each run's report as it finishes; check progress with the workflow_status tool.`,
+			`ACTIVE workflow runs (their reports have NOT been delivered yet):\n${inFlight.map(describeRunLine).join("\n")}\nThese results do not exist yet. Do NOT present final conclusions, call workflow_status to wait, or launch replacements. End the turn after a brief progress acknowledgment; completion will wake the session.`,
 		);
 	}
 
-	sections.push(workflowModeGuidance(mode.enabled));
+	sections.push(workflowModeGuidance(mode.name));
 
 	const workflowLines = workflows.length
 		? workflows.map((w) => `- ${w.name} (${w.scope})`).join("\n")
@@ -895,6 +1000,12 @@ function workflowRemaining(run: RunState): number {
 	return Math.max(0, run.budgetTotal - workflowSpent(run) - (run.budgetReserved ?? 0));
 }
 
+export function workflowOutputReservation(run: RunState): number {
+	const remaining = workflowRemaining(run);
+	if (run.budgetTotal == null || remaining <= 0) return 0;
+	return Math.max(1, Math.min(DEFAULT_AGENT_OUTPUT_RESERVATION, remaining));
+}
+
 const persistenceQueues = new Map<string, Promise<void>>();
 
 export async function persistRun(run: RunState, event: Record<string, unknown>): Promise<void> {
@@ -997,9 +1108,9 @@ export function describeRunLine(run: RunState): string {
 export function buildFleetStateNoteFor(runs: Iterable<RunState>, excludeId?: string): string {
 	const pending = reportsPendingOf(runs, excludeId);
 	if (pending.length === 0) {
-		return "Fleet state: no other workflow executions or undelivered reports remain — every report from the runs you launched is now in. It is safe to synthesise the final answer (or launch the next phase) now.";
+		return "Fleet state: no other workflow executions or undelivered reports remain. Use this report in the current human request; do not launch another workflow unless the user explicitly asks.";
 	}
-	return `Fleet state: ⚠ ${pending.length} other workflow report(s) you launched are NOT YET DELIVERED:\n${pending.map(describeRunLine).join("\n")}\nDo NOT produce a final answer or complete report yet — acknowledge progress at most; you will be woken as reports are delivered (check progress with the workflow_status tool).`;
+	return `Fleet state: ⚠ ${pending.length} other workflow report(s) are NOT YET DELIVERED:\n${pending.map(describeRunLine).join("\n")}\nAcknowledge progress briefly, end the turn, and wait for completion. Do not poll or launch replacements.`;
 }
 
 function buildFleetStateNote(excludeId?: string): string {
@@ -1253,7 +1364,7 @@ async function executePreparedWorkflow(
 			engine.counters.agentCount++;
 			if (engine.counters.agentCount > MAX_AGENTS_PER_RUN) throw new Error(`Workflow exceeded the per-run agent limit (${MAX_AGENTS_PER_RUN}).`);
 			const remaining = workflowRemaining(run);
-			if (run.budgetTotal != null && remaining <= 0) throw new WorkflowBudgetError(`Workflow exhausted its token budget (${run.budgetTotal} output tokens; spent ${workflowSpent(run)}).`);
+			if (run.budgetTotal != null && remaining <= 0) throw new WorkflowBudgetError(`Workflow exhausted its token budget (${run.budgetTotal} output tokens; spent ${workflowSpent(run)}, reserved ${run.budgetReserved ?? 0}). Omit the budget or raise it before launching parallel children; do not relaunch the whole workflow automatically.`);
 			if (opts.schema !== undefined && (!opts.schema || typeof opts.schema !== "object" || Array.isArray(opts.schema))) throw new Error("agent schema must be a JSON Schema object.");
 			if (opts.patches !== undefined && (!Array.isArray(opts.patches) || opts.patches.some((value) => typeof value !== "string"))) throw new Error("agent patches must be an array of preserved diff paths returned by earlier agents in this run.");
 			if (opts.network !== undefined && typeof opts.network !== "boolean") throw new Error("agent network must be a boolean.");
@@ -1265,7 +1376,7 @@ async function executePreparedWorkflow(
 			const invocationId = `agent-${sequence.toString().padStart(4, "0")}`;
 			const label = typeof opts.label === "string" && opts.label.trim() ? opts.label.trim() : invocationId;
 			const allowFailure = opts.allowFailure === true || (opts.allowFailure === undefined && prepared.meta.version !== 2);
-			const reservation = run.budgetTotal == null ? 0 : Math.max(1, Math.min(DEFAULT_AGENT_OUTPUT_RESERVATION, remaining));
+			const reservation = workflowOutputReservation(run);
 			run.budgetReserved = (run.budgetReserved ?? 0) + reservation;
 			const record: AgentRecord = {
 				id: invocationId,
@@ -1460,6 +1571,9 @@ async function startRun(pi: ExtensionAPI, prepared: PreparedWorkflow, args: stri
 			transitionRunStatus(run, terminalStatus);
 			run.error = reason instanceof Error ? reason.message : String(reason);
 			run.endedAt = Date.now();
+			if (workflowFailureClass(run.error) === "deterministic") {
+				deterministicFailureBlocks.set(run.ownerSession ?? "unknown-session", { runId: run.id, reason: run.error });
+			}
 			await persistRun(run, { type: "run_end", status: run.status, error: run.error });
 			await drainPersistence(run);
 			await safeSendWorkflowMessage(run, `# Workflow ${run.status}: ${run.name}\n\n${run.error}\n\n${workflowRetryGuidance(run.error)}\n\nRun: ${run.id}\nDetails: ${run.runDir}`);
@@ -1816,7 +1930,9 @@ Injected globals (do NOT import anything — these are already in scope):
 
 agentType selects the subagent (these are real Pi subagents): default "delegate". Specialists include scout, researcher, planner, reviewer, worker, oracle, and context-builder; Claude-style aliases map to them. Every child receives a unique detached clone containing the pinned launch checkout's tracked state. Non-ignored untracked files are deliberately omitted and listed in run events to avoid copying secrets.
 
-Speed and scale (wall-clock is what fails first, not token spend):
+Eligibility, speed, and scale:
+- Use a workflow for several independent agents, repeatable/codified orchestration, or work too large for one conversation. A single review or a few delegated tasks belongs in direct subagents.
+- Workflow children see isolated repository clones only. Never assign host home directories, global configuration, host-installed CLIs, or other machine-local state.
 - Wall-clock is the slowest single CHAIN of children, not the agent count. Fan out wide-and-shallow; avoid chains more than two or three stages deep.
 - Give every child ONE bounded deliverable it can finish in minutes. Split anything open-ended — a child told to "investigate everything" is the main cause of runs that take hours. The per-child timeout kills stragglers, but bound the TASK, not just the clock.
 - Size the fan-out to the ask: "find any bugs" warrants a few finders; "thoroughly audit this" warrants a wide finder pool plus a verification pass. Expand only while novel yield justifies the added wall time.
@@ -1840,7 +1956,7 @@ Hard constraints (the script is validated and REJECTED if violated):
 
 // Keep the always-present tool contract compact. The model explicitly requests mode:'guide'
 // before authoring, while generate mode receives the full guide in its dedicated model call.
-const WORKFLOW_RUN_DESCRIPTION = `Launch a persisted background multi-agent workflow for breadth (a surface too large to cover serially), confidence (independent or adversarial verification), or scale (more than one context can hold). Prefer direct execution or one direct subagent when a single specialist suffices. Optimise for wall-clock: give each child one bounded deliverable, pipeline stages instead of collecting behind barriers, fan out wide-and-shallow, and size the fan-out to the ask. Modes: saved, script, generate, and guide. Call mode:'guide' for the authoring contract before writing your first script of the session. Runs execute autonomously after validation in a killable, networkless, filesystem-isolated subprocess. Every child runs in a path-confined isolated Git clone. Project-provided saved workflows retain one-time immutable-snapshot approval. The tool returns immediately; workflow_status shows queued/running agents and transcript tails, and completion is queued back to the owner session.`;
+const WORKFLOW_RUN_DESCRIPTION = `Launch a persisted background multi-agent workflow when the user explicitly requests one, or when proactive/ultracode mode determines that several independent agents, repeatable orchestration, or work beyond one conversation would materially improve the outcome. A few delegated tasks belong in direct subagents. Routine confidence checks, single reviews, and host-environment investigation do not qualify. Modes: saved, script, generate, and guide. Call mode:'guide' before authoring the first script of a session. Children run in isolated repository clones without host home/config access. After launch, end the turn; completion wakes the session automatically. Never relaunch after a deterministic failure.`;
 
 const FLOW_GENERATOR_SYSTEM_PROMPT = `You generate workflow scripts for a deterministic multi-agent orchestrator that fans work out across many bounded-concurrency subagents. Return exactly ONE JavaScript module, no prose, no code fence.
 
@@ -1944,6 +2060,17 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		lastCtx = ctx;
+		const key = sessionKey(ctx);
+		// Ultracode and per-turn launch/status guards never leak into a new session.
+		const previousThinking = [...sessionPreviousThinkingLevels.values()].at(-1);
+		if (previousThinking) pi.setThinkingLevel(previousThinking);
+		sessionWorkflowModes.clear();
+		sessionPreviousThinkingLevels.clear();
+		currentTurnPrompts.delete(key);
+		deterministicFailureBlocks.delete(key);
+		for (const statusKey of workflowStatusChecks.keys()) {
+			if (statusKey.startsWith(`${key}:`)) workflowStatusChecks.delete(statusKey);
+		}
 		// Respect the host/user's active-tool policy. In particular, do not override an explicit
 		// --tools allowlist by force-enabling workflow tools.
 		const owner = currentSessionFile();
@@ -1973,7 +2100,10 @@ export default function (pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event, ctx) => {
 		try {
 			if (typeof event.systemPrompt !== "string") return;
-			const addendum = buildWorkflowSystemPromptAddendum(ctx.cwd);
+			const key = sessionKey(ctx);
+			currentTurnPrompts.set(key, event.prompt);
+			if (!event.prompt.startsWith(WORKFLOW_RESULT_BANNER)) deterministicFailureBlocks.delete(key);
+			const addendum = buildWorkflowSystemPromptAddendum(ctx.cwd, ctx);
 			if (!addendum) return;
 			return { systemPrompt: `${event.systemPrompt}\n\n${addendum}` };
 		} catch {
@@ -1983,34 +2113,58 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("workflow-mode", {
-		description: "Standing workflow mode — nudge the agent to orchestrate substantial tasks: /workflow-mode [on|off|auto|status]",
+		description: "Workflow selection policy: /workflow-mode [explicit|proactive|ultracode|auto|status]",
 		handler: async (input, ctx) => {
 			const arg = (input || "").trim().toLowerCase();
-			const describe = () => {
-				const mode = readWorkflowMode();
-				const source = mode.source === "command" ? "set explicitly" : mode.source === "env" ? "from PI_WORKFLOW_MODE" : "default";
-				return `Workflow mode: ${mode.enabled ? "on" : "off"} (${source}).`;
+			const key = sessionKey(ctx);
+			const leaveUltracode = () => {
+				const previousThinking = sessionPreviousThinkingLevels.get(key);
+				if (previousThinking) pi.setThinkingLevel(previousThinking);
+				sessionPreviousThinkingLevels.delete(key);
+				sessionWorkflowModes.delete(key);
 			};
-			if (arg === "status") {
+			const describe = () => {
+				const mode = readWorkflowMode(ctx);
+				const source = mode.source === "command"
+					? "persisted"
+					: mode.source === "env"
+						? "from PI_WORKFLOW_MODE"
+						: mode.source === "session"
+							? "this session only"
+							: "default";
+				return `Workflow mode: ${mode.name} (${source}).`;
+			};
+			if (arg === "" || arg === "status") {
 				ctx.ui.notify(describe(), "info");
 				return;
 			}
 			if (arg === "auto") {
+				leaveUltracode();
 				await clearWorkflowMode();
-				ctx.ui.notify(`Cleared explicit workflow mode. ${describe()}`, "info");
+				ctx.ui.notify(`Cleared workflow override. ${describe()}`, "info");
 				return;
 			}
-			if (arg === "on" || arg === "off") {
-				await writeWorkflowMode(arg === "on");
+			if (arg === "ultra" || arg === "ultracode") {
+				if (!sessionPreviousThinkingLevels.has(key)) sessionPreviousThinkingLevels.set(key, pi.getThinkingLevel());
+				pi.setThinkingLevel("xhigh");
+				sessionWorkflowModes.set(key, "ultracode");
+				ctx.ui.notify(`${describe()} Reasoning set to xhigh and restored when you leave ultracode.`, "warning");
+				return;
+			}
+			if (["proactive", "on", "explicit", "explicit-only", "off"].includes(arg)) {
+				leaveUltracode();
+				await writeWorkflowMode(arg === "proactive" || arg === "on" ? "proactive" : "explicit");
 				ctx.ui.notify(describe(), "info");
 				return;
 			}
-			if (arg === "" || arg === "toggle") {
-				await writeWorkflowMode(!readWorkflowMode().enabled);
+			if (arg === "toggle") {
+				const nextMode = readWorkflowMode(ctx).name === "explicit" ? "proactive" : "explicit";
+				leaveUltracode();
+				await writeWorkflowMode(nextMode);
 				ctx.ui.notify(describe(), "info");
 				return;
 			}
-			ctx.ui.notify("Usage: /workflow-mode [on|off|auto|status]", "warning");
+			ctx.ui.notify("Usage: /workflow-mode [explicit|proactive|ultracode|auto|status]", "warning");
 		},
 	});
 
@@ -2304,12 +2458,18 @@ return "## Smoke test results\\n\\n" + results.map((r, i) => "### agent " + (i +
 		promptSnippet:
 			"Launch a safe background multi-agent workflow, inspect status, or retrieve the authoring guide with mode:'guide'.",
 		promptGuidelines: [
-			"Use workflow_run for breadth, confidence, or scale that changes the outcome; work inline or with one direct subagent otherwise.",
-			"Call workflow_run with mode:'guide' before authoring your first script of the session. Give each child one bounded deliverable and prefer pipeline over barriers so wall-clock tracks the slowest single item, not the sum of stages.",
-			"Workflow child failures propagate unless allowFailure:true is explicit; native schemas are validated, cache is opt-in, and every child uses a path-confined isolated Git clone.",
-			"After launch, do not finalise while workflow_status reports active runs; completion is queued back to the owner session.",
+			"In explicit mode, call workflow_run only when the user asks for a workflow, ultracode, or parallel multi-agent work. In proactive mode, require several independent agents or repeatable orchestration that materially improves the outcome.",
+			"Routine confidence checks and single reviews do not qualify. Workflow children cannot inspect host home directories, global configuration, or host-only CLIs.",
+			"Call workflow_run with mode:'guide' before authoring your first script of the session. Give each child one bounded deliverable and prefer pipeline over barriers.",
+			"After launch, END THE TURN. Do not poll workflow_status to wait; completion wakes the session automatically. Never relaunch after a deterministic failure.",
 		],
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<any> {
+			const key = sessionKey(ctx);
+			const block = deterministicFailureBlocks.get(key);
+			const workflowMode = readWorkflowMode(ctx);
+			const currentPrompt = currentTurnPrompts.get(key) ?? "";
+			const launchPolicyReason = workflowLaunchPolicyReason({ mode: workflowMode.name, prompt: currentPrompt, deterministicBlock: block });
+			if (launchPolicyReason) throw new Error(launchPolicyReason);
 			if (params.mode === "guide") return { content: [{ type: "text", text: WORKFLOW_AUTHORING_GUIDE }], details: { mode: "guide" } };
 			const launchMode = params.mode;
 			let prepared: PreparedWorkflow;
@@ -2339,13 +2499,17 @@ return "## Smoke test results\\n\\n" + results.map((r, i) => "### agent " + (i +
 					await atomicWriteFile(filePath, source);
 				}
 			}
+			const sourcePolicyReason = workflowLaunchPolicyReason({ mode: workflowMode.name, prompt: currentPrompt, source: prepared.source, args: params.args ?? "" });
+			if (sourcePolicyReason) throw new Error(sourcePolicyReason);
 			if (!(await ensureWorkflowApproved(prepared, ctx))) throw new Error("Workflow not approved.");
 			const run = await startRun(pi, prepared, params.args ?? "", ctx, { budget: params.budget });
+			workflowStatusChecks.set(`${key}:fleet`, Date.now());
+			workflowStatusChecks.set(`${key}:${run.id}`, Date.now());
 			const inFlightCount = listInFlightRuns().length;
 			return {
 				content: [{
 					type: "text",
-					text: `Started workflow ${run.name} (${run.id}) in the background. Details: ${run.runDir}\n\nYou will be WOKEN with the full report when it finishes; until then its results do NOT exist — do not guess at them. ${inFlightCount} workflow run(s) are now in flight. If you end your turn now, end with a brief acknowledgment that work is in progress; do NOT produce a final answer or complete report until every launched run has delivered its report (check with workflow_status).`,
+					text: `Started workflow ${run.name} (${run.id}) in the background. Details: ${run.runDir}\n\nEND THIS TURN NOW with one brief acknowledgment. Do not call workflow_status to wait and do not launch replacement workflows. You will be WOKEN with the full report when it finishes; until then its results do not exist. ${inFlightCount} workflow run(s) are in flight.`,
 				}],
 				details: run,
 			};
@@ -2356,20 +2520,46 @@ return "## Smoke test results\\n\\n" + results.map((r, i) => "### agent " + (i +
 		name: "workflow_status",
 		label: "Workflow Status",
 		description:
-			"Check the status of background workflow runs launched with workflow_run. With no arguments, returns a fleet summary: which runs are still in flight (their reports have NOT been delivered yet — do not finalise your answer while any are) and which have finished. Pass runId (or an id prefix) for one run's phases/agents/report; add agentLabel for a single agent's task and output, and tailLines to tail its live session transcript — this shows a RUNNING agent's output-so-far (assistant text + tool calls), like peeking at a background shell. Use it to confirm nothing is pending before presenting a final answer; do not poll it in a tight loop — each run wakes you automatically when it completes.",
+			"Inspect a workflow only when the user asks for status or troubleshooting requires live output. Do not use this tool to wait: after workflow_run, end the turn and let completion wake the session. Active-run checks are rate-limited for 60 seconds. Terminal reports remain available by run id.",
 		parameters: WorkflowStatusParams,
 		promptSnippet:
 			"Check background workflow runs: which are still in flight (never finalise an answer while any are) and which have finished, or inspect one run/agent in detail.",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<any> {
+			const key = sessionKey(ctx);
+			const currentPrompt = currentTurnPrompts.get(key) ?? "";
+			const userRequestedStatus = explicitWorkflowStatusRequested(currentPrompt);
 			const id = params.runId?.trim();
 			if (id) {
 				const run =
 					Array.from(activeRuns.values()).find((r) => r.id === id || r.id.startsWith(id)) ??
 					listPersistedRuns(ctx.cwd).find((r) => r.id === id || r.id.startsWith(id));
 				if (!run) throw new Error(`Run not found: ${id}`);
+				if (!TERMINAL_RUN_STATUSES.has(run.status) && !userRequestedStatus) {
+					const statusKey = `${key}:${run.id}`;
+					const remaining = workflowStatusCooldownRemaining(workflowStatusChecks.get(statusKey));
+					if (remaining > 0) {
+						return {
+							content: [{ type: "text", text: `Workflow ${run.id} is still ${run.status}. Do not poll to wait; end the turn and wait for the completion notification. Another automatic check is blocked for ${Math.ceil(remaining / 1000)}s.` }],
+							details: { runId: run.id, status: run.status, cooldownMs: remaining },
+						};
+					}
+					workflowStatusChecks.set(statusKey, Date.now());
+				}
 				return { content: [{ type: "text", text: workflowRunDetails(run, params.agentLabel?.trim() || undefined, params.tailLines) }], details: { runId: run.id, status: run.status } };
 			}
-			return { content: [{ type: "text", text: workflowFleetStatus(ctx.cwd) }], details: { executing: listInFlightRuns().map((run) => run.id) } };
+			const inFlight = listInFlightRuns();
+			if (inFlight.length > 0 && !userRequestedStatus) {
+				const statusKey = `${key}:fleet`;
+				const remaining = workflowStatusCooldownRemaining(workflowStatusChecks.get(statusKey));
+				if (remaining > 0) {
+					return {
+						content: [{ type: "text", text: `Workflow execution is still in progress. Do not poll to wait; end the turn and wait for completion. Another automatic fleet check is blocked for ${Math.ceil(remaining / 1000)}s.` }],
+						details: { executing: inFlight.map((run) => run.id), cooldownMs: remaining },
+					};
+				}
+				workflowStatusChecks.set(statusKey, Date.now());
+			}
+			return { content: [{ type: "text", text: workflowFleetStatus(ctx.cwd) }], details: { executing: inFlight.map((run) => run.id) } };
 		},
 	});
 }

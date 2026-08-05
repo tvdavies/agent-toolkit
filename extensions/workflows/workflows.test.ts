@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { belongsToSession, buildFleetStateNoteFor, listPersistedRuns, pruneExpiredRuns, runBaseDir, runStorageDirs, describeRunLine, extractMeta, inFlightRunsOf, reportsPendingOf, transitionRunStatus, type RunState, validateScript, workflowModeGuidance, workflowOutputSpent, workflowRetryGuidance, workflowSourceRequiresApproval } from "./index.ts";
+import { belongsToSession, buildFleetStateNoteFor, describeRunLine, explicitWorkflowRequested, explicitWorkflowStatusRequested, extractMeta, inFlightRunsOf, listPersistedRuns, parseWorkflowModeValue, pruneExpiredRuns, reportsPendingOf, resolveStoredWorkflowMode, runBaseDir, runStorageDirs, transitionRunStatus, type RunState, validateScript, workflowFailureClass, workflowHasOrchestrationScale, workflowHostDependencyReason, workflowLaunchPolicyReason, workflowModeGuidance, workflowOutputReservation, workflowOutputSpent, workflowRetryGuidance, workflowSourceRequiresApproval, workflowStatusCooldownRemaining } from "./index.ts";
 import { freshAgentSessionPath, renderSessionTail } from "./runner.ts";
 
 function makeRun(over: Partial<RunState> = {}): RunState {
@@ -47,10 +47,10 @@ describe("workflows — fleet state (pending-run awareness)", () => {
 		expect(inFlightRunsOf(runs, "a").map((r) => r.id)).toEqual(["b"]);
 	});
 
-	test("all reports in -> explicit safe-to-finalise note", () => {
+	test("all reports in -> explicit no-relaunch note", () => {
 		const note = buildFleetStateNoteFor([makeRun({ id: "done", status: "succeeded" })], "done");
 		expect(note).toContain("no other workflow executions or undelivered reports remain");
-		expect(note).toContain("safe to synthesise");
+		expect(note).toContain("do not launch another workflow");
 	});
 
 	test("completing run is excluded so the LAST completion reads as all-in", () => {
@@ -80,11 +80,11 @@ describe("workflows — fleet state (pending-run awareness)", () => {
 			],
 		});
 		const note = buildFleetStateNoteFor([makeRun({ id: "done", status: "succeeded" }), other], "done");
-		expect(note).toContain("1 other workflow report(s) you launched are NOT YET DELIVERED");
+		expect(note).toContain("1 other workflow report(s) are NOT YET DELIVERED");
 		expect(note).toContain("security-sweep (other-run)");
 		expect(note).toContain("phase verify");
 		expect(note).toContain("agents 1/2 done");
-		expect(note).toContain("Do NOT produce a final answer");
+		expect(note).toContain("Do not poll or launch replacements");
 	});
 
 	test("describeRunLine summarises status, phase, agent progress", () => {
@@ -120,20 +120,73 @@ describe("workflows — launch approval policy", () => {
 	});
 });
 
-describe("workflows — standing orchestration mode", () => {
-	test("workflow mode ON is an unhedged orchestrate-by-default directive", () => {
-		const guidance = workflowModeGuidance(true);
-		expect(guidance).toContain("workflow by DEFAULT");
-		expect(guidance).toContain("wall-clock");
-		expect(guidance).toContain("ONE bounded deliverable");
-		// The gate lives at the mode toggle; the ON directive must not hedge with fan-out
-		// quotas or escalation framing that reads the same as the OFF default.
-		expect(guidance).not.toContain("ESCALATION");
-		expect(guidance).not.toContain("at most two agents");
+describe("workflows — graduated orchestration mode", () => {
+	test("explicit mode requires a direct human request", () => {
+		const guidance = workflowModeGuidance("explicit");
+		expect(guidance).toContain("EXPLICIT-ONLY");
+		expect(guidance).toContain("Do not launch workflow_run unless the user explicitly asks");
 	});
 
-	test("disabled mode recommends one direct subagent for one specialist", () => {
-		expect(workflowModeGuidance(false)).toContain("Use one direct subagent instead");
+	test("proactive mode requires material improvement and several agents", () => {
+		const guidance = workflowModeGuidance("proactive");
+		expect(guidance).toContain("materially improve speed or quality");
+		expect(guidance).toContain("several independent agents");
+		expect(guidance).toContain("Confidence alone is not a trigger");
+	});
+
+	test("ultracode is session-scoped and still excludes routine work", () => {
+		const guidance = workflowModeGuidance("ultracode");
+		expect(guidance).toContain("THIS SESSION ONLY");
+		expect(guidance).toContain("routine, sequential, host-environment, and single-review tasks still stay direct");
+	});
+
+	test("legacy persisted booleans expire to explicit-only", () => {
+		expect(resolveStoredWorkflowMode({ enabled: true })).toBe("explicit");
+		expect(resolveStoredWorkflowMode({ enabled: false })).toBe("explicit");
+		expect(resolveStoredWorkflowMode({ mode: "proactive" })).toBe("proactive");
+		expect(parseWorkflowModeValue("ultracode")).toBe("ultracode");
+	});
+
+	test("recognises only explicit workflow requests, not discussion of the extension", () => {
+		expect(explicitWorkflowRequested("Use a workflow to audit this repository")).toBe(true);
+		expect(explicitWorkflowRequested("Please run parallel agent work for these packages")).toBe(true);
+		expect(explicitWorkflowRequested("Review the workflow extension policy")).toBe(false);
+		expect(explicitWorkflowRequested("Implement the requested fix")).toBe(false);
+	});
+
+	test("recognises user-requested status without treating completion notifications as requests", () => {
+		expect(explicitWorkflowStatusRequested("Can you check the workflow status?")).toBe(true);
+		expect(explicitWorkflowStatusRequested("Please continue the implementation")).toBe(false);
+	});
+
+	test("rejects host-only workflow dependencies", () => {
+		expect(workflowHostDependencyReason('await agent("Inspect /home/me/.config/tool")')).toContain("cannot access host home directories");
+		expect(workflowHostDependencyReason('await agent("Inspect repository files")')).toBeUndefined();
+	});
+
+	test("enforces explicit request and deterministic failure launch gates", () => {
+		expect(workflowLaunchPolicyReason({ mode: "explicit", prompt: "Investigate this bug" })).toContain("explicit-only");
+		expect(workflowLaunchPolicyReason({ mode: "explicit", prompt: "Use a workflow to investigate this bug" })).toBeUndefined();
+		expect(workflowLaunchPolicyReason({
+			mode: "proactive",
+			prompt: "Investigate this bug",
+			deterministicBlock: { runId: "failed-run", reason: "token budget exhausted" },
+		})).toContain("failed-run");
+	});
+
+	test("proactive mode rejects single-agent workflows but accepts real orchestration", () => {
+		expect(workflowHasOrchestrationScale('return agent("one review")')).toBe(false);
+		expect(workflowHasOrchestrationScale('return pipeline(args, item => agent("review " + item))')).toBe(true);
+		expect(workflowLaunchPolicyReason({
+			mode: "proactive",
+			prompt: "Investigate this bug",
+			source: 'return agent("one review")',
+		})).toContain("does not demonstrate workflow-scale orchestration");
+		expect(workflowLaunchPolicyReason({
+			mode: "proactive",
+			prompt: "Investigate this bug",
+			source: 'return pipeline(args, item => agent("review " + item))',
+		})).toBeUndefined();
 	});
 });
 
@@ -150,15 +203,32 @@ describe("workflows — output budget and retry semantics", () => {
 		expect(workflowOutputSpent(run)).toBe(1_000);
 	});
 
+	test("a modest run budget admits multiple concurrent children", () => {
+		const run = makeRun({ budgetTotal: 5_000, budgetReserved: 0 });
+		expect(workflowOutputReservation(run)).toBe(2_048);
+		run.budgetReserved = 2_048;
+		expect(workflowOutputReservation(run)).toBe(2_048);
+		run.budgetReserved = 4_096;
+		expect(workflowOutputReservation(run)).toBe(904);
+	});
+
 	test("deterministic failures stop whole-workflow retries", () => {
-		expect(workflowRetryGuidance("Resource limit exceeded for reviewer")).toContain("Do not relaunch the whole workflow");
+		expect(workflowFailureClass("Resource limit exceeded for reviewer")).toBe("deterministic");
+		expect(workflowRetryGuidance("Resource limit exceeded for reviewer")).toContain("blocked from automatically launching another workflow");
 		expect(workflowRetryGuidance('Model "anthropic/foo" not found')).toContain("deterministic");
 	});
 
 	test("transient failures permit one child retry only", () => {
 		const guidance = workflowRetryGuidance("provider overloaded with HTTP 503");
+		expect(workflowFailureClass("provider overloaded with HTTP 503")).toBe("transient");
 		expect(guidance).toContain("failed child, at most once");
 		expect(guidance).toContain("do not relaunch the whole workflow");
+	});
+
+	test("active status checks are cooled down for sixty seconds", () => {
+		expect(workflowStatusCooldownRemaining(undefined, 10_000)).toBe(0);
+		expect(workflowStatusCooldownRemaining(10_000, 40_000)).toBe(30_000);
+		expect(workflowStatusCooldownRemaining(10_000, 70_000)).toBe(0);
 	});
 });
 
