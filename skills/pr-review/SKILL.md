@@ -527,6 +527,8 @@ Read `../writing-for-humans/SKILL.md` relative to this skill and apply its send-
 4. Map the verdict to a review event (see event mapping table in `references/github-output.md`)
 5. Post via: `bash /path/to/skill/scripts/post-review.sh --body $REVIEW_TMPDIR/pr-review.md --inline $REVIEW_TMPDIR/pr-review-inline.json --event EVENT --pr PR_NUMBER` (use the skill's base directory path for the script)
 
+`post-review.sh` is also the source of truth for automation-supplied human-approval policy. See the approval-gate contract in `references/github-output.md`; do not duplicate or bypass it in the review prompt.
+
 **Important:** Always pass `--pr PR_NUMBER` to target the correct PR explicitly. Do not rely on auto-detection from the current branch — it can target the wrong PR when running from a worktree or detached HEAD.
 
 If updating an existing review comment, use `--edit-last` flag (inline comments are skipped on updates to avoid duplicate threads).

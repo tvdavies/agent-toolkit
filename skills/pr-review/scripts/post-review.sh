@@ -14,15 +14,16 @@
 #   --dry-run        Print what would be posted without actually posting
 #
 # Environment:
-#   PRSMASH_TRUSTED_AUTHORS      When set, APPROVE events are only submitted as a
-#                                real GitHub approval for PRs whose author is on
-#                                this list (comma/space separated logins,
-#                                case-insensitive). Everyone else gets the same
-#                                review posted as a comment for a human to sign
-#                                off. Unset means no author gating.
-#   PRSMASH_APPROVAL_LINE_LIMIT  When set, APPROVE events for PRs with additions
-#                                + deletions >= this value are posted as comments
-#                                so a human can approve manually.
+#   PRSMASH_TRUSTED_AUTHORS      Comma/space separated GitHub logins matched
+#                                case-insensitively. When set, only untrusted
+#                                authors at or above the changed-line limit need
+#                                human approval.
+#   PRSMASH_APPROVAL_LINE_LIMIT  First additions + deletions count requiring an
+#                                untrusted author to get human approval (default:
+#                                1001). The legacy PRSMASH_APPROVAL_MAX_LINES alias
+#                                is also accepted.
+#   PRSMASH_AUTO_APPROVE_ALL     Set to true to bypass author and size gating for
+#                                APPROVE events. Accepts true/false only.
 #   PRSMASH_REVIEW_RESULT_FILE   Optional path for an atomic machine-readable
 #                                posting result consumed by prsmash.
 #   PRSMASH_REVIEW_EXPECTED_HEAD When set, refuse to post if the PR moved beyond
@@ -92,9 +93,9 @@ fi
 PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number')
 COMMIT_SHA=$(echo "$PR_JSON" | jq -r '.headRefOid')
 PR_URL=$(echo "$PR_JSON" | jq -r '.url')
-PR_ADDITIONS=$(echo "$PR_JSON" | jq -r '.additions // 0')
-PR_DELETIONS=$(echo "$PR_JSON" | jq -r '.deletions // 0')
-PR_AUTHOR=$(echo "$PR_JSON" | jq -r '.author.login // ""')
+PR_ADDITIONS=$(echo "$PR_JSON" | jq -r '.additions // empty')
+PR_DELETIONS=$(echo "$PR_JSON" | jq -r '.deletions // empty')
+PR_AUTHOR=$(echo "$PR_JSON" | jq -r '.author.login // empty')
 
 # Extract owner/repo from PR URL (https://github.com/OWNER/REPO/pull/N)
 OWNER_REPO=$(echo "$PR_URL" | sed -E 's|https://github.com/([^/]+/[^/]+)/pull/[0-9]+|\1|')
@@ -149,12 +150,33 @@ MANUAL_APPROVAL_REASON=""
 MANUAL_APPROVAL_REASON_CODE=""
 MANUAL_APPROVAL_BANNER_META=""
 
-# Author trust gate. Reviews for authors outside the trusted list still get
-# posted in full, but as a comment — the approval itself stays a human decision.
+# Human approval is required only for large PRs by untrusted authors. The global
+# override bypasses both checks, but never changes COMMENT or REQUEST_CHANGES.
 TRUSTED_AUTHORS="${PRSMASH_TRUSTED_AUTHORS:-}"
-if [[ "$EVENT" == "APPROVE" && -n "${TRUSTED_AUTHORS//[[:space:],;]/}" ]]; then
+APPROVAL_LINE_LIMIT="${PRSMASH_APPROVAL_LINE_LIMIT:-${PRSMASH_APPROVAL_MAX_LINES:-1001}}"
+AUTO_APPROVE_ALL=$(printf '%s' "${PRSMASH_AUTO_APPROVE_ALL:-false}" | tr '[:upper:]' '[:lower:]')
+
+# Only an approval can be gated, so the override is only validated when it can act.
+if [[ "$EVENT" == "APPROVE" && "$AUTO_APPROVE_ALL" != true && "$AUTO_APPROVE_ALL" != false ]]; then
+    echo "Error: PRSMASH_AUTO_APPROVE_ALL must be true or false." >&2
+    exit 1
+fi
+
+if [[ "$EVENT" == "APPROVE" && "$AUTO_APPROVE_ALL" == false ]]; then
+    if ! [[ "$APPROVAL_LINE_LIMIT" =~ ^[0-9]+$ ]] || [[ "$APPROVAL_LINE_LIMIT" -le 0 ]]; then
+        echo "Error: PRSMASH_APPROVAL_LINE_LIMIT must be a positive integer." >&2
+        exit 1
+    fi
+fi
+
+if [[ "$EVENT" == "APPROVE" && "$AUTO_APPROVE_ALL" == false &&
+      -n "${TRUSTED_AUTHORS//[[:space:],;]/}" ]]; then
     if [[ -z "$PR_AUTHOR" ]]; then
-        echo "Error: Could not read PR author for the trusted-author approval check." >&2
+        echo "Error: Could not read PR author for the approval policy." >&2
+        exit 1
+    fi
+    if ! [[ "$PR_ADDITIONS" =~ ^[0-9]+$ ]] || ! [[ "$PR_DELETIONS" =~ ^[0-9]+$ ]]; then
+        echo "Error: Could not read PR additions/deletions for the approval policy." >&2
         exit 1
     fi
 
@@ -168,32 +190,12 @@ if [[ "$EVENT" == "APPROVE" && -n "${TRUSTED_AUTHORS//[[:space:],;]/}" ]]; then
         fi
     done < <(printf '%s\n' "$TRUSTED_AUTHORS" | tr '[:upper:]' '[:lower:]' | tr ',;[:space:]' '\n')
 
-    if [[ "$AUTHOR_TRUSTED" != true ]]; then
-        MANUAL_APPROVAL_REQUIRED=true
-        MANUAL_APPROVAL_REASON_CODE="untrusted-author"
-        MANUAL_APPROVAL_REASON="final human sign-off is required"
-        MANUAL_APPROVAL_BANNER_META="reason=untrusted-author author=${PR_AUTHOR}"
-    fi
-fi
-
-APPROVAL_LINE_LIMIT="${PRSMASH_APPROVAL_LINE_LIMIT:-${PRSMASH_APPROVAL_MAX_LINES:-}}"
-if [[ "$EVENT" == "APPROVE" && "$MANUAL_APPROVAL_REQUIRED" != true && -n "$APPROVAL_LINE_LIMIT" ]]; then
-    if ! [[ "$APPROVAL_LINE_LIMIT" =~ ^[0-9]+$ ]] || [[ "$APPROVAL_LINE_LIMIT" -le 0 ]]; then
-        echo "Error: PRSMASH_APPROVAL_LINE_LIMIT must be a positive integer." >&2
-        exit 1
-    fi
-
-    if ! [[ "$PR_ADDITIONS" =~ ^[0-9]+$ ]] || ! [[ "$PR_DELETIONS" =~ ^[0-9]+$ ]]; then
-        echo "Error: Could not read PR additions/deletions for approval size check." >&2
-        exit 1
-    fi
-
     PR_CHANGED_LINES=$((PR_ADDITIONS + PR_DELETIONS))
-    if [[ "$PR_CHANGED_LINES" -ge "$APPROVAL_LINE_LIMIT" ]]; then
+    if [[ "$AUTHOR_TRUSTED" != true && "$PR_CHANGED_LINES" -ge "$APPROVAL_LINE_LIMIT" ]]; then
         MANUAL_APPROVAL_REQUIRED=true
-        MANUAL_APPROVAL_REASON_CODE="approval-line-limit"
-        MANUAL_APPROVAL_REASON="${PR_CHANGED_LINES} changed lines (${PR_ADDITIONS} additions, ${PR_DELETIONS} deletions) meets or exceeds the automated approval limit of < ${APPROVAL_LINE_LIMIT} lines"
-        MANUAL_APPROVAL_BANNER_META="reason=approval-line-limit limit=${APPROVAL_LINE_LIMIT} changed_lines=${PR_CHANGED_LINES} additions=${PR_ADDITIONS} deletions=${PR_DELETIONS}"
+        MANUAL_APPROVAL_REASON_CODE="untrusted-author-over-line-limit"
+        MANUAL_APPROVAL_REASON="${PR_CHANGED_LINES} changed lines (${PR_ADDITIONS} additions, ${PR_DELETIONS} deletions) from an untrusted author requires final human sign-off"
+        MANUAL_APPROVAL_BANNER_META="reason=untrusted-author-over-line-limit author=${PR_AUTHOR} limit=${APPROVAL_LINE_LIMIT} changed_lines=${PR_CHANGED_LINES} additions=${PR_ADDITIONS} deletions=${PR_DELETIONS}"
     fi
 fi
 
