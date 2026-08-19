@@ -80,6 +80,18 @@ const MODELS: ProviderModel[] = [
     maxTokens: 64_000,
   },
   {
+    id: "claude-sonnet-5",
+    name: "Claude Sonnet 5 (Claude Code creds)",
+    reasoning: true,
+    compat: { forceAdaptiveThinking: true },
+    // API supports native xhigh effort.
+    thinkingLevelMap: { xhigh: "xhigh" },
+    input: ["text", "image"],
+    cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+    contextWindow: 1_000_000,
+    maxTokens: 64_000,
+  },
+  {
     id: "claude-opus-4-6",
     name: "Claude Opus 4.6 (Claude Code creds)",
     reasoning: true,
