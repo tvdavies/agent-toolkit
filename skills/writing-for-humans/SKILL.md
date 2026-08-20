@@ -3,7 +3,7 @@ name: writing-for-humans
 description: Human-facing messages. Use whenever drafting, revising, or about to post a GitHub PR comment/review/reply, Linear ticket comment/update, Slack message, or email. Covers implementation summaries, triage conclusions, closure notes, and re-review requests. Produces concise, conversational, send-ready prose while preserving necessary technical facts, IDs, mentions, links, and code.
 metadata:
   author: tvd
-  version: 1.2.0
+  version: 1.3.0
 ---
 
 # Writing for Humans
@@ -11,6 +11,8 @@ metadata:
 Produce a **send-ready** message that sounds like a thoughtful person speaking to a colleague. Preserve the writer's meaning, confidence, and technical accuracy while making the outcome and next action easy to find.
 
 Apply this skill proactively before posting human-facing prose. Code, logs, structured data, technical documentation, and required templates keep their established format.
+
+This skill covers message structure, evidence curation, and channel fit. For line-level style (AI-pattern tells, punctuation, plain word choice, active voice), apply the `unslop` skill; those rules are not repeated here.
 
 ## Process
 
@@ -32,7 +34,7 @@ For example, prefer "All tests and type checks pass" over exact test counts unle
 
 ### 3. Write the human update
 
-Lead with the outcome. Use active voice, familiar words, and natural first-person phrasing where appropriate. Give each sentence one main idea.
+Lead with the outcome. Write as "I" speaking to a colleague, and edit the prose with the `unslop` skill.
 
 For a substantial update, use short paragraphs in this order:
 
@@ -48,9 +50,7 @@ Before returning or posting the message, confirm that:
 
 - The outcome and next action are immediately clear
 - Every included detail helps the recipient understand or act
-- The message sounds natural when read aloud
-- Sentences are short enough to absorb on the first reading
-- Punctuation is simple, with no em dashes and few colons, semicolons, or parentheses
+- The prose has been through an `unslop` pass
 - Mentions, links, issue IDs, code spans, and important technical constraints remain intact
 - The message fits the destination and relationship
 
@@ -84,7 +84,7 @@ Translate report language into language a colleague would use:
 - "No recurrence has been observed" → "We haven't seen it happen again"
 - "Closing as resolved" → "Closing this because the issue is resolved"
 
-Prefer contractions where they sound natural. Use direct transitions such as "The remaining issue is separate" instead of compressing relationships into punctuation.
+Prefer contractions where they sound natural.
 
 ## Examples
 
