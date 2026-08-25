@@ -5,12 +5,12 @@ compatibility: Requires git, GitHub CLI, jq, network access, and a repository wi
 disable-model-invocation: true
 metadata:
   author: tvd
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # Babysit PR
 
-Use this skill only after the user explicitly asks to babysit, watch, monitor, address feedback on, make mergeable, or unblock a named PR or the unambiguous current PR. That explicit invocation authorises routine remediation for this PR: inspect feedback and logs, edit code in an isolated worktree, validate, commit, push to the PR head branch, reply to reviewers, resolve handled threads, and rerun verified flakes. Work autonomously until the PR is ready to merge, already merged, or precisely blocked; do not present a plan or pause for routine confirmation.
+Use this skill only after the user explicitly asks to babysit, watch, monitor, address feedback on, make mergeable, or unblock a named PR or the unambiguous current PR. That explicit invocation authorises routine remediation for this PR: inspect feedback and logs, edit code in an isolated worktree, validate, commit, push to the PR head branch, reply to reviewers, resolve handled threads, and rerun verified flakes. Work autonomously until the PR is ready to merge, already merged, precisely blocked, or nothing has happened on the PR for the full inactivity budget defined in Phase 5; do not present a plan or pause for routine confirmation.
 
 ## Non-negotiable rules
 
@@ -146,26 +146,38 @@ Stop successfully when the snapshot proves either:
 - `MERGED`: `mergedAt` is set or state is merged; or
 - `READY TO MERGE`: every applicable criterion in the shared protocol holds for this exact head.
 
+A PR that is green but still missing a required approval or requested review is not ready, not blocked, and not finished — it is waiting. Required reviews, pending re-reviews, and unanswered human threads are watched states: continue to Phase 5 so an approval, review, comment, or push wakes the agent, and give up only through the inactivity budget there.
+
 Babysitting never performs the merge.
 
 ## Phase 5: Wait without agent polling
 
-When the baseline has no actionable work but the PR is not yet ready, run:
+When the baseline has no actionable work but the PR is not yet ready — including when the only missing criterion is a required review or approval — run:
 
 ```bash
 bash "$SKILL_DIR/scripts/wait-for-pr-change.sh" wait PR_NUMBER \
   --repo OWNER/REPO \
   --baseline "$BASELINE" \
   --interval 60 \
-  --timeout 3600
+  --timeout "$MAX_WAIT_SECONDS"
 ```
+
+`--timeout` is the inactivity budget: the maximum time to wait for anything at all to happen on the PR. It is not a cap on the whole babysitting session. Default `MAX_WAIT_SECONDS` to 3600 (one hour) unless the user's request sets a different bound. Each processed change starts the next wait fresh, so an active PR is monitored indefinitely while a silent one ends after one budget.
 
 The script immediately compares GitHub with the baseline, so a change after baseline creation is not missed. It then blocks and polls internally. Parse its JSON result:
 
-- `event: "changed"`: the baseline file has been atomically replaced with the new snapshot. Return to Phase 3 and process it.
-- `event: "timeout"`: do not infer progress or readiness. Inspect a new snapshot, process anything actionable, then wait again if continued monitoring is still useful.
+- `event: "changed"`: the baseline file has been atomically replaced with the new snapshot. Return to Phase 3 and process it; the next wait restarts the inactivity budget.
+- `event: "timeout"`: nothing happened within the inactivity budget. Do not infer progress or readiness, and do not silently start another full wait. Take one fresh snapshot; if it reveals a change after all, process it and continue monitoring. If the PR state is genuinely unchanged, stop and report `TIMED OUT` as defined in Exit and cleanup.
 
 If interrupted, report the exact current state and preserve `WT`. Do not replace this watcher with repeated agent `sleep` turns.
+
+### Composition with yolo-ticket
+
+When the explicitly invoked `yolo-ticket` skill is the caller, `READY TO MERGE`
+returns control to that wrapper as an intermediate checkpoint rather than ending
+the overall yolo run. `babysit-pr` still never invokes merge or auto-merge; the
+yolo wrapper owns its separately authorised normal GitHub auto-merge request and
+continues watching until GitHub reports `MERGED` or a precise terminal blocker.
 
 ## Exit and cleanup
 
@@ -174,8 +186,11 @@ Stop and report one of:
 - `READY TO MERGE` with the PR URL and exact head SHA
 - `MERGED` with the PR URL
 - `CLOSED UNMERGED`
+- `TIMED OUT` when the inactivity budget expired with the PR unchanged: report the budget that elapsed, the exact waiting state (for example "all checks green on HEAD_SHA, awaiting required human approval"), and the preserved worktree path so a later invocation can resume
 - `BLOCKED` with the exact permission, authentication, unsafe decision, repeated failure, or no-progress reason
 - `INTERRUPTED` with the preserved worktree path and current state
+
+Waiting on reviewers is neither `BLOCKED` nor `READY TO MERGE`. A missing required approval, a requested re-review, or an unanswered human `discuss` thread is an expected waiting state: keep watching through Phase 5 and leave it only as `MERGED` or `READY TO MERGE` when the state resolves, or as `TIMED OUT` when the inactivity budget expires. Reserve `BLOCKED` for conditions babysitting can never progress, such as missing push access, persistent authentication failure, an unsafe decision, or the bounded no-progress limit.
 
 Use a bounded policy: after roughly three cycles that repeat the same failure without new evidence or progress, stop as blocked rather than looping forever. Transient waiter/API failures are retried by the script; persistent failures are blockers.
 
@@ -194,6 +209,10 @@ Adopt PR 847 into a managed worktree, apply valid comments, validate and push th
 User says: `Keep this PR moving.`
 
 Process any current blockers. If only CI or review is pending, create and inspect the watcher baseline, then run the blocking waiter. A failed check wakes the agent for diagnosis; a passing final check may make the same head ready to merge.
+
+### Awaiting a required human approval
+
+Checks are green, every thread is resolved, but branch protection still requires a human review. This is a waiting state, not readiness and not a blocker: keep the watcher running so the approval, a new comment, or a push wakes the agent. Only when nothing at all happens on the PR for the full inactivity budget (default one hour), stop and report `TIMED OUT` with the exact pending state.
 
 ### Fork PR without push permission
 

@@ -69,20 +69,25 @@ describe("shared PR readiness protocol", () => {
     expect(protocol).toContain("three no-progress cycles");
     expect(protocol).toContain("dedicated non-primary managed worktree");
     expect(protocol).toContain("Never treat the primary checkout as the PR worktree");
+    expect(protocol).toContain("Never force-push");
+    expect(protocol).not.toContain("unless the user separately gives explicit permission");
     expect(protocol).toContain("wait-for-pr-change.sh");
     expect(protocol).toContain("ready to merge or already merged");
     expect(protocol).not.toContain("drive-pr");
     expect(protocol).not.toContain("daemon");
   });
 
-  it("is consumed by the retained autonomous control policies", () => {
+  it("is consumed only by the remote-review control policies", () => {
     const babysit = read("skills/general/babysit-pr/SKILL.md");
+    const yolo = read("skills/general/yolo-ticket/SKILL.md");
     const start = read("skills/general/start-ticket/SKILL.md");
 
     expect(babysit).toContain("../_shared/pr-readiness/PROTOCOL.md");
     expect(babysit).toContain("Work autonomously");
-    expect(start).toContain("../_shared/pr-readiness/PROTOCOL.md");
-    expect(start).toContain("autonomous and bounded");
+    expect(yolo).toContain("../babysit-pr/SKILL.md");
+    expect(yolo).toContain("Babysit to verified readiness");
+    expect(yolo).toContain("normal GitHub auto-merge");
+    expect(start).not.toContain("../_shared/pr-readiness/PROTOCOL.md");
   });
 
   it("keeps canonical readiness scripts executable without successor wrappers", () => {

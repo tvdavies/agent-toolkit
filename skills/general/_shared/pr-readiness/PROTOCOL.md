@@ -1,6 +1,6 @@
 # Pull Request Readiness Protocol
 
-This is the canonical blocker, feedback, and merge-readiness contract shared by `babysit-pr` and `start-ticket`. Both callers act autonomously within their explicit scope and may pause or resume while external state changes. If caller instructions conflict with worktree isolation, blocker classification, thread resolution, push ordering, or readiness criteria here, this protocol wins.
+This is the canonical blocker, feedback, and merge-readiness contract used by `babysit-pr` and by `yolo-ticket` during its babysitting phase. Those callers act autonomously within their explicit scope and may pause or resume while external state changes. `start-ticket` stops before this remote-review lifecycle. If caller instructions conflict with worktree isolation, blocker classification, thread resolution, push ordering, or readiness criteria here, this protocol wins. The yolo wrapper's separately authorised normal auto-merge request occurs outside this protocol; this protocol itself never merges.
 
 ## Inputs
 
@@ -72,7 +72,7 @@ CI actions:
 Conflicts:
 
 - Resolve against the current base using repository policy.
-- Never force-push unless the user separately gives explicit permission.
+- Never force-push. If safe conflict resolution would require rewriting the PR branch, stop and report the blocker.
 - Escalate conflicts that cannot be resolved safely.
 
 ## Execution ordering

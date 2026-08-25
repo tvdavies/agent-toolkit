@@ -34,6 +34,7 @@ function defaultPrState() {
     mergeable: "MERGEABLE",
     mergeStateStatus: "UNSTABLE",
     reviewDecision: "REVIEW_REQUIRED",
+    autoMergeRequest: null as null | { enabledAt: string; enabledBy: { login: string }; mergeMethod: string },
     statusCheckRollup: [
       { name: "unit", status: "IN_PROGRESS", conclusion: null, detailsUrl: "https://checks/1", startedAt: null, completedAt: null },
       { name: "lint", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://checks/2", startedAt: null, completedAt: null },
@@ -231,6 +232,10 @@ describe("babysit-pr skill", () => {
     expect(source).toContain("READY TO MERGE");
     expect(source).toContain("MERGED");
     expect(source).toContain("Never merge the pull request");
+    expect(source).toContain("### Composition with yolo-ticket");
+    expect(source).toContain("READY TO MERGE");
+    expect(source).toContain("returns control to that wrapper as an intermediate checkpoint");
+    expect(source).toContain("`babysit-pr` still never invokes merge or auto-merge");
 
     const worktrees = readFileSync(join(root, "skills/general/worktrees/SKILL.md"), "utf8");
     expect(worktrees).toContain("Inspect the current checkout before listing, creating, or adopting");
@@ -298,6 +303,28 @@ describe("wait-for-pr-change.sh", () => {
     const parsed = JSON.parse(second);
     expect(parsed.pr.comments.find((comment: { databaseId: number }) => comment.databaseId === 2).body).toBe("changed on second comment page");
     expect(parsed.pr.reviews.find((review: { databaseId: number }) => review.databaseId === 22).body).toBe("changed on second review page");
+  });
+
+  it("detects auto-merge cancellation when all other PR state is unchanged", () => {
+    const enabled = defaultPrState();
+    enabled.autoMergeRequest = {
+      enabledAt: "2026-01-01T03:00:00Z",
+      enabledBy: { login: "alice" },
+      mergeMethod: "SQUASH",
+    };
+    writeFileSync(prState, `${JSON.stringify(enabled)}\n`);
+    const baseline = join(temp, "baseline-auto-merge.json");
+    writeFileSync(baseline, `${snapshot()}\n`);
+    writeFileSync(prState, `${JSON.stringify(defaultPrState())}\n`);
+
+    const changed = runWaiter([
+      "wait", "7", "--repo", "acme/widgets", "--baseline", baseline,
+      "--interval", "1", "--timeout", "2",
+    ]);
+    expect(changed.status, changed.stderr).toBe(0);
+    const event = JSON.parse(changed.stdout);
+    expect(event.event).toBe("changed");
+    expect(event.snapshot.pr.autoMergeRequest).toBeNull();
   });
 
   it("detects an immediate change and atomically updates the baseline", () => {
