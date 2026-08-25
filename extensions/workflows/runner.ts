@@ -8,9 +8,8 @@
  * (`--session <file>`), so the orchestrating agent can inspect a running subagent's
  * output-so-far (Claude Code BashOutput-style) via renderSessionTail().
  *
- * This module is the ONLY place that touches pi-subagents' internal run APIs (deep
- * `pi-subagents/src/**` imports are not a stable public surface; the version is pinned in
- * bun.lock). Keep the adapter surface small so churn in pi-subagents stays contained here.
+ * The adjacent runtime adapter is the only seam that touches pi-subagents' unstable deep
+ * imports. Keep that adapter surface small so dependency churn stays contained here.
  *
  * Acceptance contracts are deliberately not configured, and the generic inferred mutation
  * completion guard is disabled on the cloned agent config: workflow scripts own their explicit
@@ -22,9 +21,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Message } from "@earendil-works/pi-ai";
-import type { AgentConfig } from "pi-subagents/src/agents/agents.ts";
-import { runSync } from "pi-subagents/src/runs/foreground/execution.ts";
-import { cleanupStructuredOutputRuntime, createStructuredOutputRuntime } from "pi-subagents/src/runs/shared/structured-output.ts";
+import {
+	type AgentConfig,
+	cleanupStructuredOutputRuntime,
+	createStructuredOutputRuntime,
+	runSync,
+} from "./pi-subagents-adapter.mjs";
 
 export interface ChildUsage {
 	input: number;

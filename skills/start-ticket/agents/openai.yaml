@@ -1,6 +1,0 @@
-interface:
-  display_name: "Start Ticket"
-  short_description: "Deliver a Linear ticket through a merge-ready pull request"
-  default_prompt: "Use $start-ticket with a Linear ticket identifier such as LLE-1234."
-policy:
-  allow_implicit_invocation: false

@@ -5,9 +5,9 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const root = resolve(import.meta.dir, "../..");
-const skillPath = join(root, "skills/start-ticket/SKILL.md");
-const openAiPath = join(root, "skills/start-ticket/agents/openai.yaml");
-const scriptPath = join(root, "skills/start-ticket/scripts/get-ticket.sh");
+const skillPath = join(root, "skills/general/start-ticket/SKILL.md");
+const openAiPath = join(root, "skills/general/start-ticket/agents/openai.yaml");
+const scriptPath = join(root, "skills/general/start-ticket/scripts/get-ticket.sh");
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -28,7 +28,7 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "$FAKE_LINEAR_LOG"
 if [[ "$1 $2" == "issues get" ]]; then
   if [[ "$FAKE_LINEAR_SCENARIO" == "direct" ]]; then
-    printf '%s\\n' '{"id":"issue-id","identifier":"LLE-11972","title":"Replay"}'
+    printf '%s\\n' '{"id":"issue-id","identifier":"TEAM-11972","title":"Replay"}'
     exit 0
   fi
   echo 'Entity not found: Issue' >&2
@@ -36,9 +36,9 @@ if [[ "$1 $2" == "issues get" ]]; then
 fi
 if [[ "$1 $2" == "api query" ]]; then
   if [[ "$FAKE_LINEAR_SCENARIO" == "mismatch" ]]; then
-    printf '%s\\n' '{"data":{"issues":{"nodes":[{"id":"other","identifier":"LLE-11971"}]}}}'
+    printf '%s\\n' '{"data":{"issues":{"nodes":[{"id":"other","identifier":"TEAM-11971"}]}}}'
   else
-    printf '%s\\n' '{"data":{"issues":{"nodes":[{"id":"issue-id","identifier":"LLE-11972","title":"Replay"}]}}}'
+    printf '%s\\n' '{"data":{"issues":{"nodes":[{"id":"issue-id","identifier":"TEAM-11972","title":"Replay"}]}}}'
   fi
   exit 0
 fi
@@ -84,22 +84,22 @@ describe("start-ticket skill", () => {
   });
 
   it("normalises and returns an exact direct Linear lookup", () => {
-    const { result, log } = runLookup("lle-11972", "direct");
+    const { result, log } = runLookup("team-11972", "direct");
 
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout).identifier).toBe("LLE-11972");
+    expect(JSON.parse(result.stdout).identifier).toBe("TEAM-11972");
     expect(log).toContain("issues get --comments --retry 3 --no-cache");
-    expect(log).toContain("-- LLE-11972");
+    expect(log).toContain("-- TEAM-11972");
   });
 
   it("uses the exact team and issue-number fallback", () => {
-    const { result, log } = runLookup("LLE-11972", "fallback");
+    const { result, log } = runLookup("TEAM-11972", "fallback");
 
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout).identifier).toBe("LLE-11972");
+    expect(JSON.parse(result.stdout).identifier).toBe("TEAM-11972");
     expect(log).toContain("api query");
     expect(log).toContain("number=11972");
-    expect(log).toContain("teamKey=LLE");
+    expect(log).toContain("teamKey=TEAM");
   });
 
   it("rejects invalid and non-matching identifiers", () => {
@@ -108,7 +108,7 @@ describe("start-ticket skill", () => {
     expect(invalid.result.stderr).toContain("Invalid Linear issue identifier");
     expect(invalid.log).toBe("");
 
-    const mismatch = runLookup("LLE-11972", "mismatch");
+    const mismatch = runLookup("TEAM-11972", "mismatch");
     expect(mismatch.result.status).toBe(1);
     expect(mismatch.result.stderr).toContain("Exact identifier fallback also failed");
   });

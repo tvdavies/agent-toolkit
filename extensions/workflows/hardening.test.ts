@@ -11,7 +11,7 @@ import { AbortableScheduler } from "./scheduler.ts";
 import { extractMeta, validateScript } from "./script-format.ts";
 import { atomicWriteFile } from "./store.ts";
 import { confineAgentConfig, renderSessionTail } from "./runner.ts";
-import { cleanupStructuredOutputRuntime, createStructuredOutputRuntime, readStructuredOutput } from "pi-subagents/src/runs/shared/structured-output.ts";
+import { cleanupStructuredOutputRuntime, createStructuredOutputRuntime, readStructuredOutput } from "./pi-subagents-adapter.mjs";
 
 const budget = { total: null, spent: 0, remaining: null };
 const host: SandboxHost = {

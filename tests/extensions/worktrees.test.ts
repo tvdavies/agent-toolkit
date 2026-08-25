@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
+import { existsSync } from "node:fs";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
+  START_TICKET_SKILL_PATH,
   default as worktreesExtension,
   normaliseTicketIdentifier,
   startTicketPrompt,
@@ -22,12 +24,13 @@ describe("start-ticket command adapter", () => {
   it("builds a thin prompt that loads the shared skill", () => {
     const prompt = startTicketPrompt("lle-11972");
 
-    expect(prompt).toContain("/skills/start-ticket/SKILL.md");
+    expect(prompt).toContain("/skills/general/start-ticket/SKILL.md");
+    expect(START_TICKET_SKILL_PATH).toContain("/skills/general/start-ticket/SKILL.md");
+    expect(existsSync(START_TICKET_SKILL_PATH)).toBe(true);
     expect(prompt).toContain("Ticket: LLE-11972");
     expect(prompt).not.toContain("Completion contract");
     expect(prompt).not.toContain("git worktree add");
   });
-
 
   it("registers /start-ticket and /wt-ticket as the same thin adapter", async () => {
     const commands = new Map<string, (args: string, ctx: ExtensionCommandContext) => Promise<void>>();

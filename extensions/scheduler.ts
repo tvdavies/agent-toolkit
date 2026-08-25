@@ -126,7 +126,8 @@ export default function (pi: ExtensionAPI) {
 		};
 		let total = 0;
 		for (const match of trimmed.matchAll(/(\d+)\s*([smhd])/g)) {
-			total += Number(match[1]) * unitMs[match[2]];
+			const unit = match[2];
+			if (unit) total += Number(match[1]) * (unitMs[unit] ?? 0);
 		}
 		return total > 0 ? total : null;
 	}

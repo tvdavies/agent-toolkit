@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const root = resolve(import.meta.dir, "../..");
-const sharedDir = join(root, "skills/_shared/pr-readiness");
+const sharedDir = join(root, "skills/general/_shared/pr-readiness");
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -67,25 +67,24 @@ describe("shared PR readiness protocol", () => {
     expect(protocol).toContain("Ready-to-merge criteria");
     expect(protocol).toContain("The absence of failing checks or unresolved threads alone is never enough");
     expect(protocol).toContain("three no-progress cycles");
+    expect(protocol).not.toContain("drive-pr");
+    expect(protocol).not.toContain("daemon");
   });
 
-  it("is consumed by all three control policies", () => {
-    const address = read("skills/address-pr-feedback/SKILL.md");
-    const start = read("skills/start-ticket/SKILL.md");
-    const drive = read("extensions/lib/drive-pr.ts");
+  it("is consumed by the retained control policies", () => {
+    const address = read("skills/general/address-pr-feedback/SKILL.md");
+    const start = read("skills/general/start-ticket/SKILL.md");
 
     expect(address).toContain("../_shared/pr-readiness/PROTOCOL.md");
     expect(address).toContain("user-approval gate");
     expect(start).toContain("../_shared/pr-readiness/PROTOCOL.md");
     expect(start).toContain("autonomous and bounded");
-    expect(drive).toContain("skills/_shared/pr-readiness/PROTOCOL.md");
-    expect(drive).toContain("park/resume");
   });
 
   it("keeps old address-pr-feedback script paths as compatibility wrappers", () => {
     for (const name of ["fetch-pr-blockers.sh", "reply-and-resolve.sh"]) {
       const shared = join(sharedDir, "scripts", name);
-      const wrapper = read(`skills/address-pr-feedback/scripts/${name}`);
+      const wrapper = read(`skills/general/address-pr-feedback/scripts/${name}`);
 
       expect(statSync(shared).mode & 0o111).not.toBe(0);
       expect(wrapper).toContain("../../_shared/pr-readiness/scripts");

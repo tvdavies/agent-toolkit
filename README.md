@@ -1,185 +1,111 @@
 # Agent Toolkit
 
-Personal agent toolkit shared across machines: Agent Skills, custom Pi extensions, optional prompts/themes, setup scripts, and a manifest for third-party Pi packages.
+A portable personal toolkit for Pi: retained custom extensions, reusable Agent Skills, saved workflows, and safe installers for sharing them across machines.
 
-## Fresh machine setup
+The retired daemon and Brain runtimes are no longer part of this repository. Git history remains the recovery path if either is needed later.
 
-One command does the lot — package setup, the resident-agent daemon and bundled Brain daemon as `systemd --user` services, a heartbeat timer, and lingering:
+## Install
 
 ```bash
 git clone git@github.com:tvdavies/agent-toolkit.git ~/agent-toolkit
 ~/agent-toolkit/scripts/install.sh
 ```
 
-Or extensions only, with no background services:
+`install.sh` is a thin wrapper around `bootstrap.sh`. Bootstrap:
+
+1. installs production npm dependencies used by retained extensions;
+2. creates managed individual skill links;
+3. installs this checkout as a local Pi package;
+4. links the saved workflows into `~/.pi/agent/workflows`; and
+5. reconciles toolkit-managed third-party Pi packages.
+
+It does not require Bun, create services, enable lingering, or change Pi settings. Bun is needed only for development tests.
+
+Install selected skill groups with:
 
 ```bash
-~/agent-toolkit/scripts/install.sh --no-service     # then /reload in Pi
+~/agent-toolkit/scripts/install.sh --groups general,personal
 ```
 
-`install.sh` is idempotent and re-runnable. It needs no secrets to start; add
-Slack tokens or a spend cap to `~/.config/agent-toolkit/serve.env` (kept
-`chmod 600`) afterwards and `systemctl --user restart agent-toolkit.service`.
-The autonomous system is documented in [`docs/architecture.md`](docs/architecture.md)
-and [`bin/README.md`](bin/README.md). The lower-level `scripts/bootstrap.sh`
-does just the package setup (no services).
+All of `general`, `personal`, and `lleverage` are installed by default. Add `--install-git-hooks` to install the post-pull reconciliation hooks.
 
-### Copy-paste install prompt for an existing Pi session
+After installation, run `/reload` in active Pi sessions.
 
-Paste this into an already-running Pi session to have Pi fetch and install the toolkit for you:
+## Skills
 
-```text
-Install the Agent Toolkit from GitHub into this Pi environment.
+Skills are organised into:
 
-Please do the following:
-1. Clone or update https://github.com/tvdavies/agent-toolkit.git at ~/agent-toolkit. If HTTPS auth fails, retry with git@github.com:tvdavies/agent-toolkit.git.
-2. Run ~/agent-toolkit/scripts/bootstrap.sh to install dependencies, link skills, install this repo as a local Pi package, and sync third-party Pi packages.
-3. Do not overwrite existing non-symlink skill directories; if bootstrap refuses for safety, stop and explain what I need to move or back up.
-4. Show the final Pi package status, then remind me to run /reload in this Pi session.
+- `skills/general/` — portable engineering and communication skills;
+- `skills/personal/` — Tom, Myslop, Dispatch, Slack, and local tooling; and
+- `skills/lleverage/` — Lleverage repositories, services, teams, and infrastructure.
 
-You can start with:
+`scripts/install-skills.sh` creates individual links in `~/.agents/skills`. By default `~/.claude/skills` links to that standard directory. If `~/.claude/skills` is a real directory, it is preserved and receives the same managed individual links.
 
-set -euo pipefail
-if [ -d "$HOME/agent-toolkit/.git" ]; then
-  git -C "$HOME/agent-toolkit" pull --ff-only
-else
-  git clone https://github.com/tvdavies/agent-toolkit.git "$HOME/agent-toolkit" || git clone git@github.com:tvdavies/agent-toolkit.git "$HOME/agent-toolkit"
-fi
-"$HOME/agent-toolkit/scripts/bootstrap.sh"
-```
+The installer refuses to overwrite unmanaged directories or externally owned symlinks. Managed state is stored under `~/.local/state/agent-toolkit/`. It supports `--groups` and `--dry-run`.
 
-The bootstrap script is idempotent and will:
+Pi discovers `~/.agents/skills` automatically. If `~/.pi/agent/settings.json` explicitly lists `~/.claude/skills`, the installer prints a migration warning but never edits the settings file.
 
-1. install this repo's npm dependencies for local extension development;
-2. install the bundled Brain runtime dependencies under `brain/` with Bun;
-3. link `~/.claude/skills` and `~/.agents/skills` to `~/agent-toolkit/skills`;
-4. install this repo as a local Pi package with `pi install ~/agent-toolkit`;
-5. install third-party Pi packages listed in `manifests/pi-packages.json`.
+## Extensions and workflows
 
-It refuses to overwrite existing non-symlink skill directories.
+The Pi package exports only `extensions/`. See [`extensions/README.md`](extensions/README.md) for the active inventory and workflow security model.
 
-To also install local Git hooks that sync the setup after future pulls:
+Saved workflows live in `.pi/workflows/` and remain available through the workflows extension:
+
+- `debug-issue`
+- `implement-ticket`
+- `review-pr`
+
+## Third-party Pi packages
+
+`manifests/pi-packages.json` is reconciled by:
 
 ```bash
-~/agent-toolkit/scripts/bootstrap.sh --install-git-hooks
+./scripts/sync-pi-packages.sh
 ```
 
-Or install only the hooks:
+The script records toolkit-managed package specs before removing stale entries, so it does not remove unrelated user packages.
+
+## Updating
 
 ```bash
-~/agent-toolkit/scripts/install-git-hooks.sh
+git pull --ff-only
+./scripts/after-pull.sh
 ```
+
+`after-pull.sh` runs the same idempotent reconciliation as bootstrap. Git hooks can be installed with `./scripts/install-git-hooks.sh`.
+
+## Removing the retired runtime
+
+Existing machines may still have old user services. Remove them explicitly with:
+
+```bash
+./scripts/remove-legacy-runtime.sh --dry-run
+./scripts/remove-legacy-runtime.sh
+```
+
+This stops/disables the old toolkit, Brain, and heartbeat units and removes their unit files. It preserves `~/.config/agent-toolkit/serve.env` unless `--purge-config` is passed.
+
+## Development
+
+```bash
+npm ci
+npm run typecheck
+npm test
+```
+
+The test suite validates skill frontmatter/layout and the installer safety contract in isolated temporary home directories. It also covers retained extension behaviour. Run `git diff --check` before integration.
 
 ## Repository layout
 
 ```text
-skills/                    Shared Agent Skills
-extensions/                Custom Pi extensions loaded by this package
-prompts/                   Optional Pi prompt templates
-themes/                    Optional Pi themes
-manifests/pi-packages.json Third-party Pi package list
-brain/                     Vendored Brain memory runtime (Bun workspace)
-bin/brain                  Wrapper for the bundled Brain CLI
-scripts/bootstrap.sh       Fresh machine bootstrap
-scripts/sync-pi-packages.sh Install/update third-party Pi packages
-archive/extensions-disabled Disabled legacy extensions that must not auto-load
+extensions/                 Active Pi extensions
+skills/general/             Portable skills
+skills/personal/            Personal/local skills
+skills/lleverage/           Lleverage-specific skills
+.pi/workflows/              Saved workflows
+manifests/pi-packages.json  Third-party Pi package list
+scripts/                    Install, sync, migration, and hook scripts
+tests/                      Toolkit-level tests
 ```
 
-## Pi loading model
-
-This repo is a Pi package. Its `package.json` exposes `skills/`, `extensions/`, `prompts/`, and `themes/` through the `pi` manifest.
-
-For active local development, install the local checkout:
-
-```bash
-pi install "$HOME/agent-toolkit"
-```
-
-For a machine that should track the GitHub repo directly:
-
-```bash
-pi install git:git@github.com:tvdavies/agent-toolkit.git@main
-```
-
-After editing extensions, run `/reload` inside Pi.
-
-`~/.pi/agent/extensions` is no longer the source of truth. Avoid keeping duplicate active `.ts` extensions there, otherwise Pi may load the same command/tool twice.
-
-## Memory / Brain
-
-The default memory engine is the vendored Brain runtime in `brain/`, executed through `bin/brain`. The Pi extension still talks to Brain only through the CLI boundary (`brain query`, `brain remember`, `brain daemon status`), so Brain can stay Bun-native while the toolkit root remains npm-based. `scripts/install.sh` also installs `agent-toolkit-brain.service`, which runs `bin/brain daemon run` to drain extraction and maintenance queues.
-
-Override resolution is:
-
-1. `AGENT_TOOLKIT_BRAIN_BIN`
-2. `BRAIN_BIN`
-3. bundled `bin/brain`
-4. `brain` on `PATH`
-
-Set `AGENT_TOOLKIT_MEMORY_ENGINE=okf` only to use the legacy in-process OKF fallback. Use `AGENT_TOOLKIT_MEMORY_BRAIN_HOME`, `AGENT_TOOLKIT_MEMORY_BRAIN_ROOT`, and `AGENT_TOOLKIT_MEMORY_SCOPE` for toolkit-scoped Brain paths; the bundled Brain CLI also honors its native `BRAIN_HOME`, `BRAIN_ROOT`, and `BRAIN_SCOPE` environment variables when those toolkit-specific overrides are unset.
-
-## Other agent harnesses
-
-Claude Code and other harnesses still use fixed skill paths. Bootstrap maintains these symlinks:
-
-```bash
-~/.claude/skills -> ~/agent-toolkit/skills
-~/.agents/skills -> ~/agent-toolkit/skills
-```
-
-## Adding a skill
-
-1. Create `skills/<name>/SKILL.md`.
-2. Use valid Agent Skills frontmatter with `name` and a specific `description`.
-3. Keep helper scripts/assets inside the skill directory.
-4. Commit and push the change.
-
-## Adding a custom Pi extension
-
-1. Add a `.ts` file under `extensions/`, or a directory with `index.ts`.
-2. Keep disabled or experimental extensions outside `extensions/` unless their filenames cannot be auto-loaded.
-3. Add runtime npm dependencies to the root `package.json`.
-4. Run `npm install --package-lock-only` or `npm install` from the repo root when dependencies change.
-5. Run `/reload` in Pi to reload resources.
-
-## Third-party Pi packages
-
-Third-party package specs live in `manifests/pi-packages.json`.
-
-Install/reconcile them with:
-
-```bash
-~/agent-toolkit/scripts/sync-pi-packages.sh
-```
-
-Add version pins or Git refs there if reproducibility becomes more important than easy updates.
-
-## Syncing after pulls
-
-For manual sync after pulling remote changes:
-
-```bash
-cd ~/agent-toolkit
-git pull
-./scripts/after-pull.sh --force
-```
-
-For automatic local sync, install Git hooks:
-
-```bash
-~/agent-toolkit/scripts/install-git-hooks.sh
-```
-
-The hooks run `scripts/after-pull.sh` after merge pulls and `git pull --rebase`. The sync script:
-
-- installs npm dependencies only when `package.json`, `package-lock.json`, or `node_modules` require it;
-- keeps `~/.claude/skills` and `~/.agents/skills` pointed at `~/agent-toolkit/skills`;
-- ensures Pi has this local checkout installed as a package;
-- runs `scripts/sync-pi-packages.sh` when `manifests/pi-packages.json` changes;
-- reminds you to run `/reload` in active Pi sessions when loaded resources changed.
-
-Git hooks cannot reload already-running Pi sessions automatically.
-
-## Security
-
-Pi extensions execute arbitrary code with full local permissions. Skills can also instruct agents to run local commands. Only install and sync trusted code, and review third-party Pi packages before adding them to the manifest.
+Pi extensions and skills execute trusted local code or instructions. Review additions and third-party packages before installing them.

@@ -42,8 +42,8 @@ import { complete, type Message, type UserMessage } from "@earendil-works/pi-ai"
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { type AgentScope, discoverAgents } from "pi-subagents/src/agents/agents.ts";
 import { sandboxCommand } from "./child-guard.ts";
+import { type AgentScope, discoverAgents } from "./pi-subagents-adapter.mjs";
 import { freshAgentSessionPath, renderSessionTail, runWorkflowChild } from "./runner.ts";
 import { runWorkflowSandbox, type SandboxBudgetSnapshot, type SandboxHost } from "./sandbox.ts";
 import { AbortableScheduler } from "./scheduler.ts";

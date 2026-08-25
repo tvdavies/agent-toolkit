@@ -63,7 +63,7 @@ const MODELS: ProviderModel[] = [
     thinkingLevelMap: { xhigh: "xhigh" },
     input: ["text", "image"],
     cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-    contextWindow: 1_000_000,
+    contextWindow: 272_000,
     maxTokens: 128_000,
   },
   {
@@ -136,7 +136,7 @@ const MODELS: ProviderModel[] = [
     thinkingLevelMap: { xhigh: "xhigh" },
     input: ["text", "image"],
     cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-    contextWindow: 1_000_000,
+    contextWindow: 272_000,
     maxTokens: 128_000,
   },
   {

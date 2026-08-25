@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { classifyCommand, decide } from "../guardrails/policy.ts";
+import { classifyCommand, decide } from "./child-policy.ts";
 
 function repositoryRoot(cwd: string): string {
 	let current = path.resolve(cwd);

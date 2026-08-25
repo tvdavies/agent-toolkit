@@ -23,8 +23,8 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { type Static, Type } from "typebox";
 
-const START_TICKET_SKILL_PATH = fileURLToPath(
-  new URL("../skills/start-ticket/SKILL.md", import.meta.url),
+export const START_TICKET_SKILL_PATH = fileURLToPath(
+  new URL("../skills/general/start-ticket/SKILL.md", import.meta.url),
 );
 const CWD_CHANGE_TYPE = "workflow-cwd-change";
 const WORKTREE_CHANGE_TYPE = "workflow-worktree-change";
@@ -1138,7 +1138,7 @@ async function withLoading<T>(
       return {
         render: () => [
           "",
-          ` ${theme.fg("accent", frames[frame])} ${theme.fg("muted", currentMessage)}`,
+          ` ${theme.fg("accent", frames[frame] ?? "")} ${theme.fg("muted", currentMessage)}`,
           "",
         ],
         invalidate() {},

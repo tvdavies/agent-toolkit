@@ -5,12 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DEFAULT_REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 REPO_DIR="${AGENT_TOOLS_DIR:-$DEFAULT_REPO_DIR}"
 REPO_DIR="$(cd "$REPO_DIR" && pwd -P)"
-HOOK_DIR="$REPO_DIR/.git/hooks"
-
-if [ ! -d "$HOOK_DIR" ]; then
-  echo "Git hook directory not found: $HOOK_DIR" >&2
-  exit 1
-fi
+HOOK_DIR="$(git -C "$REPO_DIR" rev-parse --git-path hooks)"
+case "$HOOK_DIR" in /*) ;; *) HOOK_DIR="$REPO_DIR/$HOOK_DIR" ;; esac
+mkdir -p "$HOOK_DIR"
 
 install_hook() {
   local name="$1"
@@ -69,7 +66,7 @@ remove_legacy_managed_hook() {
   local hook_path="$HOOK_DIR/$name"
   if [ -f "$hook_path" ] && grep -q "$marker" "$hook_path"; then
     rm "$hook_path"
-    echo "Removed legacy managed $hook_path (protected pushes are now handled by Pi guardrails ask-tier)."
+    echo "Removed obsolete managed $hook_path."
   fi
 }
 
