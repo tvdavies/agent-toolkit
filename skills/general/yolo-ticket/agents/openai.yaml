@@ -1,0 +1,6 @@
+interface:
+  display_name: "YOLO Ticket"
+  short_description: "Deliver one Linear ticket through normal GitHub auto-merge"
+  default_prompt: "Use $yolo-ticket with exactly one Linear ticket identifier such as TEAM-123."
+policy:
+  allow_implicit_invocation: false

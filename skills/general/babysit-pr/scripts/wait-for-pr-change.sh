@@ -213,7 +213,7 @@ collect_submitted_reviews() {
 collect_snapshot() {
   local pr_json threads comments reviews
   pr_json=$(gh pr view "$pr" --repo "$repo" --json \
-    number,url,state,isDraft,mergedAt,closedAt,updatedAt,headRefOid,headRefName,headRepository,headRepositoryOwner,isCrossRepository,baseRefName,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup) || return 1
+    number,url,state,isDraft,mergedAt,closedAt,updatedAt,headRefOid,headRefName,headRepository,headRepositoryOwner,isCrossRepository,baseRefName,mergeable,mergeStateStatus,reviewDecision,autoMergeRequest,statusCheckRollup) || return 1
   comments=$(collect_top_level_comments) || return 1
   reviews=$(collect_submitted_reviews) || return 1
   threads=$(collect_threads) || return 1
@@ -235,6 +235,13 @@ collect_snapshot() {
         headRepository: (.headRepository // null),
         headRepositoryOwner: (.headRepositoryOwner | actor),
         isCrossRepository, baseRefName, mergeable, mergeStateStatus, reviewDecision,
+        autoMergeRequest: (
+          if .autoMergeRequest == null then null else {
+            enabledAt: (.autoMergeRequest.enabledAt // null),
+            enabledBy: (.autoMergeRequest.enabledBy | actor),
+            mergeMethod: (.autoMergeRequest.mergeMethod // null)
+          } end
+        ),
         statusCheckRollup: ((.statusCheckRollup // []) | canonical_checks),
         reviews: ($reviews | canonical_reviews),
         comments: ($comments | canonical_comments)

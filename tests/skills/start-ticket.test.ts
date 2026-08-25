@@ -67,20 +67,47 @@ exit 1
 }
 
 describe("start-ticket skill", () => {
-  it("is explicit-only and defines the end-to-end delivery contract", () => {
+  it("is explicit-only and stops at a ready-for-review implementation PR", () => {
     const skill = readFileSync(skillPath, "utf8");
     const openAi = readFileSync(openAiPath, "utf8");
 
     expect(skill).toContain("name: start-ticket");
     expect(skill).toContain("disable-model-invocation: true");
     expect(openAi).toContain("allow_implicit_invocation: false");
+    expect(openAi).toContain("ready-for-review pull request");
     expect(skill).toContain("move it to **In Progress**");
     expect(skill).toContain("Never edit the user's main checkout");
     expect(skill).toContain("Do not launch a workflow merely for confidence");
-    expect(skill).toContain("$SKILL_DIR/../pr-review/SKILL.md");
-    expect(skill).toContain("Do not invoke the full multi-agent review for routine tickets");
-    expect(skill).toContain("READY TO MERGE");
+    expect(skill).toContain("Do not invoke the `pr-review` skill from `start-ticket`");
+    expect(skill).toContain("Explicitly forbid that reviewer from calling GitHub");
+    expect(skill).toContain("## Phase 5: Validate and implementation self-review");
+    expect(skill).toContain("PR READY FOR REVIEW");
+    expect(skill).toContain("Never report `READY TO MERGE`");
     expect(skill).toContain("If no change is warranted");
+    expect(skill).not.toContain("## Phase 7");
+    expect(skill).not.toContain("../_shared/pr-readiness/PROTOCOL.md");
+    expect(skill).not.toContain("fetch-pr-blockers.sh");
+    expect(skill).not.toContain("reply-and-resolve.sh");
+    expect(skill).not.toContain("$SKILL_DIR/../pr-review/SKILL.md");
+    expect(skill).not.toContain("Drive feedback to merge readiness");
+  });
+
+  it("contains the same bounded Dispatch implement-stage integration", () => {
+    const skill = readFileSync(skillPath, "utf8");
+
+    for (const required of [
+      "## Dispatch integration",
+      "DISPATCH_TASK_ID",
+      "A Docket plan is optional",
+      "exactly one `project:<key>` label",
+      "Never create or adopt another worktree",
+      "requirements-to-code/tests/evidence coverage",
+      "move exactly once to `review`",
+      "move exactly once to `done`",
+      "scope_decision",
+    ]) {
+      expect(skill).toContain(required);
+    }
   });
 
   it("normalises and returns an exact direct Linear lookup", () => {

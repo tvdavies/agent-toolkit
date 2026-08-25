@@ -1,6 +1,6 @@
 interface:
   display_name: "Start Ticket"
-  short_description: "Deliver a Linear ticket through a merge-ready pull request"
-  default_prompt: "Use $start-ticket with a Linear ticket identifier such as TEAM-123."
+  short_description: "Deliver a Linear ticket to a ready-for-review pull request"
+  default_prompt: "Use $start-ticket with exactly one Linear ticket identifier such as TEAM-123."
 policy:
   allow_implicit_invocation: false

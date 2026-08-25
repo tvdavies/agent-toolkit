@@ -57,6 +57,7 @@ describe("install-skills.sh", () => {
       expect((await readLink(link)).startsWith(path.join(repo, "skills"))).toBe(true);
     }
     expect(expected).not.toContain("_shared");
+    expect(expected).toContain("yolo-ticket");
     expect(result.stdout.toString()).toContain(`Installed ${expected.length} skills`);
     const state = JSON.parse(await readFile(path.join(home, ".local", "state", "agent-toolkit", "skill-links.json"), "utf8"));
     expect(state.groups).toEqual(["general", "personal", "lleverage"]);
