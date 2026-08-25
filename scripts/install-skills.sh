@@ -51,6 +51,8 @@ for (const group of ["general", "personal", "lleverage"]) {
   if (!fs.existsSync(groupDir)) throw new Error(`Missing skill group: ${groupDir}`);
   for (const entry of fs.readdirSync(groupDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory()) continue;
+    const skillFile = path.join(groupDir, entry.name, "SKILL.md");
+    if (!fs.existsSync(skillFile) || !fs.lstatSync(skillFile).isFile()) continue;
     const previous = names.get(entry.name);
     if (previous) throw new Error(`Duplicate skill name '${entry.name}' in groups '${previous}' and '${group}'.`);
     names.set(entry.name, group);

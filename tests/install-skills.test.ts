@@ -25,10 +25,13 @@ function run(...args: string[]) {
 }
 
 async function namesIn(group: string): Promise<string[]> {
-  return (await readdir(path.join(repo, "skills", group), { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
+  const names: string[] = [];
+  for (const entry of await readdir(path.join(repo, "skills", group), { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (!await Bun.file(path.join(repo, "skills", group, entry.name, "SKILL.md")).exists()) continue;
+    names.push(entry.name);
+  }
+  return names.sort();
 }
 
 async function installedNames(): Promise<string[]> {
@@ -53,9 +56,12 @@ describe("install-skills.sh", () => {
       const link = path.join(home, ".agents", "skills", name);
       expect((await readLink(link)).startsWith(path.join(repo, "skills"))).toBe(true);
     }
+    expect(expected).not.toContain("_shared");
+    expect(result.stdout.toString()).toContain(`Installed ${expected.length} skills`);
     const state = JSON.parse(await readFile(path.join(home, ".local", "state", "agent-toolkit", "skill-links.json"), "utf8"));
     expect(state.groups).toEqual(["general", "personal", "lleverage"]);
     expect(state.links).toHaveLength(expected.length);
+    expect(state.links.map((link: { path: string }) => path.basename(link.path))).not.toContain("_shared");
   });
 
   it("installs only selected groups", async () => {
