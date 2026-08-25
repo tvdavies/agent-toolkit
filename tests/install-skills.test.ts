@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 const repo = path.resolve(import.meta.dir, "..");
-const installer = path.join(repo, "scripts", "install-skills.sh");
+const installer = path.join(repo, "scripts", "lib", "install-skills.sh");
 let home = "";
 
 beforeEach(async () => {

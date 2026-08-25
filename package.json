@@ -11,8 +11,7 @@
     ]
   },
   "scripts": {
-    "bootstrap": "./scripts/bootstrap.sh",
-    "sync:pi-packages": "./scripts/sync-pi-packages.sh",
+    "sync": "./scripts/sync.sh",
     "test": "bun test ./extensions ./tests",
     "test:workflows": "bun test ./extensions/workflows",
     "test:watch": "bun test --watch",

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-DEFAULT_REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+DEFAULT_REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
 export AGENT_TOOLS_DIR="${AGENT_TOOLS_DIR:-$DEFAULT_REPO_DIR}"
 
 exec node --input-type=module - "$@" <<'NODE'

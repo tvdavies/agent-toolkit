@@ -8,26 +8,26 @@ The retired daemon and Brain runtimes are no longer part of this repository. Git
 
 ```bash
 git clone git@github.com:tvdavies/agent-toolkit.git ~/agent-toolkit
-~/agent-toolkit/scripts/install.sh
+~/agent-toolkit/scripts/sync.sh
 ```
 
-`install.sh` is a thin wrapper around `bootstrap.sh`. Bootstrap:
+`scripts/sync.sh` is the single install and reconciliation command. It:
 
 1. installs production npm dependencies used by retained extensions;
 2. creates managed individual skill links;
 3. installs this checkout as a local Pi package;
 4. links the saved workflows into `~/.pi/agent/workflows`; and
-5. reconciles toolkit-managed third-party Pi packages.
+5. reconciles toolkit-managed third-party Pi packages without running a blanket `pi update`.
 
-It does not require Bun, create services, enable lingering, or change Pi settings. Bun is needed only for development tests.
+It does not require Bun, create services, or enable lingering. Pi's package command records the local checkout and managed third-party packages in the normal package configuration. Bun is needed only for development tests.
 
 Install selected skill groups with:
 
 ```bash
-~/agent-toolkit/scripts/install.sh --groups general,personal
+~/agent-toolkit/scripts/sync.sh --groups general,personal
 ```
 
-All of `general`, `personal`, and `lleverage` are installed by default. Add `--install-git-hooks` to install the post-pull reconciliation hooks.
+On first install, all of `general`, `personal`, and `lleverage` are installed by default. Later runs without `--groups` reuse the managed group set recorded for the same checkout, so an automatic hook does not broaden a selective installation. An explicit `--groups` value replaces the complete desired set: reconciliation removes stale toolkit-managed links from groups that are omitted. To switch a selective machine back to all groups, pass `--groups general,personal,lleverage`. Add `--install-git-hooks` to make merge pulls and pull-with-rebase rerun `sync.sh` automatically. Use `--update-pi-packages` only when you explicitly want the final `pi update --extensions` step.
 
 After installation, run `/reload` in active Pi sessions.
 
@@ -39,7 +39,7 @@ Skills are organised into:
 - `skills/personal/` — Tom, Myslop, Dispatch, Slack, and local tooling; and
 - `skills/lleverage/` — Lleverage repositories, services, teams, and infrastructure.
 
-`scripts/install-skills.sh` creates individual links in `~/.agents/skills`. By default `~/.claude/skills` links to that standard directory. If `~/.claude/skills` is a real directory, it is preserved and receives the same managed individual links.
+The internal skill reconciler creates individual links in `~/.agents/skills`. By default `~/.claude/skills` links to that standard directory. If `~/.claude/skills` is a real directory, it is preserved and receives the same managed individual links.
 
 The installer refuses to overwrite unmanaged directories or externally owned symlinks. Managed state is stored under `~/.local/state/agent-toolkit/`. It supports `--groups` and `--dry-run`.
 
@@ -55,24 +55,27 @@ Saved workflows live in `.pi/workflows/` and remain available through the workfl
 - `implement-ticket`
 - `review-pr`
 
-## Third-party Pi packages
+## Synchronising changes
 
-`manifests/pi-packages.json` is reconciled by:
-
-```bash
-./scripts/sync-pi-packages.sh
-```
-
-The script records toolkit-managed package specs before removing stale entries, so it does not remove unrelated user packages.
-
-## Updating
+Run the same command after adding or removing a skill, adding an extension or runtime dependency, changing a saved workflow, or editing `manifests/pi-packages.json`:
 
 ```bash
-git pull --ff-only
-./scripts/after-pull.sh
+./scripts/sync.sh
 ```
 
-`after-pull.sh` runs the same idempotent reconciliation as bootstrap. Git hooks can be installed with `./scripts/install-git-hooks.sh`.
+A no-argument run preserves this checkout's previously managed skill-group selection. Pass `--groups` only when intentionally replacing that complete selection. If the relevant managed state is malformed, sync stops with an error instead of silently choosing another group set.
+
+Existing skill contents are live through their managed links, and extension contents are live through the installed local package path. Active Pi sessions still need `/reload` to rebuild their resource inventory. New or removed resources need `sync.sh` first so their links and package state exist.
+
+The package reconciler records toolkit-managed package specs before removing stale entries, so it does not remove unrelated user packages. Its safe default does not run `pi update`; pass `--update-pi-packages` explicitly when wanted.
+
+For automatic reconciliation after merge pulls and pull-with-rebase rewrites, install the managed hooks once:
+
+```bash
+./scripts/sync.sh --install-git-hooks
+```
+
+The component scripts under `scripts/lib/` are internal implementation helpers. `scripts/install.sh` and `scripts/after-pull.sh` remain only as compatibility shims for older commands and existing hooks; new documentation and automation should call `scripts/sync.sh`.
 
 ## Removing the retired runtime
 
@@ -104,7 +107,9 @@ skills/personal/            Personal/local skills
 skills/lleverage/           Lleverage-specific skills
 .pi/workflows/              Saved workflows
 manifests/pi-packages.json  Third-party Pi package list
-scripts/                    Install, sync, migration, and hook scripts
+scripts/sync.sh             Canonical install and reconciliation command
+scripts/lib/                Internal reconciliation and hook helpers
+scripts/remove-legacy-runtime.sh  Explicit retired-runtime migration
 tests/                      Toolkit-level tests
 ```
 

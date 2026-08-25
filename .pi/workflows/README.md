@@ -37,8 +37,7 @@ workflow_run mode:'saved' name:'review-pr' args:'4811'
 ## Editing / distribution
 
 These are the canonical sources, discovered automatically when working inside this repo.
-`scripts/install.sh` copies them to `~/.pi/agent/workflows/` so the commands work from any repo.
-After editing one here, re-run the install (or copy it across) to update the global copy.
+`scripts/sync.sh` reconciles managed links in `~/.pi/agent/workflows/` so the commands work from any repo. Run it after adding or removing a workflow. Existing linked workflow contents update live, but active Pi sessions still need `/reload` to rebuild their command inventory.
 
 Relationship to skills: the `pr-review` skill remains for conversational, single-session review;
 `review-pr` is the deterministic multi-agent version and reuses the same dimension design.

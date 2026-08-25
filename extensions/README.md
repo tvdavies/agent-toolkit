@@ -17,17 +17,17 @@ The daemon, Brain, memory, cron, heartbeat, observe, self-update, local web-tool
 
 ## Usage
 
-Install the repository as a local Pi package:
+Synchronise dependencies, skills, the local Pi package, workflows, and managed third-party packages with the repository's canonical command:
 
 ```bash
-pi install "$HOME/agent-toolkit"
+./scripts/sync.sh
 ```
 
-After extension changes, run `/reload` in Pi.
+The installed package points at this checkout, so edits to an existing extension are live on disk. Run `sync.sh` after adding an extension or changing runtime dependencies, then run `/reload` in active Pi sessions.
 
 ## Workflows
 
-The workflows extension discovers reusable scripts from project `.pi/workflows/*.{js,ts}` and user `~/.pi/agent/workflows/*.{js,ts}` paths. This repository ships `debug-issue`, `implement-ticket`, and `review-pr`; `scripts/sync-workflows.sh` links them into the user workflow directory.
+The workflows extension discovers reusable scripts from project `.pi/workflows/*.{js,ts}` and user `~/.pi/agent/workflows/*.{js,ts}` paths. This repository ships `debug-issue`, `implement-ticket`, and `review-pr`; `scripts/sync.sh` invokes the internal workflow reconciler to link them into the user workflow directory.
 
 Workflow JavaScript does not run in the Pi process. On Linux it runs under Bubblewrap with an empty environment, no project/user filesystem, bounded resources, and no network unless the validated workflow explicitly requests it. Each child works in a unique isolated tracked clone. Its child guard:
 

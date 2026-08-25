@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-DEFAULT_REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+DEFAULT_REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
 REPO_DIR="${AGENT_TOOLS_DIR:-$DEFAULT_REPO_DIR}"
 REPO_DIR="$(cd "$REPO_DIR" && pwd -P)"
 SOURCE_DIR="$REPO_DIR/.pi/workflows"
