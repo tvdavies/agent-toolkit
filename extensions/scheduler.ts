@@ -6,7 +6,7 @@
  * user message (as if you had typed it), triggering the agent to act on it.
  *
  * Commands:
- *   /schedule 10m Check PR #4988 and run /address-pr-feedback, applying the plan
+ *   /schedule 10m Resume babysitting PR #4988 and process any new blockers
  *   /schedule 30s ping me
  *   /schedule 2025-12-31T17:00 wrap up for the year
  *   /schedule list            - list pending jobs

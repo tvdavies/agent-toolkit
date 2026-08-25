@@ -67,29 +67,31 @@ describe("shared PR readiness protocol", () => {
     expect(protocol).toContain("Ready-to-merge criteria");
     expect(protocol).toContain("The absence of failing checks or unresolved threads alone is never enough");
     expect(protocol).toContain("three no-progress cycles");
+    expect(protocol).toContain("dedicated non-primary managed worktree");
+    expect(protocol).toContain("Never treat the primary checkout as the PR worktree");
+    expect(protocol).toContain("wait-for-pr-change.sh");
+    expect(protocol).toContain("ready to merge or already merged");
     expect(protocol).not.toContain("drive-pr");
     expect(protocol).not.toContain("daemon");
   });
 
-  it("is consumed by the retained control policies", () => {
-    const address = read("skills/general/address-pr-feedback/SKILL.md");
+  it("is consumed by the retained autonomous control policies", () => {
+    const babysit = read("skills/general/babysit-pr/SKILL.md");
     const start = read("skills/general/start-ticket/SKILL.md");
 
-    expect(address).toContain("../_shared/pr-readiness/PROTOCOL.md");
-    expect(address).toContain("user-approval gate");
+    expect(babysit).toContain("../_shared/pr-readiness/PROTOCOL.md");
+    expect(babysit).toContain("Work autonomously");
     expect(start).toContain("../_shared/pr-readiness/PROTOCOL.md");
     expect(start).toContain("autonomous and bounded");
   });
 
-  it("keeps old address-pr-feedback script paths as compatibility wrappers", () => {
+  it("keeps canonical readiness scripts executable without successor wrappers", () => {
     for (const name of ["fetch-pr-blockers.sh", "reply-and-resolve.sh"]) {
       const shared = join(sharedDir, "scripts", name);
-      const wrapper = read(`skills/general/address-pr-feedback/scripts/${name}`);
-
       expect(statSync(shared).mode & 0o111).not.toBe(0);
-      expect(wrapper).toContain("../../_shared/pr-readiness/scripts");
-      expect(wrapper).toContain(`exec \"$script_dir/${name}\" \"$@\"`);
     }
+    const retiredSkill = join("skills/general", ["address", "pr", "feedback"].join("-"), "SKILL.md");
+    expect(() => read(retiredSkill)).toThrow();
   });
 
   it("keeps only each reviewer's latest state and preserves non-zero check JSON", () => {

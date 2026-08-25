@@ -19,8 +19,9 @@ over raw `git worktree` so everything follows the same convention.
 ## When to use a worktree
 
 - **Fresh, isolated work** on a repo → `worktree_new`.
-- **Continue or review an existing branch / PR** → `worktree_adopt` (do NOT create a new
-  branch — adopt the one the work is already on, e.g. the head branch of the PR).
+- **Continue or review an existing branch / PR** → inspect `worktree_list`, then use
+  `worktree_adopt` when it creates or reuses a dedicated managed worktree for the head branch.
+  Never do code-changing PR work in the primary checkout merely because that branch is already there.
 - **A task touching more than one repo** → call the tools once per repo, passing each
   repo's path as `repo`.
 - **You are a delegated worker** → you already start in your own auto-created worktree, so
@@ -45,10 +46,12 @@ over raw `git worktree` so everything follows the same convention.
 ## Typical flows
 
 **Review/continue a PR that already has a branch**
-1. `worktree_adopt({ pr: "123" })` → returns the worktree path.
-2. Do the review/work there (operate on that path).
-3. If you changed things: commit, then `worktree_merge({ target: "main" })`, then
-   `worktree_remove({ branch, deleteBranch: true })`.
+1. `worktree_list({ repo })` and identify the primary checkout plus any existing managed PR worktree.
+2. `worktree_adopt({ pr: "123", repo })` when no managed PR worktree exists.
+3. Verify the returned path is under the managed worktree root and is not the primary checkout before any code-related command.
+4. If adoption returned the primary checkout because the head branch is already checked out there, ensure the exact PR head object is fetched without changing primary-checkout files, then call `worktree_new` with a unique PR-specific name and `base` set to that exact SHA. For a GitHub fork PR, fetching `pull/PR_NUMBER/head` from the base remote can make the head object available before worktree creation. Verify the fetched SHA before continuing. Work on the temporary local branch and push only with an explicit `HEAD:PR_HEAD_BRANCH` refspec after re-checking the remote head.
+5. Do all installs, edits, builds, tests, commits, and conflict resolution in the verified worktree.
+6. Remove it only when clean and safely integrated or pushed; never delete the remote PR head branch.
 
 **New isolated feature**
 1. `worktree_new({ name: "fix-login-cache" })` → path on `…/fix-login-cache`.
@@ -60,9 +63,12 @@ over raw `git worktree` so everything follows the same convention.
 
 ## Rules
 
-- Always `worktree_list` before `worktree_new` to avoid duplicate worktrees for a branch.
-- Prefer `worktree_adopt` over `worktree_new` when the branch already exists.
+- Always `worktree_list` before creating or adopting so you know which path is the primary checkout and avoid duplicates.
+- A request for isolation is not satisfied by returning the primary checkout. Verify the adopted path before mutation.
+- Prefer `worktree_adopt` for an existing branch only when it yields a dedicated managed worktree.
+- If the existing branch is checked out in the primary checkout, create a managed worktree from the exact remote head on a temporary local branch rather than touching or moving the primary checkout.
+- Anchor every mutating command to the verified worktree path; do not assume a prior `cd` persists between tool calls.
 - Commit or stash before `worktree_merge` (it refuses on a dirty tree).
-- Clean up: `worktree_remove` once the work is integrated, so worktrees don't accumulate.
+- Clean up with `worktree_remove` only when work is integrated or pushed and the worktree is clean. Preserve dirty worktrees and report their paths.
 - Destructive git operations are still subject to the guardrails floor — a blocked op means
   ask before retrying, don't force around it.
