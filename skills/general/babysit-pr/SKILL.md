@@ -23,6 +23,23 @@ Use this skill only after the user explicitly asks to babysit, watch, monitor, a
 - Resolve a review thread only after the corresponding pushed commit exists.
 - Stop on unsafe ambiguity, unavailable push permission, repeated no-progress, or an operation that would require violating these rules.
 
+## Invocation target — process first
+
+Pi appends slash-command arguments to the loaded skill as `User: ARGUMENTS`. Treat that appended text as the user's explicit request, even when it is only a number and contains no prose.
+
+- `User: 6334` and `User: #6334` both select PR 6334.
+- `/babysit-pr 6334` and `/skill:babysit-pr 6334` both mean: babysit PR 6334 in the repository identified by a supplied URL or the current trusted repository context.
+- A GitHub pull-request URL is an explicit target and supplies both repository and PR number.
+- `/babysit-pr` or `/skill:babysit-pr` with no argument means: derive the PR from the current branch, but only when that branch maps unambiguously to one PR.
+
+Resolve the target in this order:
+
+1. Slash-command invocation arguments appended as `User: ARGUMENTS`.
+2. An explicit PR number or URL in the surrounding user message.
+3. The PR associated with the current branch, only when no explicit target was supplied.
+
+Never inspect the current branch to choose a different PR, or ask which PR the user meant, when valid invocation arguments already contain a number or URL. If a bare number was supplied but no repository can be identified safely, retain that number and ask only which repository contains it.
+
 ## Shared skills and protocol
 
 1. Resolve this skill directory from the loaded `SKILL.md` path and call it `SKILL_DIR`.
@@ -39,7 +56,7 @@ bash "$SKILL_DIR/../_shared/pr-readiness/scripts/reply-and-resolve.sh" PR_NUMBER
 
 ## Phase 1: Identify the exact PR
 
-Require one explicit PR number or URL, or derive the PR only when the current branch unambiguously has one. Record the repository explicitly so later `gh` calls do not depend on the current directory.
+Apply the invocation-target order above before any branch lookup. A bare positive integer from `User: ARGUMENTS` is already an explicit PR number; do not discard it because it lacks prose. When no number or URL was supplied, derive the PR only when the current branch unambiguously has one. Record the repository explicitly so later `gh` calls do not depend on the current directory.
 
 Fetch at least:
 
@@ -58,21 +75,28 @@ Record:
 
 If the PR is merged, report `MERGED` and stop. If it is closed without merging, report `CLOSED UNMERGED` and stop. Do not reopen, retarget, or merge it.
 
-## Phase 2: Establish a dedicated worktree
+## Phase 2: Establish or reuse a dedicated worktree
 
-Do this before any code-related command, even when the PR branch is already checked out somewhere.
+Do this before any code-related command, even when the PR branch is already checked out somewhere. Prefer the worktree you are already in when it is the correct isolated PR workspace; do not create redundant worktrees.
 
-1. Use `worktree_list` first. Reuse an existing worktree only when it belongs to this PR, is outside the primary checkout, and is under the configured managed worktree root.
-2. Otherwise call `worktree_adopt` with the PR number and repository.
-3. Verify the returned absolute path against `git worktree list --porcelain` and the managed worktree root. The current adoption helper may return the primary checkout when the PR branch is already checked out there. Detect that before running any mutating command.
-4. If adoption returned the primary checkout, do not use it. Ensure the exact PR head object exists locally without changing primary-checkout files. If necessary, fetch the GitHub PR head ref with the equivalent of `git fetch origin pull/PR_NUMBER/head`, verify `FETCH_HEAD` equals the recorded `headRefOid`, and restart discovery if it moved. Then call `worktree_new` with a unique name such as `babysit-pr-PR_NUMBER` and `base` set to that exact `headRefOid`. This creates a temporary local branch at the PR head. Record that pushes must use an explicit refspec:
+1. **Inspect the current checkout before calling `worktree_list`, `worktree_adopt`, or `worktree_new`.** With read-only Git commands, record its absolute repository root, its entry in `git worktree list --porcelain`, whether it is the primary checkout, current branch, upstream, HEAD, and `git status --porcelain`.
+2. Reuse the current checkout immediately as `WT` when it is a dedicated non-primary managed worktree and is clearly associated with this PR through the PR head branch, its upstream, its relationship to `headRefOid`, or preserved implementation context from this task. Do not call `worktree_adopt` or `worktree_new` in this case.
+3. Do not require local `HEAD` to equal the remote `headRefOid` when the current worktree contains intended local commits or dirty implementation work for this PR. Preserve and inspect that work. Determine whether local state is ahead, behind, or diverged from the fetched PR head before editing or pushing:
+   - If it is clean and only behind, update it safely in `WT`.
+   - If it is ahead or dirty with intended PR work, continue from it without discarding or duplicating the work.
+   - If the remote moved while intended local work exists, reconcile in `WT`, reconsider affected feedback, and revalidate before pushing.
+   - If its association or dirty work is unrelated or ambiguous, preserve it and continue with the fallback below rather than repurposing it.
+4. When the current checkout cannot be reused, call `worktree_list`. Reuse another existing worktree only when it belongs to this PR, is outside the primary checkout, and is under the configured managed worktree root.
+5. Otherwise call `worktree_adopt` with the PR number and repository.
+6. Verify the returned absolute path against `git worktree list --porcelain` and the managed worktree root. The current adoption helper may return the primary checkout when the PR branch is already checked out there. Detect that before running any mutating command.
+7. If adoption returned the primary checkout, do not use it. Ensure the exact PR head object exists locally without changing primary-checkout files. If necessary, fetch the GitHub PR head ref with the equivalent of `git fetch origin pull/PR_NUMBER/head`, verify `FETCH_HEAD` equals the recorded `headRefOid`, and restart discovery if it moved. Then call `worktree_new` with a unique name such as `babysit-pr-PR_NUMBER` and `base` set to that exact `headRefOid`. This creates a temporary local branch at the PR head. Record that pushes must use an explicit refspec:
 
    ```bash
    git push HEAD:PR_HEAD_BRANCH
    ```
 
-5. For a fork PR, configure or select a remote for the actual head repository. Verify authenticated push access before editing. If the head repository cannot be pushed, stop with `BLOCKED: no push access to HEAD_REPOSITORY`; do not push the work to the base repository or another branch.
-6. Record the absolute path as `WT`. Run `git status --porcelain`, `git rev-parse HEAD`, and `git branch --show-current` inside `WT`. Before new work, the intended tree must be clean and its HEAD must equal the recorded PR head, unless it contains preserved work from an earlier babysitting cycle that must be continued rather than discarded.
+8. For a fork PR, configure or select a remote for the actual head repository. Verify authenticated push access before editing. If the head repository cannot be pushed, stop with `BLOCKED: no push access to HEAD_REPOSITORY`; do not push the work to the base repository or another branch.
+9. Record the selected absolute path as `WT`. Run `git status --porcelain`, `git rev-parse HEAD`, `git branch --show-current`, and the ahead/behind comparison inside `WT`. Preserve any intended implementation state and understand its relationship to the remote PR head before new edits.
 
 Keep `WT` for the entire monitoring session. All installs, edits, conflict resolution, validation, commits, and pushes run with `cwd` set to `WT` or with an explicit `cd "$WT" && ...` in that tool call.
 

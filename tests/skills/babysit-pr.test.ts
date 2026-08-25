@@ -192,6 +192,24 @@ describe("babysit-pr skill", () => {
     expect(existsSync(retiredSkill)).toBe(false);
   });
 
+  it("treats slash-command arguments as the PR target before branch inference", () => {
+    const source = readFileSync(skillFile, "utf8");
+    const invocation = source.indexOf("## Invocation target — process first");
+    const phaseOne = source.indexOf("## Phase 1: Identify the exact PR");
+
+    expect(invocation).toBeGreaterThan(0);
+    expect(invocation).toBeLessThan(phaseOne);
+    for (const example of ["User: 6334", "User: #6334", "/babysit-pr 6334", "/skill:babysit-pr 6334"]) {
+      expect(source).toContain(example);
+    }
+    expect(source).toContain("both select PR 6334");
+    expect(source).toContain("with no argument means: derive the PR from the current branch");
+    expect(source).toContain("Slash-command invocation arguments appended as `User: ARGUMENTS`");
+    expect(source).toContain("Never inspect the current branch to choose a different PR, or ask which PR the user meant");
+    expect(source).toContain("retain that number and ask only which repository contains it");
+    expect(source).toContain("Apply the invocation-target order above before any branch lookup");
+  });
+
   it("requires shared readiness, human writing, dedicated worktrees, and no merge", () => {
     const source = readFileSync(skillFile, "utf8");
     expect(source).toContain("../_shared/pr-readiness/PROTOCOL.md");
@@ -200,6 +218,11 @@ describe("babysit-pr skill", () => {
     expect(source).toContain("worktree_list");
     expect(source).toContain("worktree_adopt");
     expect(source).toContain("worktree_new");
+    expect(source).toContain("Inspect the current checkout before calling `worktree_list`, `worktree_adopt`, or `worktree_new`");
+    expect(source).toContain("Reuse the current checkout immediately as `WT`");
+    expect(source).toContain("Do not require local `HEAD` to equal the remote `headRefOid`");
+    expect(source).toContain("ahead, behind, or diverged");
+    expect(source).toContain("preserve it and continue with the fallback");
     expect(source).toContain("The current adoption helper may return the primary checkout");
     expect(source).toContain("base` set to that exact `headRefOid`");
     expect(source).toContain("git fetch origin pull/PR_NUMBER/head");
@@ -208,6 +231,12 @@ describe("babysit-pr skill", () => {
     expect(source).toContain("READY TO MERGE");
     expect(source).toContain("MERGED");
     expect(source).toContain("Never merge the pull request");
+
+    const worktrees = readFileSync(join(root, "skills/general/worktrees/SKILL.md"), "utf8");
+    expect(worktrees).toContain("Inspect the current checkout before listing, creating, or adopting");
+    expect(worktrees).toContain("Reuse it when it is already the correct dedicated non-primary worktree");
+    expect(worktrees).toContain("including when it contains intended ahead or dirty work");
+    expect(worktrees).toContain("A request for isolation is not satisfied by returning the primary checkout");
   });
 
   it("uses the blocking watcher rather than agent sleep turns", () => {

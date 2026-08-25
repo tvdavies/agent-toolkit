@@ -19,9 +19,10 @@ over raw `git worktree` so everything follows the same convention.
 ## When to use a worktree
 
 - **Fresh, isolated work** on a repo → `worktree_new`.
-- **Continue or review an existing branch / PR** → inspect `worktree_list`, then use
-  `worktree_adopt` when it creates or reuses a dedicated managed worktree for the head branch.
-  Never do code-changing PR work in the primary checkout merely because that branch is already there.
+- **Continue or review an existing branch / PR** → inspect the current checkout first. Reuse it
+  when it is already the dedicated non-primary managed worktree for that branch or PR; otherwise
+  inspect `worktree_list`, then use `worktree_adopt`. Never create a redundant worktree, and never
+  do code-changing PR work in the primary checkout merely because that branch is already there.
 - **A task touching more than one repo** → call the tools once per repo, passing each
   repo's path as `repo`.
 - **You are a delegated worker** → you already start in your own auto-created worktree, so
@@ -46,12 +47,14 @@ over raw `git worktree` so everything follows the same convention.
 ## Typical flows
 
 **Review/continue a PR that already has a branch**
-1. `worktree_list({ repo })` and identify the primary checkout plus any existing managed PR worktree.
-2. `worktree_adopt({ pr: "123", repo })` when no managed PR worktree exists.
-3. Verify the returned path is under the managed worktree root and is not the primary checkout before any code-related command.
-4. If adoption returned the primary checkout because the head branch is already checked out there, ensure the exact PR head object is fetched without changing primary-checkout files, then call `worktree_new` with a unique PR-specific name and `base` set to that exact SHA. For a GitHub fork PR, fetching `pull/PR_NUMBER/head` from the base remote can make the head object available before worktree creation. Verify the fetched SHA before continuing. Work on the temporary local branch and push only with an explicit `HEAD:PR_HEAD_BRANCH` refspec after re-checking the remote head.
-5. Do all installs, edits, builds, tests, commits, and conflict resolution in the verified worktree.
-6. Remove it only when clean and safely integrated or pushed; never delete the remote PR head branch.
+1. Inspect the current checkout's absolute root, worktree entry, branch, upstream, HEAD, and status. If it is already the dedicated non-primary managed worktree for this PR, reuse it instead of adopting or creating another one.
+2. Preserve intended dirty files or local commits in that current PR worktree. Determine whether it is ahead, behind, or diverged from the remote head; do not require exact HEAD equality before understanding legitimate local work.
+3. Otherwise use `worktree_list({ repo })` and identify the primary checkout plus any existing managed PR worktree.
+4. `worktree_adopt({ pr: "123", repo })` when no suitable managed PR worktree exists.
+5. Verify the returned path is under the managed worktree root and is not the primary checkout before any code-related command.
+6. If adoption returned the primary checkout because the head branch is already checked out there, ensure the exact PR head object is fetched without changing primary-checkout files, then call `worktree_new` with a unique PR-specific name and `base` set to that exact SHA. For a GitHub fork PR, fetching `pull/PR_NUMBER/head` from the base remote can make the head object available before worktree creation. Verify the fetched SHA before continuing. Work on the temporary local branch and push only with an explicit `HEAD:PR_HEAD_BRANCH` refspec after re-checking the remote head.
+7. Do all installs, edits, builds, tests, commits, and conflict resolution in the verified worktree.
+8. Remove it only when clean and safely integrated or pushed; never delete the remote PR head branch.
 
 **New isolated feature**
 1. `worktree_new({ name: "fix-login-cache" })` → path on `…/fix-login-cache`.
@@ -63,7 +66,8 @@ over raw `git worktree` so everything follows the same convention.
 
 ## Rules
 
-- Always `worktree_list` before creating or adopting so you know which path is the primary checkout and avoid duplicates.
+- Inspect the current checkout before listing, creating, or adopting. Reuse it when it is already the correct dedicated non-primary worktree, including when it contains intended ahead or dirty work for the task.
+- Use `worktree_list` before creating or adopting when the current checkout is unsuitable, so you know which path is the primary checkout and avoid duplicates.
 - A request for isolation is not satisfied by returning the primary checkout. Verify the adopted path before mutation.
 - Prefer `worktree_adopt` for an existing branch only when it yields a dedicated managed worktree.
 - If the existing branch is checked out in the primary checkout, create a managed worktree from the exact remote head on a temporary local branch rather than touching or moving the primary checkout.
