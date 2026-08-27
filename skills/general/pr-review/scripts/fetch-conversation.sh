@@ -6,11 +6,17 @@
 # Retrieval is bounded and newest-first: the latest 100 line-comment threads,
 # the latest 30 reviews (verdict bodies included), and the latest 50 issue
 # comments. Truncation is reported in the output rather than silently dropped.
+# Line-comment threads carry the id of the review that opened them, so a
+# specific round's inline findings can be matched to its verdict entry.
+#
+# Exits 0 on success even when the conversation is empty; exits non-zero when
+# retrieval itself fails, so a missing history is never mistaken for an empty
+# one.
 #
 # Usage:
 #   fetch-conversation.sh --pr NUMBER [--repo OWNER/NAME]
 #
-# Output: markdown summary to stdout. Exits 0 on success even if conversation is empty.
+# Output: markdown summary to stdout.
 #
 # Dependencies: bash, gh, jq
 
@@ -50,11 +56,12 @@ NAME="${REPO#*/}"
 # unbounded. Review bodies are included because verdict-bearing rounds
 # (approvals, request-changes) live in review bodies, not issue comments.
 
-conversation_json=$(gh api graphql -f query='
+if ! conversation_json=$(gh api graphql -f query='
 query($owner:String!, $repo:String!, $number:Int!) {
   repository(owner:$owner, name:$repo) {
     pullRequest(number:$number) {
-      reviewThreads(first:100) {
+      reviewThreads(last:100) {
+        totalCount
         nodes {
           isResolved
           isOutdated
@@ -66,6 +73,7 @@ query($owner:String!, $repo:String!, $number:Int!) {
               author { login }
               body
               createdAt
+              pullRequestReview { databaseId }
             }
           }
         }
@@ -73,6 +81,7 @@ query($owner:String!, $repo:String!, $number:Int!) {
       reviews(last:30) {
         totalCount
         nodes {
+          databaseId
           author { login }
           state
           body
@@ -89,8 +98,13 @@ query($owner:String!, $repo:String!, $number:Int!) {
       }
     }
   }
-}' -f owner="$OWNER" -f repo="$NAME" -F number="$PR_NUMBER" 2>/dev/null \
-  || echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]}}}}}')
+}' -f owner="$OWNER" -f repo="$NAME" -F number="$PR_NUMBER" 2>&1); then
+    # Do not degrade a retrieval failure into an empty history: the caller
+    # must be able to tell "no prior review" apart from "could not fetch".
+    echo "Error: failed to retrieve PR conversation for #$PR_NUMBER:" >&2
+    echo "$conversation_json" >&2
+    exit 1
+fi
 
 threads_json=$conversation_json
 
@@ -99,6 +113,14 @@ threads_json=$conversation_json
 echo "## Prior Discussion"
 echo
 echo "### Line-comment threads"
+
+threads_truncation=$(echo "$conversation_json" | jq -r '
+  .data.repository.pullRequest.reviewThreads
+  | if .totalCount > (.nodes | length)
+    then "_Showing the newest \(.nodes | length) of \(.totalCount) line-comment threads._"
+    else empty end
+')
+[[ -n "$threads_truncation" ]] && echo "$threads_truncation"
 
 threads_md=$(echo "$threads_json" | jq -r '
   .data.repository.pullRequest.reviewThreads.nodes
@@ -111,6 +133,7 @@ threads_md=$(echo "$threads_json" | jq -r '
       end
     ) as $state
   | (.line // .originalLine // "") as $line
+  | (.comments.nodes[0].pullRequestReview.databaseId // "") as $review_id
   | (
       .comments.nodes
       | map(
@@ -118,7 +141,7 @@ threads_md=$(echo "$threads_json" | jq -r '
         )
       | join(" → ")
     ) as $msgs
-  | "- **[\($state)]** `\(.path)`" + (if $line != "" then ":\($line)" else "" end) + " — \($msgs)"
+  | "- **[\($state)]** `\(.path)`" + (if $line != "" then ":\($line)" else "" end) + (if $review_id != "" then " (review \($review_id))" else "" end) + " — \($msgs)"
 ')
 
 if [[ -z "$threads_md" ]]; then
@@ -142,7 +165,7 @@ reviews_md=$(echo "$conversation_json" | jq -r '
   .data.repository.pullRequest.reviews.nodes
   | map(select(.state != "PENDING"))
   | .[]
-  | "- **[\(.state)]** \(.author.login // "deleted") (\(.createdAt[0:10])): \(if (.body // "") == "" then "(no body)" else ((.body) | gsub("\\s+"; " ") | .[0:400]) end)"
+  | "- **[\(.state)]** review \(.databaseId) by \(.author.login // "deleted") (\(.createdAt[0:10])): \(if (.body // "") == "" then "(no body)" else ((.body) | gsub("\\s+"; " ") | .[0:400]) end)"
 ')
 
 if [[ -z "$reviews_md" ]]; then
