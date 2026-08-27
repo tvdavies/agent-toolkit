@@ -214,7 +214,7 @@ Each severity tier is a collapsible section with a count in the summary line. On
 
 ## Incremental Review Template
 
-When posting an incremental re-review (`--since`), use this template instead of the full review template. Always post as a **new comment** — never use `--edit-last` for incremental reviews, so the PR timeline preserves the progression.
+When posting an incremental re-review (`--since`), use this template instead of the full review template. Post it through `post-review.sh --verdict VERDICT` exactly like a full review — the verdict still drives the real GitHub event, so an incremental APPROVE submits an actual approval review. Never use `--edit-last` for incremental reviews, so the PR timeline preserves the progression.
 
 ```markdown
 ## {VERDICT_BADGE} Incremental Review
@@ -323,6 +323,8 @@ The verdict is based on **Still Open + New** findings combined (resolved finding
 - APPROVE_WITH_SUGGESTIONS: Only suggestions remaining
 - REQUEST_CHANGES: At least one critical or should-fix finding still open or newly introduced
 
+Pass the resulting verdict to `post-review.sh --verdict` unchanged — incremental rounds use the same verdict → event mapping as full reviews.
+
 **Incremental inline comments:** Only generate inline comments for NEW findings. Still-open findings already have conversation threads from the prior review — adding duplicates creates noise.
 
 ## Inline Review Comments
@@ -381,7 +383,7 @@ Fields:
 
 ### Review Event Mapping
 
-Map the review verdict to a GitHub review event:
+`post-review.sh` maps the verdict to the GitHub review event. Callers pass `--verdict` and never pick an event — the script rejects `--event` and refuses a verdict that contradicts the body's verdict heading:
 
 | Verdict | Event |
 |---------|-------|
@@ -410,14 +412,14 @@ Use the `post-review.sh` script for all posting. It handles body comment + inlin
 bash scripts/post-review.sh \
     --body $REVIEW_TMPDIR/pr-review.md \
     --inline $REVIEW_TMPDIR/pr-review-inline.json \
-    --event REQUEST_CHANGES \
+    --verdict REQUEST_CHANGES \
     --pr 1234
 ```
 
 ### Body only (no inline comments)
 ```bash
 bash scripts/post-review.sh \
-    --body $REVIEW_TMPDIR/pr-review.md --event APPROVE --pr 1234
+    --body $REVIEW_TMPDIR/pr-review.md --verdict APPROVE --pr 1234
 ```
 
 ### Update existing review comment
@@ -430,10 +432,10 @@ bash scripts/post-review.sh \
 ```bash
 bash scripts/post-review.sh \
     --body $REVIEW_TMPDIR/pr-review.md --inline $REVIEW_TMPDIR/pr-review-inline.json \
-    --event REQUEST_CHANGES --pr 1234 --dry-run
+    --verdict REQUEST_CHANGES --pr 1234 --dry-run
 ```
 
-**Important:** Always pass `--pr NUMBER` explicitly. Never rely on auto-detection from the current branch. Never call `gh pr review` directly — the script handles review submission atomically.
+**Important:** Always pass `--pr NUMBER` explicitly. Never rely on auto-detection from the current branch. Never call `gh pr review`, `gh pr comment`, or the reviews API directly — `post-review.sh` is the only sanctioned posting path.
 
 ### If no PR exists
 Inform the user that no PR was found and offer to create one, or just output the review conversationally.

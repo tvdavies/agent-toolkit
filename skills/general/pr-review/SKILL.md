@@ -525,8 +525,7 @@ Read `../writing-for-humans/SKILL.md` relative to this skill and apply its send-
 1. Read `references/github-output.md` for the complete template, formatting rules, and inline comment format
 2. Format the synthesised findings into body markdown and write to `$REVIEW_TMPDIR/pr-review.md`
 3. For each CRITICAL and SHOULD_FIX finding, format an inline comment using the inline comment template from `references/github-output.md` and collect into `$REVIEW_TMPDIR/pr-review-inline.json`. SUGGESTION findings do NOT get inline comments.
-4. Map the verdict to a review event (see event mapping table in `references/github-output.md`)
-5. Post via: `bash /path/to/skill/scripts/post-review.sh --body $REVIEW_TMPDIR/pr-review.md --inline $REVIEW_TMPDIR/pr-review-inline.json --event EVENT --pr PR_NUMBER` (use the skill's base directory path for the script)
+4. Post via: `bash /path/to/skill/scripts/post-review.sh --body $REVIEW_TMPDIR/pr-review.md --inline $REVIEW_TMPDIR/pr-review-inline.json --verdict VERDICT --pr PR_NUMBER` (use the skill's base directory path for the script). VERDICT is the Phase 3 verdict passed through unchanged: `APPROVE`, `APPROVE_WITH_SUGGESTIONS`, `CHANGES_SUGGESTED`, or `REQUEST_CHANGES`. The script owns the verdict → GitHub event mapping (see `references/github-output.md`) and refuses a verdict that contradicts the body's verdict heading. Never choose or pass a GitHub review event yourself.
 
 `post-review.sh` is also the source of truth for automation-supplied human-approval policy. See the approval-gate contract in `references/github-output.md`; do not duplicate or bypass it in the review prompt.
 
@@ -534,7 +533,7 @@ Read `../writing-for-humans/SKILL.md` relative to this skill and apply its send-
 
 If updating an existing review comment, use `--edit-last` flag (inline comments are skipped on updates to avoid duplicate threads).
 
-**Never call `gh pr review` directly.** The script handles both the review body and the approval/request-changes event in a single atomic API call, preventing duplicate reviews. Calling `gh pr review` separately will create a second review.
+**Never interact with the GitHub review API yourself.** `post-review.sh` is the only sanctioned path for review output — no `gh pr review`, no `gh pr comment`, no `gh api .../reviews`. The script maps the verdict to the correct GitHub event, submits the body and inline comments atomically, enforces the human-approval policy, and refuses mismatched verdicts. Posting through any other channel can leave an approval verdict in writing without the actual approval event, create duplicate reviews, or bypass the approval gate.
 
 ## Incremental Re-review
 
@@ -543,7 +542,7 @@ When `--since COMMIT_SHA` is provided, the review shifts from a full assessment 
 ### Context Gathering (incremental)
 
 1. Narrow the diff to `COMMIT_SHA...HEAD` — only new commits are reviewed
-2. Retrieve the previous review. The summary is posted as an **issue comment**, not a review body — in headless mode the review objects themselves have empty bodies, so `pulls/N/reviews` alone will not find it. Read `issues/N/comments`, newest first, and take the most recent one whose H2 heading marks a verdict: "Approved", "Approved with Suggestions", "Changes Suggested", or "Changes Requested". Also fetch `pulls/N/comments` for the inline findings attached to that round.
+2. Retrieve the previous review. Depending on its verdict it lives in a review body (`pulls/N/reviews` — approval and request-changes rounds) or in an issue comment (`issues/N/comments` — changes-suggested rounds). Scan both, newest first, and take the most recent item whose H2 heading marks a verdict: "Approved", "Approved with Suggestions", "Changes Suggested", or "Changes Requested". Also fetch `pulls/N/comments` for the inline findings attached to that round.
 3. Parse the previous review to extract its findings (file, lines, title, severity), including which of them the author was asked to act on
 4. Run the full sub-agent analysis on the narrowed diff as normal
 
@@ -592,7 +591,7 @@ The incremental output uses a different structure from the full review. The thre
 
 **GitHub output:**
 
-Always post as a **new comment** (never `--edit-last`) so the PR timeline shows progression. Read `references/github-output.md` for the incremental template format. Only generate inline comments for NEW findings — still-open findings already have conversation threads from the prior review.
+Post through `post-review.sh --verdict VERDICT` exactly as in a full review — an incremental APPROVE or APPROVE_WITH_SUGGESTIONS submits a real GitHub approval, never a plain comment. Each round is a fresh posting (never `--edit-last`) so the PR timeline shows progression. Read `references/github-output.md` for the incremental template format. Only generate inline comments for NEW findings — still-open findings already have conversation threads from the prior review.
 
 ### Edge Cases
 

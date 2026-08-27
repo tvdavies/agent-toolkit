@@ -3,15 +3,19 @@
 # post-review.sh — Post PR review body comment + optional inline review comments.
 #
 # Usage:
-#   post-review.sh --body FILE [--inline FILE] [--event EVENT] [--pr NUMBER] [--edit-last] [--dry-run]
+#   post-review.sh --body FILE --verdict VERDICT [--inline FILE] [--pr NUMBER] [--dry-run]
+#   post-review.sh --body FILE --edit-last [--pr NUMBER] [--dry-run]
 #
 # Arguments:
-#   --body FILE      Path to markdown file for the body comment (required)
-#   --inline FILE    Path to JSON file with inline comments (optional)
-#   --event EVENT    Review event: REQUEST_CHANGES | COMMENT | APPROVE (default: COMMENT)
-#   --pr NUMBER      Target a specific PR number (otherwise auto-detected from current branch)
-#   --edit-last      Update the most recent comment instead of posting new
-#   --dry-run        Print what would be posted without actually posting
+#   --body FILE       Path to markdown file for the body comment (required)
+#   --verdict VERDICT Review verdict: APPROVE | APPROVE_WITH_SUGGESTIONS |
+#                     CHANGES_SUGGESTED | REQUEST_CHANGES (required unless
+#                     --edit-last). This script alone maps the verdict to the
+#                     GitHub review event; callers never choose the event.
+#   --inline FILE     Path to JSON file with inline comments (optional)
+#   --pr NUMBER       Target a specific PR number (otherwise auto-detected from current branch)
+#   --edit-last       Update the most recent comment instead of posting new
+#   --dry-run         Print what would be posted without actually posting
 #
 # Environment:
 #   PRSMASH_TRUSTED_AUTHORS      Comma/space separated GitHub logins matched
@@ -37,7 +41,8 @@ set -euo pipefail
 
 BODY_FILE=""
 INLINE_FILE=""
-EVENT="COMMENT"
+VERDICT=""
+EVENT=""
 PR_NUMBER_ARG=""
 EDIT_LAST=false
 DRY_RUN=false
@@ -54,7 +59,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --body)     BODY_FILE="$2"; shift 2 ;;
         --inline)   INLINE_FILE="$2"; shift 2 ;;
-        --event)    EVENT="$2"; shift 2 ;;
+        --verdict)  VERDICT="$2"; shift 2 ;;
+        --event)
+            echo "Error: --event was removed. Pass --verdict (APPROVE | APPROVE_WITH_SUGGESTIONS | CHANGES_SUGGESTED | REQUEST_CHANGES); this script owns the GitHub review event." >&2
+            exit 1 ;;
         --pr)       PR_NUMBER_ARG="$2"; shift 2 ;;
         --edit-last) EDIT_LAST=true; shift ;;
         --dry-run)  DRY_RUN=true; shift ;;
@@ -70,6 +78,34 @@ fi
 if [[ ! -f "$BODY_FILE" ]]; then
     echo "Error: Body file not found: $BODY_FILE" >&2
     exit 1
+fi
+
+# --- Verdict → GitHub event mapping ---
+#
+# The caller states the review VERDICT; this script alone decides which GitHub
+# event that becomes. Reviewers never talk to the review API directly, so an
+# approval verdict cannot end up as a plain comment (or the reverse) through a
+# caller mistake.
+#
+#   APPROVE                  -> APPROVE          (real GitHub approval)
+#   APPROVE_WITH_SUGGESTIONS -> APPROVE          (real GitHub approval)
+#   CHANGES_SUGGESTED        -> COMMENT          (non-blocking issue comment)
+#   REQUEST_CHANGES          -> REQUEST_CHANGES  (blocking review)
+
+if [[ "$EDIT_LAST" == true && -z "$VERDICT" ]]; then
+    EVENT="COMMENT"
+else
+    case "$VERDICT" in
+        APPROVE|APPROVE_WITH_SUGGESTIONS) EVENT="APPROVE" ;;
+        CHANGES_SUGGESTED)                EVENT="COMMENT" ;;
+        REQUEST_CHANGES)                  EVENT="REQUEST_CHANGES" ;;
+        "")
+            echo "Error: --verdict is required (APPROVE | APPROVE_WITH_SUGGESTIONS | CHANGES_SUGGESTED | REQUEST_CHANGES)." >&2
+            exit 1 ;;
+        *)
+            echo "Error: Unknown verdict '$VERDICT'. Valid: APPROVE | APPROVE_WITH_SUGGESTIONS | CHANGES_SUGGESTED | REQUEST_CHANGES." >&2
+            exit 1 ;;
+    esac
 fi
 
 # --- Detect PR context ---
@@ -145,6 +181,35 @@ write_prsmash_result() {
 
 BODY_CONTENT=$(cat "$BODY_FILE")
 EFFECTIVE_BODY_FILE="$BODY_FILE"
+
+# --- Body ↔ verdict consistency guard ---
+#
+# The body's verdict heading is written by the reviewer; the --verdict flag
+# drives the GitHub event. If they disagree, one of them is wrong — refuse to
+# post rather than publish an approval body without an approval event (or the
+# reverse). The check is lenient: a body whose first heading carries no
+# recognisable verdict wording is accepted as-is.
+if [[ -n "$VERDICT" ]]; then
+    BODY_HEADING=$(printf '%s\n' "$BODY_CONTENT" | grep -m1 '^#' || true)
+    BODY_HEADING_LC=$(printf '%s' "$BODY_HEADING" | tr '[:upper:]' '[:lower:]')
+    BODY_VERDICT=""
+    if [[ -n "$BODY_HEADING_LC" ]]; then
+        if [[ "$BODY_HEADING_LC" == *"changes requested"* ]]; then
+            BODY_VERDICT="REQUEST_CHANGES"
+        elif [[ "$BODY_HEADING_LC" == *"changes suggested"* ]]; then
+            BODY_VERDICT="CHANGES_SUGGESTED"
+        elif [[ "$BODY_HEADING_LC" == *"approved with suggestions"* ]]; then
+            BODY_VERDICT="APPROVE_WITH_SUGGESTIONS"
+        elif [[ "$BODY_HEADING_LC" == *"approve"* ]]; then
+            BODY_VERDICT="APPROVE"
+        fi
+    fi
+    if [[ -n "$BODY_VERDICT" && "$BODY_VERDICT" != "$VERDICT" ]]; then
+        echo "Error: --verdict ${VERDICT} contradicts the body's verdict heading (${BODY_HEADING} reads as ${BODY_VERDICT}). Fix the body or the flag; refusing to post." >&2
+        exit 1
+    fi
+fi
+
 MANUAL_APPROVAL_REQUIRED=false
 MANUAL_APPROVAL_REASON=""
 MANUAL_APPROVAL_REASON_CODE=""
