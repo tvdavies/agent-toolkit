@@ -78,7 +78,7 @@ pr_json() {
 }
 
 run_with_json() {
-  local event=$1 json=$2
+  local verdict=$1 json=$2
   shift 2
   rm -f "$result" "$call_log" "$captured_body" "$review_payload" "$stdout_file" "$stderr_file"
   env \
@@ -93,14 +93,14 @@ run_with_json() {
     GH_REVIEW_PAYLOAD_CAPTURE="$review_payload" \
     PRSMASH_REVIEW_RESULT_FILE="$result" \
     "$@" \
-    "$SCRIPT" --body "$TMP/body.md" --event "$event" --pr 5938 \
+    "$SCRIPT" --body "$TMP/body.md" --verdict "$verdict" --pr 5938 \
     >"$stdout_file" 2>"$stderr_file"
 }
 
 run_case() {
-  local event=$1 author=$2 additions=$3 deletions=$4
+  local verdict=$1 author=$2 additions=$3 deletions=$4
   shift 4
-  run_with_json "$event" "$(pr_json "$author" "$additions" "$deletions")" "$@"
+  run_with_json "$verdict" "$(pr_json "$author" "$additions" "$deletions")" "$@"
 }
 
 assert_approved() {
@@ -188,9 +188,9 @@ run_case APPROVE beth 5000 5000 \
   PRSMASH_APPROVAL_LINE_LIMIT=1001
 assert_approved
 
-run_case COMMENT beth 5000 5000 "${policy[@]}" PRSMASH_AUTO_APPROVE_ALL=invalid
+run_case CHANGES_SUGGESTED beth 5000 5000 "${policy[@]}" PRSMASH_AUTO_APPROVE_ALL=invalid
 jq -e '.posting == "issue-comment" and .event == "COMMENT" and .manualApprovalRequired == false' "$result" >/dev/null \
-  || fail "COMMENT verdict was changed by approval policy"
+  || fail "CHANGES_SUGGESTED verdict was changed by approval policy"
 
 run_case REQUEST_CHANGES beth 5000 5000 "${policy[@]}" PRSMASH_AUTO_APPROVE_ALL=invalid
 jq -e '.posting == "github-review" and .event == "REQUEST_CHANGES" and .manualApprovalRequired == false' "$result" >/dev/null \
@@ -242,11 +242,44 @@ fi
 [[ ! -e "$call_log" ]] || fail "missing line statistics posted to GitHub"
 
 stale_json=$(pr_json beth 11 6)
-if run_with_json COMMENT "$stale_json" \
+if run_with_json CHANGES_SUGGESTED "$stale_json" \
     PRSMASH_REVIEW_EXPECTED_HEAD=4fe402e15f8fe7403b4edd8d6975b807c369068e; then
   fail "post-review accepted a head that moved after analysis"
 fi
 [[ ! -e "$result" ]] || fail "stale-head attempt wrote a result"
 [[ ! -e "$call_log" ]] || fail "stale-head attempt posted to GitHub"
+
+# --- Verdict interface guards ---
+
+# The legacy --event flag is rejected outright.
+if env PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" \
+    "$SCRIPT" --body "$TMP/body.md" --event APPROVE --pr 5938 \
+    >"$stdout_file" 2>"$stderr_file"; then
+  fail "legacy --event flag was accepted"
+fi
+rg -q -- '--event was removed' "$stderr_file" || fail "missing --event removal message"
+
+# A missing verdict is rejected.
+if env PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" \
+    "$SCRIPT" --body "$TMP/body.md" --pr 5938 >"$stdout_file" 2>"$stderr_file"; then
+  fail "missing --verdict was accepted"
+fi
+rg -q -- '--verdict is required' "$stderr_file" || fail "missing required-verdict message"
+
+# APPROVE_WITH_SUGGESTIONS submits a real approval review.
+run_case APPROVE_WITH_SUGGESTIONS alice 11 6 "${policy[@]}"
+assert_approved
+
+# A body whose verdict heading contradicts --verdict refuses to post.
+printf '## ✅ Approved\n\nLooks good.\n' > "$TMP/body.md"
+if run_case REQUEST_CHANGES alice 11 6 "${policy[@]}"; then
+  fail "verdict contradicting the body heading was accepted"
+fi
+[[ ! -e "$call_log" ]] || fail "mismatched verdict posted to GitHub"
+
+# A matching heading passes the guard.
+run_case APPROVE alice 11 6 "${policy[@]}"
+assert_approved
+printf 'Review body\n' > "$TMP/body.md"
 
 echo "post-review result tests passed"
