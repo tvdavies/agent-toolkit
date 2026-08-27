@@ -520,7 +520,7 @@ When the user requests posting to GitHub:
 
 Before formatting GitHub output, initialise `REVIEW_TMPDIR` exactly as described in the Review Temporary Directory section and write every generated artifact there.
 
-Read `../writing-for-humans/SKILL.md` relative to this skill and apply its send-ready process to summaries, findings, and inline comments. Preserve the required review template, verdict labels, severity labels, and finding structure.
+If `../writing-for-humans/SKILL.md` exists relative to this skill, read it and apply its send-ready process to summaries, findings, and inline comments. Where it is absent, apply the same intent directly: lead with the outcome, keep only the details the author needs to understand or act, and write conversational, send-ready prose. Either way, preserve the required review template, verdict labels, severity labels, and finding structure.
 
 1. Read `references/github-output.md` for the complete template, formatting rules, and inline comment format
 2. Format the synthesised findings into body markdown and write to `$REVIEW_TMPDIR/pr-review.md`
@@ -531,7 +531,7 @@ Read `../writing-for-humans/SKILL.md` relative to this skill and apply its send-
 
 **Important:** Always pass `--pr PR_NUMBER` to target the correct PR explicitly. Do not rely on auto-detection from the current branch — it can target the wrong PR when running from a worktree or detached HEAD.
 
-If updating an existing review comment, use `--edit-last` flag (inline comments are skipped on updates to avoid duplicate threads).
+If updating an existing review comment, use the `--edit-last` flag (inline comments are skipped on updates to avoid duplicate threads). `--edit-last` only edits a previously posted comment body — it cannot carry an approval or request-changes verdict, and the script rejects that combination; post a fresh review instead.
 
 **Never interact with the GitHub review API yourself.** `post-review.sh` is the only sanctioned path for review output — no `gh pr review`, no `gh pr comment`, no `gh api .../reviews`. The script maps the verdict to the correct GitHub event, submits the body and inline comments atomically, enforces the human-approval policy, and refuses mismatched verdicts. Posting through any other channel can leave an approval verdict in writing without the actual approval event, create duplicate reviews, or bypass the approval gate.
 
@@ -591,7 +591,7 @@ The incremental output uses a different structure from the full review. The thre
 
 **GitHub output:**
 
-Post through `post-review.sh --verdict VERDICT` exactly as in a full review — an incremental APPROVE or APPROVE_WITH_SUGGESTIONS submits a real GitHub approval, never a plain comment. Each round is a fresh posting (never `--edit-last`) so the PR timeline shows progression. Read `references/github-output.md` for the incremental template format. Only generate inline comments for NEW findings — still-open findings already have conversation threads from the prior review.
+Post through `post-review.sh --verdict VERDICT` exactly as in a full review — the script submits an approval verdict as a real GitHub approval review, and its manual-approval gate is the only thing that may downgrade it to a comment; never downgrade a verdict yourself. Each round is a fresh posting (never `--edit-last`) so the PR timeline shows progression. Read `references/github-output.md` for the incremental template format. Only generate inline comments for NEW findings — still-open findings already have conversation threads from the prior review.
 
 ### Edge Cases
 

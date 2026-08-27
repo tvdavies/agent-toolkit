@@ -214,7 +214,7 @@ Each severity tier is a collapsible section with a count in the summary line. On
 
 ## Incremental Review Template
 
-When posting an incremental re-review (`--since`), use this template instead of the full review template. Post it through `post-review.sh --verdict VERDICT` exactly like a full review — the verdict still drives the real GitHub event, so an incremental APPROVE submits an actual approval review. Never use `--edit-last` for incremental reviews, so the PR timeline preserves the progression.
+When posting an incremental re-review (`--since`), use this template instead of the full review template. Post it through `post-review.sh --verdict VERDICT` exactly like a full review — the verdict still drives the real GitHub event, and the script's manual-approval gate is the only thing that may downgrade an approval verdict to a comment. Never use `--edit-last` for incremental reviews, so the PR timeline preserves the progression.
 
 ```markdown
 ## {VERDICT_BADGE} Incremental Review
@@ -321,9 +321,10 @@ Same format as severity sections in the full review, grouped by severity:
 The verdict is based on **Still Open + New** findings combined (resolved findings are excluded):
 - APPROVE: No critical or should-fix findings remaining
 - APPROVE_WITH_SUGGESTIONS: Only suggestions remaining
-- REQUEST_CHANGES: At least one critical or should-fix finding still open or newly introduced
+- CHANGES_SUGGESTED: At least one should-fix finding still open or newly introduced, but no criticals — non-blocking, exactly as in a full review
+- REQUEST_CHANGES: At least one critical finding still open or newly introduced
 
-Pass the resulting verdict to `post-review.sh --verdict` unchanged — incremental rounds use the same verdict → event mapping as full reviews.
+Pass the resulting verdict to `post-review.sh --verdict` unchanged — incremental rounds use the same verdict thresholds and verdict → event mapping as full reviews. Only CRITICAL findings block a re-review round, matching the full-review policy.
 
 **Incremental inline comments:** Only generate inline comments for NEW findings. Still-open findings already have conversation threads from the prior review — adding duplicates creates noise.
 

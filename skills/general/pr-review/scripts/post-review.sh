@@ -14,7 +14,10 @@
 #                     GitHub review event; callers never choose the event.
 #   --inline FILE     Path to JSON file with inline comments (optional)
 #   --pr NUMBER       Target a specific PR number (otherwise auto-detected from current branch)
-#   --edit-last       Update the most recent comment instead of posting new
+#   --edit-last       Update the most recent comment instead of posting new.
+#                     Comment-only: rejected with a verdict that maps to a
+#                     review event (APPROVE, APPROVE_WITH_SUGGESTIONS,
+#                     REQUEST_CHANGES) — post a fresh review for those.
 #   --dry-run         Print what would be posted without actually posting
 #
 # Environment:
@@ -106,6 +109,15 @@ else
             echo "Error: Unknown verdict '$VERDICT'. Valid: APPROVE | APPROVE_WITH_SUGGESTIONS | CHANGES_SUGGESTED | REQUEST_CHANGES." >&2
             exit 1 ;;
     esac
+fi
+
+# --edit-last only edits an existing comment body — it can never submit a
+# review event. Accepting a review-event verdict here would silently discard
+# the event and recreate the approval-in-writing-only failure mode, so refuse
+# the combination outright.
+if [[ "$EDIT_LAST" == true && -n "$VERDICT" && "$EVENT" != "COMMENT" ]]; then
+    echo "Error: --edit-last only edits an existing comment; it cannot carry a review-event verdict (${VERDICT}). Post a fresh review instead." >&2
+    exit 1
 fi
 
 # --- Detect PR context ---

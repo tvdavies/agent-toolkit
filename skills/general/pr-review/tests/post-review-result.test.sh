@@ -282,4 +282,34 @@ run_case APPROVE alice 11 6 "${policy[@]}"
 assert_approved
 printf 'Review body\n' > "$TMP/body.md"
 
+# --edit-last cannot carry a review-event verdict.
+for verdict in APPROVE APPROVE_WITH_SUGGESTIONS REQUEST_CHANGES; do
+  rm -f "$call_log" "$result"
+  if env PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" \
+      GH_CALL_LOG="$call_log" PRSMASH_REVIEW_RESULT_FILE="$result" \
+      "$SCRIPT" --body "$TMP/body.md" --verdict "$verdict" --edit-last --pr 5938 \
+      >"$stdout_file" 2>"$stderr_file"; then
+    fail "--edit-last with verdict $verdict was accepted"
+  fi
+  rg -q -- 'cannot carry a review-event verdict' "$stderr_file" \
+    || fail "missing edit-last verdict guard message for $verdict"
+  [[ ! -e "$call_log" ]] || fail "--edit-last with verdict $verdict called gh"
+  [[ ! -e "$result" ]] || fail "--edit-last with verdict $verdict wrote a result"
+done
+
+# --edit-last still works for comment-only updates (with or without a verdict).
+for verdict_args in "--verdict CHANGES_SUGGESTED" ""; do
+  rm -f "$call_log" "$result"
+  # shellcheck disable=SC2086
+  env PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" \
+      GH_CALL_LOG="$call_log" PRSMASH_REVIEW_RESULT_FILE="$result" \
+      "$SCRIPT" --body "$TMP/body.md" $verdict_args --edit-last --pr 5938 \
+      >"$stdout_file" 2>"$stderr_file" \
+    || fail "--edit-last comment update failed (args: '$verdict_args')"
+  [[ "$(<"$call_log")" == comment ]] \
+    || fail "expected a comment edit (args: '$verdict_args')"
+  jq -e '.posting == "issue-comment" and .event == "COMMENT"' "$result" >/dev/null \
+    || fail "unexpected edit-last result (args: '$verdict_args')"
+done
+
 echo "post-review result tests passed"
