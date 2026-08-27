@@ -73,7 +73,7 @@ query($owner:String!, $repo:String!, $number:Int!) {
               author { login }
               body
               createdAt
-              pullRequestReview { databaseId }
+              pullRequestReview { fullDatabaseId }
             }
           }
         }
@@ -81,7 +81,7 @@ query($owner:String!, $repo:String!, $number:Int!) {
       reviews(last:30) {
         totalCount
         nodes {
-          databaseId
+          fullDatabaseId
           author { login }
           state
           body
@@ -133,7 +133,7 @@ threads_md=$(echo "$threads_json" | jq -r '
       end
     ) as $state
   | (.line // .originalLine // "") as $line
-  | (.comments.nodes[0].pullRequestReview.databaseId // "") as $review_id
+  | (.comments.nodes[0].pullRequestReview.fullDatabaseId // "") as $review_id
   | (
       .comments.nodes
       | map(
@@ -165,7 +165,7 @@ reviews_md=$(echo "$conversation_json" | jq -r '
   .data.repository.pullRequest.reviews.nodes
   | map(select(.state != "PENDING"))
   | .[]
-  | "- **[\(.state)]** review \(.databaseId) by \(.author.login // "deleted") (\(.createdAt[0:10])): \(if (.body // "") == "" then "(no body)" else ((.body) | gsub("\\s+"; " ") | .[0:400]) end)"
+  | "- **[\(.state)]** review \(.fullDatabaseId) by \(.author.login // "deleted") (\(.createdAt[0:10])): \(if (.body // "") == "" then "(no body)" else ((.body) | gsub("\\s+"; " ") | .[0:400]) end)"
 ')
 
 if [[ -z "$reviews_md" ]]; then
