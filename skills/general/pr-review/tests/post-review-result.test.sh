@@ -27,6 +27,14 @@ elif [[ "$1 $2" == "pr comment" ]]; then
   echo 'https://github.com/example/widgets/pull/5938#issuecomment-123'
 elif [[ "$1 $2 $3" == "api user --jq" ]]; then
   echo tvdavies
+elif [[ "$1" == "api" && "$*" == *"/dismissals"* ]]; then
+  [[ -n "${GH_CALL_LOG:-}" ]] && echo dismiss >> "$GH_CALL_LOG"
+  echo '{}'
+elif [[ "$1" == "api" && "$*" == *"/pulls/"*"/reviews" && "$*" != *"--input"* ]]; then
+  if [[ -n "${GH_REVIEWS_FAIL:-}" ]]; then
+    exit 1
+  fi
+  printf '%s\n' "${GH_REVIEWS_JSON:-[]}"
 elif [[ "$1" == "api" ]]; then
   has_input=false
   for arg in "$@"; do
@@ -311,5 +319,32 @@ for verdict_args in "--verdict CHANGES_SUGGESTED" ""; do
   jq -e '.posting == "issue-comment" and .event == "COMMENT"' "$result" >/dev/null \
     || fail "unexpected edit-last result (args: '$verdict_args')"
 done
+
+# --- Stale blocking review dismissal (gh < 2.66 compatible listing) ---
+
+# A stale CHANGES_REQUESTED from us is dismissed after a non-blocking comment.
+# The listing uses --paginate + jq -s, so it must work without gh --slurp.
+stale_reviews=$(jq -nc '[{id: 987, user: {login: "tvdavies"}, state: "CHANGES_REQUESTED"}]')
+run_with_json CHANGES_SUGGESTED "$(pr_json alice 11 6)" GH_REVIEWS_JSON="$stale_reviews" \
+  || fail "comment posting with a stale blocking review failed"
+rg -q '^dismiss$' "$call_log" || fail "stale blocking review was not dismissed"
+rg -q 'Dismissed stale blocking review 987' "$stdout_file" || fail "dismissal was not reported"
+
+# A later approval from us supersedes the old block: nothing to dismiss.
+superseded=$(jq -nc '[{id: 987, user: {login: "tvdavies"}, state: "CHANGES_REQUESTED"},
+                      {id: 988, user: {login: "tvdavies"}, state: "APPROVED"}]')
+run_with_json CHANGES_SUGGESTED "$(pr_json alice 11 6)" GH_REVIEWS_JSON="$superseded" \
+  || fail "comment posting with a superseded review failed"
+if rg -q '^dismiss$' "$call_log"; then
+  fail "dismissed a review that was already superseded"
+fi
+
+# A failed reviews listing warns instead of silently skipping the check.
+run_with_json CHANGES_SUGGESTED "$(pr_json alice 11 6)" GH_REVIEWS_FAIL=1 \
+  || fail "comment posting failed when the reviews listing failed"
+rg -q 'could not list reviews' "$stderr_file" || fail "missing reviews-listing warning"
+if rg -q '^dismiss$' "$call_log"; then
+  fail "dismissal ran despite a failed reviews listing"
+fi
 
 echo "post-review result tests passed"

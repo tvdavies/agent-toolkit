@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 #
-# fetch-conversation.sh — Fetch existing PR review threads and issue comments,
-# format as a compact markdown summary for sub-agent prompts.
+# fetch-conversation.sh — Fetch existing PR review threads, review verdicts and
+# issue comments, format as a compact markdown summary for sub-agent prompts.
+#
+# Retrieval is bounded and newest-first: the latest 100 line-comment threads,
+# the latest 30 reviews (verdict bodies included), and the latest 50 issue
+# comments. Truncation is reported in the output rather than silently dropped.
 #
 # Usage:
 #   fetch-conversation.sh --pr NUMBER [--repo OWNER/NAME]
@@ -39,9 +43,14 @@ fi
 OWNER="${REPO%/*}"
 NAME="${REPO#*/}"
 
-# --- Fetch line-comment threads (with resolution state) via GraphQL ---
+# --- Fetch threads, reviews and issue comments in one bounded GraphQL query ---
+#
+# `reviews(last:)` and `comments(last:)` give a newest-first window in a single
+# request, so a PR with a very large discussion history cannot make this fetch
+# unbounded. Review bodies are included because verdict-bearing rounds
+# (approvals, request-changes) live in review bodies, not issue comments.
 
-threads_json=$(gh api graphql -f query='
+conversation_json=$(gh api graphql -f query='
 query($owner:String!, $repo:String!, $number:Int!) {
   repository(owner:$owner, name:$repo) {
     pullRequest(number:$number) {
@@ -61,13 +70,29 @@ query($owner:String!, $repo:String!, $number:Int!) {
           }
         }
       }
+      reviews(last:30) {
+        totalCount
+        nodes {
+          author { login }
+          state
+          body
+          createdAt
+        }
+      }
+      comments(last:50) {
+        totalCount
+        nodes {
+          author { login }
+          body
+          createdAt
+        }
+      }
     }
   }
-}' -f owner="$OWNER" -f repo="$NAME" -F number="$PR_NUMBER" 2>/dev/null || echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}')
+}' -f owner="$OWNER" -f repo="$NAME" -F number="$PR_NUMBER" 2>/dev/null \
+  || echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]}}}}}')
 
-# --- Fetch issue-level discussion via REST ---
-
-issue_json=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate 2>/dev/null || echo '[]')
+threads_json=$conversation_json
 
 # --- Format output ---
 
@@ -103,11 +128,44 @@ else
 fi
 
 echo
+echo "### Reviews (verdicts)"
+
+reviews_truncation=$(echo "$conversation_json" | jq -r '
+  .data.repository.pullRequest.reviews
+  | if .totalCount > (.nodes | length)
+    then "_Showing the newest \(.nodes | length) of \(.totalCount) reviews._"
+    else empty end
+')
+[[ -n "$reviews_truncation" ]] && echo "$reviews_truncation"
+
+reviews_md=$(echo "$conversation_json" | jq -r '
+  .data.repository.pullRequest.reviews.nodes
+  | map(select(.state != "PENDING"))
+  | .[]
+  | "- **[\(.state)]** \(.author.login // "deleted") (\(.createdAt[0:10])): \(if (.body // "") == "" then "(no body)" else ((.body) | gsub("\\s+"; " ") | .[0:400]) end)"
+')
+
+if [[ -z "$reviews_md" ]]; then
+    echo "_No reviews on this PR._"
+else
+    echo "$reviews_md"
+fi
+
+echo
 echo "### Issue-level discussion"
 
-issue_md=$(echo "$issue_json" | jq -r '
-  .[]
-  | "- **\(.user.login // "deleted")** (\(.created_at[0:10])): \((.body // "") | gsub("\\s+"; " ") | .[0:400])"
+comments_truncation=$(echo "$conversation_json" | jq -r '
+  .data.repository.pullRequest.comments
+  | if .totalCount > (.nodes | length)
+    then "_Showing the newest \(.nodes | length) of \(.totalCount) issue comments._"
+    else empty end
+')
+[[ -n "$comments_truncation" ]] && echo "$comments_truncation"
+
+issue_md=$(echo "$conversation_json" | jq -r '
+  .data.repository.pullRequest.comments.nodes
+  | .[]
+  | "- **\(.author.login // "deleted")** (\(.createdAt[0:10])): \((.body // "") | gsub("\\s+"; " ") | .[0:400])"
 ')
 
 if [[ -z "$issue_md" ]]; then

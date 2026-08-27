@@ -542,7 +542,7 @@ When `--since COMMIT_SHA` is provided, the review shifts from a full assessment 
 ### Context Gathering (incremental)
 
 1. Narrow the diff to `COMMIT_SHA...HEAD` — only new commits are reviewed
-2. Retrieve the previous review. Depending on its verdict it lives in a review body (`pulls/N/reviews` — approval and request-changes rounds) or in an issue comment (`issues/N/comments` — changes-suggested rounds). Scan both, newest first, and take the most recent item whose H2 heading marks a verdict: "Approved", "Approved with Suggestions", "Changes Suggested", or "Changes Requested". Also fetch `pulls/N/comments` for the inline findings attached to that round.
+2. Retrieve the previous review via `scripts/fetch-conversation.sh --pr PR_NUMBER`, which returns a bounded newest-first window of review bodies (approval and request-changes rounds), issue comments (changes-suggested rounds), and line-comment threads, and reports truncation. Take the most recent item whose H2 heading marks a verdict: "Approved", "Approved with Suggestions", "Changes Suggested", or "Changes Requested". The inline findings attached to that round appear in the line-comment threads section of the same output. Do not paginate GitHub conversation history unboundedly by hand.
 3. Parse the previous review to extract its findings (file, lines, title, severity), including which of them the author was asked to act on
 4. Run the full sub-agent analysis on the narrowed diff as normal
 

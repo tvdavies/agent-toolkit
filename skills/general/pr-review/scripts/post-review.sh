@@ -515,8 +515,15 @@ else
     if [[ "$MANUAL_APPROVAL_REQUIRED" != true ]]; then
         MY_LOGIN=$(gh api user --jq .login 2>/dev/null || true)
         if [[ -n "$MY_LOGIN" ]]; then
-            STALE_BLOCKING_IDS=$(gh api --paginate --slurp "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews" 2>/dev/null \
-                | jq -r --arg me "$MY_LOGIN" '
+            # `jq -s` aggregates the concatenated page arrays from --paginate.
+            # Do not use `gh api --slurp`: it needs gh 2.66+ and on older gh the
+            # failure would be swallowed here, silently skipping the dismissal.
+            if ! REVIEWS_LISTING=$(gh api --paginate "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews" 2>/dev/null); then
+                REVIEWS_LISTING=""
+                echo "Warning: could not list reviews to check for a stale blocking review; skipping dismissal check." >&2
+            fi
+            STALE_BLOCKING_IDS=$(printf '%s' "$REVIEWS_LISTING" \
+                | jq -s -r --arg me "$MY_LOGIN" '
                     [.[] | .[] | select(.user.login == $me)] as $mine
                     | ($mine | map(select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")) | last) as $effective
                     | if $effective != null and $effective.state == "CHANGES_REQUESTED"
