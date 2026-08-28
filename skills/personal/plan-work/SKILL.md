@@ -1,7 +1,7 @@
 ---
 name: plan-work
 description: Investigate a bounded task and produce a human-approved implementation plan on plans.myslop.app before any code is written. Use when the user asks to "plan this", "write up a plan", "produce a design doc", "propose an approach for review", or wants explicit approval before implementation begins.
-compatibility: Requires bash, curl, jq, network access to plans.myslop.app, and the installed plan-review skill.
+compatibility: Requires bash, curl, jq, network access to plans.myslop.app, and the installed plan-review and unslop skills.
 ---
 
 <!-- Canonical copy. The Dispatch repo vendors this skill at
@@ -56,11 +56,18 @@ In the target repository or system:
 ## 3. Write the plan
 
 Write Markdown that lets a human decide quickly and an implementer act without
-rediscovering the design.
+rediscovering the design. Before drafting, load the installed `unslop` skill by
+name and apply it to every piece of plan prose.
 
 Principles:
 
-- Lead with the decision and target behaviour, not the investigation diary.
+- Lead with the problem. A reviewer who does not know why the work exists
+  cannot judge the solution, so Background comes first and contains no
+  solution content. It is the problem, not the investigation diary.
+- Keep it short. A typical plan is one to two pages; only a genuinely large
+  design earns more. Section budgets below are ceilings, not targets.
+- A section with nothing to say is one line or is omitted. Never pad a
+  heading to look thorough.
 - Prefer one recommended approach; put rejected alternatives and reasons in a
   compact decision table.
 - Keep altitude proportional to blast radius: exact contracts and sequencing,
@@ -70,28 +77,37 @@ Principles:
 - Turn uncertainty into an explicit open question or a validation step.
 - Link source evidence: tickets, code, API documentation, prior decisions.
 - Cover persisted data, APIs, events, permissions, compatibility, rollout, and
-  recovery whenever the change touches them. Write "No contract change" only
-  after checking.
+  recovery whenever the change touches them, but as one line each when they
+  are unaffected. Write "No contract change" only after checking.
 
 Required shape:
 
 ```markdown
 # <Outcome-oriented title>
 
-> **Source:** <ticket/PR/context> · **Plan version:** N
+> **Source:** <ticket/PR/context> · **Plan version:** N · **Size:** S | M | L
 
-## Decision summary
-What will change, why this approach, what deliberately will not change.
+**TL;DR:** The problem, the proposed fix, and the impact. Three sentences
+maximum; the reader uses this to decide whether to read on.
+
+## Background
+What is broken, missing, or insufficient; who is affected; why now. Include
+the current-state facts a reviewer needs to judge the solution, with evidence
+links. No solution content. Six sentences maximum.
 
 ## Goals and non-goals
+One-line bullets.
 
-## Current state
-Only facts needed to understand the change.
+## Proposed solution
+What will change, why this approach, what deliberately will not change. Five
+sentences maximum, then a compact decision table for rejected alternatives.
 
 ## Target design
 Components, boundaries, data flow, failure behaviour, user-visible behaviour.
+Omit when the shape of the change is obvious from the steps.
 
 ## Contracts and compatibility
+One line when nothing changes: "No contract change — checked <what>."
 
 ## Implementation sequence
 ### Step 1 — <bounded deliverable>
@@ -99,9 +115,12 @@ Components, boundaries, data flow, failure behaviour, user-visible behaviour.
 - behaviour and constraints
 - validation proving completion
 
-## Validation
+## How we'll know it worked
+Observable success criteria a reviewer can check after implementation:
+behaviour, metrics, or tests. Distinct from per-step validation.
 
 ## Rollout and recovery
+Omit when a plain deploy-and-revert suffices.
 
 ## Risks and decisions
 Compact table: risk/decision, mitigation/rationale, owner if external.
@@ -109,6 +128,13 @@ Compact table: risk/decision, mitigation/rationale, owner if external.
 ## Open questions
 Only questions that truly require human input. Prefer none.
 ```
+
+Size is a coarse effort marker for the reviewer: S is under half a day, M is
+a day or two, L is several days or more.
+
+The core sections every plan keeps: TL;DR, Background, Goals and non-goals,
+Proposed solution, Implementation sequence, and How we'll know it worked.
+The rest earn their place or shrink to a line.
 
 Follow the `plan-review` authoring constraints: the service renders a bounded
 Markdown subset (no raw HTML, no setext headings), and every top-level block is
@@ -118,10 +144,11 @@ SVG/PNG, upload with the file-upload skill, and embed the `files.myslop.app`
 URL as a Markdown image; prefer text and tables unless a diagram genuinely
 makes the argument.
 
-Before publishing, verify: the title and version are current, every required
-section is present, links are valid and credential-free, no source change or
-secret is included, and the plan can be implemented without rediscovering a
-hidden decision.
+Before publishing, verify: the title, version, and size are current; every
+core section is present; Background states the problem without solution
+content; the plan fits its length budget; the prose has had an unslop pass;
+links are valid and credential-free; no source change or secret is included;
+and the plan can be implemented without rediscovering a hidden decision.
 
 ## 4. Publish and share
 
