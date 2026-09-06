@@ -67,6 +67,19 @@ const MODELS: ProviderModel[] = [
     maxTokens: 128_000,
   },
   {
+    id: "claude-fable-5-1",
+    name: "Claude Fable 5.1 (Claude Code creds)",
+    reasoning: true,
+    compat: { forceAdaptiveThinking: true },
+    // Adaptive thinking always on, unchanged from Fable 5; API supports native xhigh effort.
+    thinkingLevelMap: { xhigh: "xhigh" },
+    input: ["text", "image"],
+    // Same $10/$50 as Fable 5; cache reads at a quarter of Fable 5 ($0.25/MTok).
+    cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  {
     id: "claude-sonnet-4-6",
     name: "Claude Sonnet 4.6 (Claude Code creds)",
     reasoning: true,
@@ -151,6 +164,71 @@ const MODELS: ProviderModel[] = [
 ];
 
 let refreshPromise: Promise<string | null> | null = null;
+
+// --- Upstream model sync (CPA mode only) -------------------------------------------------
+// The curated MODELS list above cannot be derived automatically because CPA's /v1/models
+// only reports ids (no pricing, context window, or thinking capabilities). Instead we detect
+// drift against the upstream list and surface it, so new Anthropic models never go unnoticed.
+
+const MODEL_SYNC_DISABLED = process.env.PI_CLAUDE_CODE_DISABLE_MODEL_SYNC === "1";
+
+// Upstream ids with a date suffix (e.g. claude-opus-4-5-20251101) are legacy snapshots we
+// deliberately do not curate; they never count as drift.
+const LEGACY_UPSTREAM_ID = /-20\d{6}$/;
+
+type ModelDrift = { missingLocally: string[]; missingUpstream: string[] };
+
+let driftNotified = false;
+
+async function fetchUpstreamClaudeModelIds(apiKey: string): Promise<string[] | null> {
+  try {
+    const response = await fetch(`${PROVIDER_BASE_URL}/v1/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as { data?: Array<{ id?: unknown; owned_by?: unknown }> };
+    if (!Array.isArray(data.data)) return null;
+    const ids: string[] = [];
+    for (const entry of data.data) {
+      if (typeof entry?.id !== "string") continue;
+      if (entry.owned_by === "anthropic" || entry.id.startsWith("claude-")) ids.push(entry.id);
+    }
+    return ids;
+  } catch {
+    return null;
+  }
+}
+
+function computeModelDrift(upstreamIds: string[]): ModelDrift {
+  const curatedIds = MODELS.map((m) => m.id);
+  const curated = new Set(curatedIds);
+  const upstream = new Set(upstreamIds);
+  return {
+    missingLocally: upstreamIds.filter((id) => !curated.has(id) && !LEGACY_UPSTREAM_ID.test(id)),
+    // A curated id still counts as present upstream when only its dated snapshot is listed
+    // (e.g. curated claude-haiku-4-5 vs upstream claude-haiku-4-5-20251001).
+    missingUpstream: curatedIds.filter((id) => !upstream.has(id) && !upstreamIds.some((u) => u.startsWith(`${id}-20`))),
+  };
+}
+
+async function checkModelDrift(): Promise<ModelDrift | null> {
+  if (MODEL_SYNC_DISABLED || !PROVIDER_API_KEY_FILE) return null;
+  const apiKey = await getProviderApiKey();
+  if (!apiKey) return null;
+  const upstreamIds = await fetchUpstreamClaudeModelIds(apiKey);
+  if (!upstreamIds) return null;
+  return computeModelDrift(upstreamIds);
+}
+
+function formatDrift(drift: ModelDrift | null): string {
+  if (!drift) return "unknown (upstream model list unavailable)";
+  if (!drift.missingLocally.length && !drift.missingUpstream.length) return "in sync with upstream";
+  const parts: string[] = [];
+  if (drift.missingLocally.length) parts.push(`upstream-only: ${drift.missingLocally.join(", ")}`);
+  if (drift.missingUpstream.length) parts.push(`local-only: ${drift.missingUpstream.join(", ")}`);
+  return `DRIFT — ${parts.join("; ")}`;
+}
 
 function rewritePiDocsBlock(text: string): string {
   const startMarker = "Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):";
@@ -472,12 +550,14 @@ export default async function (pi: ExtensionAPI) {
 
         try {
           const ok = await refreshClaudeCodeProviderStatus(pi, ctx);
+          const drift = await checkModelDrift();
           ctx.ui.notify(
             [
               "Claude proxy key: present",
               `Provider: ${ok ? "registered" : "not registered"}`,
               `API: ${PROVIDER_API}`,
               `Base URL: ${PROVIDER_BASE_URL}`,
+              `Model sync: ${formatDrift(drift)}`,
               `System prompt rewrite: ${DISABLE_PI_DOCS_REWRITE ? "disabled" : SYSTEM_PROMPT_MODE}`,
               `Source: ${PROVIDER_API_KEY_FILE}`,
             ].join("\n"),
@@ -544,6 +624,20 @@ export default async function (pi: ExtensionAPI) {
       const message = error instanceof Error ? error.message : String(error);
       ctx.ui.setStatus(PROVIDER_NAME, "Claude Code provider error");
       ctx.ui.notify(`Claude Code provider: ${message}`, "warning");
+    }
+
+    if (!driftNotified) {
+      const drift = await checkModelDrift();
+      if (drift && (drift.missingLocally.length || drift.missingUpstream.length)) {
+        driftNotified = true;
+        ctx.ui.notify(
+          [
+            `Claude model drift vs CPA upstream: ${formatDrift(drift)}`,
+            "Update MODELS in agent-skills/extensions/anthropic-claude-code.ts",
+          ].join("\n"),
+          "warning",
+        );
+      }
     }
   });
 
