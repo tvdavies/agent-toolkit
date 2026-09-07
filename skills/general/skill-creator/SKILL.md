@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: Interactive guide for building new skills for Claude. Walks the user through use case definition, frontmatter generation, instruction writing, and validation. Use when user says "create a skill", "build a skill", "new skill", "make a skill", or "skill creator".
+description: Interactive guide for building portable Agent Skills. Walks the user through use case definition, frontmatter generation, instruction writing, and validation. Use when user says "create a skill", "build a skill", "new skill", "make a skill", or "skill creator".
 metadata:
   author: tvd
   version: 1.0.0
@@ -8,7 +8,24 @@ metadata:
 
 # Skill Creator
 
-Interactive workflow for building well-structured skills for Claude. Follow each step in order. Do not skip validation.
+Build well-structured portable Agent Skills. Use the caller's supplied context,
+follow the steps in order, and validate without requiring a particular model.
+
+## Portable contract
+
+State activation, inputs, deliverable, allowed effects, required capabilities,
+completion evidence and escalation owner. A skill is procedure, not permission
+to publish, implement, merge or widen scope. Headless mode is separate from
+authority. Discover active tool schemas; do not invent provider-specific calls,
+mandatory model names or host paths. If delegation is needed, use only approved
+tools, verify isolation and one writer per checkout, and provide a safe direct
+or blocked outcome. Never use an agent CLI via shell as a fallback.
+
+Bundle references/scripts inside the skill with relative links. If another skill
+is optional, discover it by installed name and supply a concise fallback; do not
+require a sibling path that breaks individual installation. Test unavailable
+capabilities, safety boundaries, negative triggers and partial completion, not
+only the happy path. No paid model evaluations without explicit opt-in.
 
 ## Important Rules
 
@@ -19,8 +36,8 @@ Before generating ANY skill content, internalize these rules:
 - The `name` field MUST be kebab-case and match the folder name
 - The `description` field MUST include WHAT the skill does AND WHEN to use it (trigger phrases)
 - Description must be under 1024 characters
-- NO XML angle brackets (< or >) anywhere in frontmatter or instructions
-- NO "claude" or "anthropic" in the skill name
+- Avoid XML tags in frontmatter; preserve necessary code/template syntax in instructions
+- Prefer a task-oriented name over provider branding; check the target host's validation rules
 - NO README.md inside the skill folder
 - Keep SKILL.md under 5,000 words; move detailed docs to `references/`
 
@@ -32,7 +49,7 @@ Ask the user these questions (one message, wait for answers):
 
 1. **What should this skill do?** (What outcome does the user want?)
 2. **When should it trigger?** (What phrases or situations activate it?)
-3. **What tools does it need?** (Built-in Claude tools, MCP servers, or none?)
+3. **What capabilities does it need?** (Available host tools, MCP integrations, or none?)
 4. **Is this standalone or does it enhance an MCP integration?**
 
 If the user already provided this context, skip to Step 2.
@@ -109,7 +126,7 @@ If you see "[error or symptom]":
 Ask the user if the skill needs:
 
 - **scripts/**: Executable code (Python, Bash, etc.) for the skill to invoke
-- **references/**: Documentation files Claude can consult as needed
+- **references/**: Documentation the agent can consult as needed
 - **assets/**: Templates, fonts, icons used in output
 
 Create any needed files with appropriate content.
@@ -124,8 +141,8 @@ Run through this checklist and report results to the user:
 - [ ] YAML frontmatter has `---` delimiters
 - [ ] `name` field is kebab-case, matches folder name
 - [ ] `description` includes WHAT and WHEN
-- [ ] No XML tags anywhere
-- [ ] No "claude" or "anthropic" in the name
+- [ ] Frontmatter validates under the target host's supported Agent Skills format
+- [ ] Code, schemas, quotations and required templates retain their literal syntax
 
 ### Content Checks
 - [ ] Instructions are clear and actionable
@@ -138,17 +155,20 @@ Suggest 3 phrases that SHOULD trigger the skill and 3 that should NOT. Ask the u
 
 ## Step 6: Install the Skill
 
-Ask the user where to install:
+Confirm the target host's discovery rules and the caller's desired scope before
+writing. Standard locations commonly include `~/.agents/skills/[name]/` for
+user-level and `.agents/skills/[name]/` for project-level resources; support
+varies by host. Use the caller's actual configured destination, not a guessed
+Claude/Pi path. In this toolkit, author in the appropriate `skills/` group and
+use its documented sync procedure only when installation is authorized.
 
-1. **User-level** (`~/.claude/skills/[name]/`): Available in all projects
-2. **Project-level** (`.claude/skills/[name]/`): Available only in this project
-
-Write all files to the chosen location.
+Write only to the chosen location, preserve unmanaged existing files, and do not
+edit live global settings or install MCP servers as an implicit creation step.
 
 ## Step 7: Summary
 
 After installation, provide:
 - Location of all created files
-- How to test: "Try asking Claude: [example trigger phrase]"
+- How to test: "Try the installed skill with: [example trigger phrase]"
 - How to iterate: "If the skill doesn't trigger correctly, adjust the description field. If instructions aren't followed, make them more specific and concise."
 - Link to the guide: Consult `references/skill-guide-reference.md` for patterns and troubleshooting

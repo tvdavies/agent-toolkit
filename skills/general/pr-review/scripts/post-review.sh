@@ -3,8 +3,8 @@
 # post-review.sh — Post PR review body comment + optional inline review comments.
 #
 # Usage:
-#   post-review.sh --body FILE --verdict VERDICT [--inline FILE] [--pr NUMBER] [--dry-run]
-#   post-review.sh --body FILE --edit-last [--pr NUMBER] [--dry-run]
+#   post-review.sh --body FILE --verdict VERDICT --expected-head SHA [--inline FILE] [--pr NUMBER] [--dry-run]
+#   post-review.sh --body FILE --edit-last --expected-head SHA [--pr NUMBER] [--dry-run]
 #
 # Arguments:
 #   --body FILE       Path to markdown file for the body comment (required)
@@ -14,6 +14,9 @@
 #                     GitHub review event; callers never choose the event.
 #   --inline FILE     Path to JSON file with inline comments (optional)
 #   --pr NUMBER       Target a specific PR number (otherwise auto-detected from current branch)
+#   --expected-head SHA Full reviewed commit SHA (required, including dry-run/edit-last).
+#                     Legacy PRSMASH_REVIEW_EXPECTED_HEAD is accepted instead;
+#                     conflicting flag/env values are rejected.
 #   --edit-last       Update the most recent comment instead of posting new.
 #                     Comment-only: rejected with a verdict that maps to a
 #                     review event (APPROVE, APPROVE_WITH_SUGGESTIONS,
@@ -33,8 +36,9 @@
 #                                APPROVE events. Accepts true/false only.
 #   PRSMASH_REVIEW_RESULT_FILE   Optional path for an atomic machine-readable
 #                                posting result consumed by prsmash.
-#   PRSMASH_REVIEW_EXPECTED_HEAD When set, refuse to post if the PR moved beyond
-#                                the commit that was actually reviewed.
+#   PRSMASH_REVIEW_EXPECTED_HEAD Legacy alternative to --expected-head for automated
+#                                callers. One must supply the commit actually reviewed;
+#                                never substitute the latest head after analysis.
 #
 # Dependencies: bash, gh, jq, python3
 
@@ -47,6 +51,7 @@ INLINE_FILE=""
 VERDICT=""
 EVENT=""
 PR_NUMBER_ARG=""
+EXPECTED_HEAD=""
 EDIT_LAST=false
 DRY_RUN=false
 TEMP_BODY_FILE=""
@@ -67,6 +72,7 @@ while [[ $# -gt 0 ]]; do
             echo "Error: --event was removed. Pass --verdict (APPROVE | APPROVE_WITH_SUGGESTIONS | CHANGES_SUGGESTED | REQUEST_CHANGES); this script owns the GitHub review event." >&2
             exit 1 ;;
         --pr)       PR_NUMBER_ARG="$2"; shift 2 ;;
+        --expected-head) EXPECTED_HEAD="${2:?--expected-head requires a SHA}"; shift 2 ;;
         --edit-last) EDIT_LAST=true; shift ;;
         --dry-run)  DRY_RUN=true; shift ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
@@ -120,6 +126,19 @@ if [[ "$EDIT_LAST" == true && -n "$VERDICT" && "$EVENT" != "COMMENT" ]]; then
     exit 1
 fi
 
+# Require an analysis-time head before any GitHub access. Keep the legacy env
+# input for staggered automated callers, but never silently override a conflict.
+if [[ -n "$EXPECTED_HEAD" && -n "${PRSMASH_REVIEW_EXPECTED_HEAD:-}" &&
+      "$EXPECTED_HEAD" != "$PRSMASH_REVIEW_EXPECTED_HEAD" ]]; then
+    echo "Error: --expected-head conflicts with PRSMASH_REVIEW_EXPECTED_HEAD; refusing to post." >&2
+    exit 1
+fi
+EXPECTED_HEAD="${EXPECTED_HEAD:-${PRSMASH_REVIEW_EXPECTED_HEAD:-}}"
+if ! [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Error: --expected-head requires the full 40-character lowercase reviewed commit SHA (or PRSMASH_REVIEW_EXPECTED_HEAD)." >&2
+    exit 1
+fi
+
 # --- Detect PR context ---
 
 if [[ -n "$PR_NUMBER_ARG" ]]; then
@@ -148,12 +167,27 @@ PR_AUTHOR=$(echo "$PR_JSON" | jq -r '.author.login // empty')
 # Extract owner/repo from PR URL (https://github.com/OWNER/REPO/pull/N)
 OWNER_REPO=$(echo "$PR_URL" | sed -E 's|https://github.com/([^/]+/[^/]+)/pull/[0-9]+|\1|')
 
-if [[ -n "${PRSMASH_REVIEW_EXPECTED_HEAD:-}" && "$COMMIT_SHA" != "$PRSMASH_REVIEW_EXPECTED_HEAD" ]]; then
-    echo "Error: PR head moved from reviewed commit ${PRSMASH_REVIEW_EXPECTED_HEAD} to ${COMMIT_SHA}; refusing to post a stale review." >&2
+if [[ "$COMMIT_SHA" != "$EXPECTED_HEAD" ]]; then
+    echo "Error: PR head moved from reviewed commit ${EXPECTED_HEAD} to ${COMMIT_SHA}; refusing to post a stale review." >&2
     exit 1
 fi
 
 echo "PR #${PR_NUMBER} | commit ${COMMIT_SHA:0:8} | ${OWNER_REPO}"
+
+# Recheck immediately before each mutation, including multi-step comment mode.
+# GitHub has no compare-and-swap for issue comments; commit_id binds reviews
+# to the reviewed SHA, but a server-side head movement after this read can race.
+assert_current_head() {
+    local current
+    current=$(gh pr view "$PR_NUMBER" --repo "$OWNER_REPO" --json headRefOid --jq .headRefOid) || {
+        echo "Error: Could not recheck PR head; refusing to post." >&2
+        return 1
+    }
+    if [[ "$current" != "$EXPECTED_HEAD" ]]; then
+        echo "Error: PR head moved from reviewed commit ${EXPECTED_HEAD} to ${current}; refusing to post a stale review." >&2
+        return 1
+    fi
+}
 
 write_prsmash_result() {
     local posting=$1 submitted_event=$2 target tmp
@@ -299,7 +333,8 @@ if [[ "$EDIT_LAST" == true ]]; then
         echo "=== DRY RUN: Update last comment ==="
         echo "Body size: ${#BODY_CONTENT} chars"
     else
-        gh pr comment "$PR_NUMBER" --edit-last --body-file "$EFFECTIVE_BODY_FILE"
+        assert_current_head
+        gh pr comment "$PR_NUMBER" --repo "$OWNER_REPO" --edit-last --body-file "$EFFECTIVE_BODY_FILE"
         write_prsmash_result issue-comment COMMENT
         echo "Updated existing PR comment."
     fi
@@ -350,13 +385,13 @@ print(json.dumps(ranges))
 ' 2>/dev/null || echo "{}")
 
             if [[ "$VALID_RANGES" != "{}" ]]; then
-                VALIDATED_COMMENTS=$(python3 -c "
+                VALIDATED_COMMENTS=$(python3 - "$INLINE_FILE" "$VALID_RANGES" <<'PY'
 import json, sys
 
-with open('$INLINE_FILE') as f:
+with open(sys.argv[1]) as f:
     data = json.load(f)
 
-ranges = json.loads('''$VALID_RANGES''')
+ranges = json.loads(sys.argv[2])
 valid = []
 skipped = 0
 
@@ -398,7 +433,8 @@ if skipped:
     print(f'  {skipped} comment(s) skipped (outside diff)', file=sys.stderr)
 
 print(json.dumps(valid))
-" 2>/dev/null)
+PY
+)
 
                 VALID_COUNT=$(echo "$VALIDATED_COMMENTS" | jq 'length' 2>/dev/null || echo "0")
                 echo "${VALID_COUNT} inline comment(s) validated."
@@ -440,6 +476,7 @@ if [[ "$IS_REVIEW_EVENT" == true ]]; then
         exit 0
     fi
 
+    assert_current_head
     RESPONSE=$(echo "$REVIEW_PAYLOAD" | gh api \
         "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews" \
         --method POST \
@@ -474,7 +511,8 @@ else
         exit 0
     fi
 
-    gh pr comment "$PR_NUMBER" --body-file "$EFFECTIVE_BODY_FILE"
+    assert_current_head
+    gh pr comment "$PR_NUMBER" --repo "$OWNER_REPO" --body-file "$EFFECTIVE_BODY_FILE"
     write_prsmash_result issue-comment COMMENT
     echo "Posted new PR comment."
     if [[ "$MANUAL_APPROVAL_REQUIRED" == true ]]; then
@@ -495,6 +533,7 @@ else
                 comments: $comments
             }')
 
+        assert_current_head
         RESPONSE=$(echo "$REVIEW_PAYLOAD" | gh api \
             "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews" \
             --method POST \
@@ -529,6 +568,7 @@ else
                     | if $effective != null and $effective.state == "CHANGES_REQUESTED"
                       then $effective.id else empty end' || true)
             for review_id in $STALE_BLOCKING_IDS; do
+                assert_current_head
                 if gh api "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" \
                     --method PUT \
                     -f message="Superseded: re-review found no merge-blocking issues (see latest non-blocking comment)." \

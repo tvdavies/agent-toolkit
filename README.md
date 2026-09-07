@@ -65,6 +65,11 @@ Run the same command after adding or removing a skill, adding an extension or ru
 
 A no-argument run preserves this checkout's previously managed skill-group selection. Pass `--groups` only when intentionally replacing that complete selection. If the relevant managed state is malformed, sync stops with an error instead of silently choosing another group set.
 
+Local sync is not Dispatch vendoring. Dispatch's copied/adapted skills do not
+change when toolkit links are refreshed; review that cross-repository update
+separately, preserving stage-specific approval and wait contracts. The portable
+contracts use the same skills for every model; no Astra-only profile is needed.
+
 Existing skill contents are live through their managed links, and extension contents are live through the installed local package path. Active Pi sessions still need `/reload` to rebuild their resource inventory. New or removed resources need `sync.sh` first so their links and package state exist.
 
 The package reconciler records toolkit-managed package specs before removing stale entries, so it does not remove unrelated user packages. Its safe default does not run `pi update`; pass `--update-pi-packages` explicitly when wanted.
@@ -96,7 +101,13 @@ npm run typecheck
 npm test
 ```
 
-The test suite validates skill frontmatter/layout and the installer safety contract in isolated temporary home directories. It also covers retained extension behaviour. Run `git diff --check` before integration.
+The test suite validates skill frontmatter/layout, portable authority contracts,
+and installer safety in isolated temporary home directories. It covers retained
+extensions, mocked saved-workflow outcomes, real preserved-patch seeding, and the
+PR posting shell fixtures (with a fake `gh`, never live publication). Run
+`git diff --check` before integration. See
+[`plans/portable-contract-evals.md`](plans/portable-contract-evals.md) for opt-in
+behavioural scenarios; normal tests do not run paid models.
 
 ## Repository layout
 

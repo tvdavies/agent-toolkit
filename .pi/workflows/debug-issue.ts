@@ -100,14 +100,14 @@ const [repro, ...maps] = await parallel([
   () =>
     agent(
       [
-        "You are reproducing a reported failure. DO NOT modify any files; only run/read.",
+        "You are reproducing a reported failure. Do not edit source. Inspect commands before running; use only disposable fixtures in this isolated clone, never live services or production credentials.",
         "Issue to reproduce:",
         issue,
         "",
         "Steps:",
         "1. Identify the exact test/command implied by the issue (a test name, a build/run command, or the repro steps in a bug report). Inspect the repo (package.json scripts, test config, Makefile, etc.) to find the right invocation.",
         "2. Run it and capture the VERBATIM failing output. If it needs setup (install/build), do the minimum needed.",
-        "3. If it does not fail on the first try, try the most plausible exact invocation a developer would use; note any flakiness.",
+        "3. At most two reproduction attempts: repeat only for a different plausible invocation or diagnosed transient failure. Stop on deterministic infrastructure failure; note flakiness and missing evidence.",
         "Report whether you genuinely observed the failure, the exact command, the verbatim relevant output, a one-line failure signature, and notes.",
         "Be precise and literal — downstream agents will rely on your exactOutput and failureSignature.",
       ].join("\n"),
@@ -369,12 +369,12 @@ log("Implementing the minimal fix in an isolated worktree, then verifying it.");
 const fixSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["implemented", "summary", "changedFiles", "diff", "selfCheck"],
+  required: ["implemented", "summary", "changedFiles", "baseHead", "selfCheck"],
   properties: {
     implemented: { type: "boolean", description: "True if you actually applied the fix to files in your worktree." },
     summary: { type: "string", description: "What the minimal fix does and why it addresses the confirmed root cause." },
     changedFiles: { type: "array", items: { type: "string" }, description: "Files you modified." },
-    diff: { type: "string", description: "The unified diff of your change (git diff). Keep it minimal." },
+    baseHead: { type: "string", description: "git rev-parse HEAD before editing. Do not commit or move this pinned base. The runtime preserves the actual patch; do not reconstruct it in prose." },
     selfCheck: { type: "string", description: "What you ran in the worktree and what you observed (e.g. the previously-failing command now passes)." },
   },
 };
@@ -382,7 +382,7 @@ const fixSchema = {
 const verifySchema = {
   type: "object",
   additionalProperties: false,
-  required: ["addressesRootCause", "rerunGreen", "regressionRisk", "rerunCommand", "rerunOutput", "summary"],
+  required: ["addressesRootCause", "rerunGreen", "regressionRisk", "rerunCommand", "rerunOutput", "baseHead", "summary"],
   properties: {
     addressesRootCause: { type: "boolean", description: "Does the diff actually fix the CONFIRMED root cause (not just mask the symptom)?" },
     rerunGreen: { type: "boolean", description: "Did the previously-failing test/command pass after applying the diff?" },
@@ -391,6 +391,7 @@ const verifySchema = {
       enum: ["none", "low", "medium", "high"],
       description: "Risk that this change breaks something else, based on related tests you ran and the blast radius you inspected.",
     },
+    baseHead: { type: "string", description: "Observed git rev-parse HEAD of the runtime-seeded clone, without switching commits." },
     rerunCommand: { type: "string", description: "The exact command you re-ran to verify." },
     rerunOutput: { type: "string", description: "The verbatim relevant output of the re-run (showing pass/fail)." },
     summary: { type: "string", description: "Verdict and any caveats." },
@@ -416,6 +417,7 @@ const MAX_FIX_ATTEMPTS = 2;
 let fixResult = null;
 let verification = null;
 let priorFeedback = "";
+let verifiedPatchPath = null;
 
 for (let attempt = 1; attempt <= MAX_FIX_ATTEMPTS; attempt++) {
   if (budget.total != null && budget.remaining() <= 0) {
@@ -423,33 +425,39 @@ for (let attempt = 1; attempt <= MAX_FIX_ATTEMPTS; attempt++) {
     break;
   }
 
-  const fix = await agent(
+  const fixRun = await agent(
     [
       "You are fixing a confirmed bug. Implement the SMALLEST correct change that addresses the root cause below.",
       "Rules: minimal diff (no unrelated refactors, no reformatting); fix the CAUSE, not the symptom; keep existing behaviour for everything unrelated.",
-      "Then, in your worktree, re-run the previously-failing command and confirm it now passes. Capture `git diff`.",
+      "Record git rev-parse HEAD as baseHead before editing. Do not commit or switch base. Then run the previously-failing command once per revision with safe disposable fixtures. At most one targeted repair/retest for an observed failure, no unbounded until-green loop. The runtime captures your real patch including new files; do not write a replacement diff in your report.",
       "",
       fixContext,
       priorFeedback ? `\nThe previous fix attempt was rejected by the verifier. Feedback to address:\n${priorFeedback}` : "",
     ].join("\n"),
-    { label: `fix-attempt-${attempt}`, phase: "Fix + Verify", schema: fixSchema, effort: "max", isolation: "worktree", agentType: "worker", network: true, allowFailure: true },
+    { label: `fix-attempt-${attempt}`, phase: "Fix + Verify", schema: fixSchema, effort: "max", agentType: "worker", network: true, allowFailure: true, returnMetadata: true },
   );
 
-  if (!fix || !fix.implemented || !fix.diff || !fix.diff.trim()) {
-    priorFeedback = "The fix agent did not produce an applicable diff. Produce a concrete minimal change.";
-    fixResult = fix || { implemented: false, summary: "Fix agent produced no diff.", changedFiles: [], diff: "", selfCheck: "" };
-    continue;
+  const fix = fixRun && fixRun.value;
+  verification = null;
+  verifiedPatchPath = null;
+  if (!fix || fix.implemented !== true || !/^[0-9a-f]{40}$/.test(fix.baseHead) || !fixRun.diffPath || !fixRun.workspacePath) {
+    // No preserved patch is no progress, not a reason to ask another fixer to guess.
+    log("Fix agent produced no valid preserved patch/base; stopping without verification.");
+    break;
   }
-  fixResult = fix;
+  fixResult = { ...fix, diffPath: fixRun.diffPath, workspacePath: fixRun.workspacePath, agentId: fixRun.agentId };
 
-  // Independent verifier: applies the proposed diff in ITS OWN clean worktree, re-runs, and judges.
-  const verdict = await agent(
+  // patches is runtime-native: the EXACT preserved diff is applied to the same
+  // pinned launch snapshot (HEAD plus any tracked launch patch). Application
+  // failure throws before the verifier starts; never reconstruct a substitute.
+  const verifyRun = await agent(
     [
       "You are an independent fix verifier. You did NOT write this fix. Be skeptical.",
-      "Apply the proposed diff to a clean checkout (in your isolated worktree) with `git apply`. If it does not apply cleanly, re-implement the SAME minimal change yourself from the confirmed root cause below (do not weaken or skip the test). Then:",
+      "The runtime has already seeded the EXACT preserved patch into your isolated clone at the pinned launch base. Do NOT apply another diff, reimplement, edit source/tests, commit, or switch base. If seeding/inspection fails, report failure; never verify a substitute patch.",
+      `Record git rev-parse HEAD as baseHead and require ${fixResult.baseHead}. Source changes during verification invalidate the result. Use safe disposable fixtures; inspect test commands first, never use live services or production credentials.`,
       "1. Confirm it actually addresses the CONFIRMED root cause (not merely hides the symptom or deletes/weakens the test).",
       "2. Re-run the exact previously-failing command and check it is now GREEN. Capture verbatim output.",
-      "3. Run the most relevant neighbouring tests to gauge regression risk; inspect the blast radius of the change.",
+      "3. Run the most relevant neighbouring tests once to gauge regression risk; inspect the blast radius. Do not rerun the full suite for reassurance. Stop on deterministic failures or no new evidence.",
       "If the diff weakens an assertion or skips the test rather than fixing the cause, treat addressesRootCause as false.",
       "",
       "Confirmed root cause and failure:",
@@ -458,16 +466,22 @@ for (let attempt = 1; attempt <= MAX_FIX_ATTEMPTS; attempt++) {
       "Proposed fix summary:",
       fixResult.summary,
       "Changed files: " + (Array.isArray(fixResult.changedFiles) ? fixResult.changedFiles.join(", ") : ""),
-      "Proposed diff to apply:",
-      "```diff",
-      fixResult.diff,
-      "```",
+      `Preserved patch reference (already applied by runtime; no host file access needed): ${fixResult.diffPath}`,
     ].join("\n"),
-    { label: `verify-fix-${attempt}`, phase: "Fix + Verify", schema: verifySchema, effort: "max", isolation: "worktree", agentType: "reviewer", network: true, allowFailure: true },
+    { label: `verify-fix-${attempt}`, phase: "Fix + Verify", schema: verifySchema, effort: "max", agentType: "reviewer", patches: [fixResult.diffPath], returnMetadata: true, network: true, allowFailure: true },
   );
 
-  verification = verdict;
-  if (verdict && verdict.addressesRootCause && verdict.rerunGreen && verdict.regressionRisk !== "high") {
+  const verdict = verifyRun && verifyRun.value;
+  // finalizeAgentWorktree returns no new diff only when the seeded tree is
+  // unchanged. Any verifier-authored patch, even one reported green, is invalid.
+  const exactPatch = !!(verifyRun && !verifyRun.diffPath && !verifyRun.workspacePath && verdict && verdict.baseHead === fixResult.baseHead);
+  verification = exactPatch ? verdict : null;
+  if (!exactPatch) {
+    log("Verifier failed, changed the seeded patch, or checked a different base; stopping without confirmation.");
+    break;
+  }
+  verifiedPatchPath = fixResult.diffPath;
+  if (verdict.addressesRootCause && verdict.rerunGreen && verdict.regressionRisk !== "high") {
     log(`Fix verified on attempt ${attempt}: re-run is green and addresses the root cause.`);
     break;
   }
@@ -477,7 +491,7 @@ for (let attempt = 1; attempt <= MAX_FIX_ATTEMPTS; attempt++) {
   log(`Fix attempt ${attempt} not confirmed; ${attempt < MAX_FIX_ATTEMPTS ? "retrying with feedback." : "out of attempts."}`);
 }
 
-const fixConfirmed = !!(verification && verification.addressesRootCause && verification.rerunGreen && verification.regressionRisk !== "high");
+const fixConfirmed = !!(fixResult && verifiedPatchPath === fixResult.diffPath && verification && verification.addressesRootCause && verification.rerunGreen && verification.regressionRisk !== "high");
 
 return {
   reproduced: !!reproResult.reproduced,
@@ -491,10 +505,12 @@ return {
     alternativesConsidered: survivors.slice(1).map((s) => ({ id: s.hypothesis.id, title: s.hypothesis.title })),
   },
   fix: fixResult
-    ? { summary: fixResult.summary, changedFiles: fixResult.changedFiles, diff: fixResult.diff, applied: !!fixResult.implemented }
+    ? { summary: fixResult.summary, changedFiles: fixResult.changedFiles, diffPath: fixResult.diffPath, workspacePath: fixResult.workspacePath, baseHead: fixResult.baseHead, agentId: fixResult.agentId, applied: !!fixResult.implemented }
     : null,
   verification: {
     confirmed: fixConfirmed,
+    verifiedPatchPath,
+    baseHead: verification ? verification.baseHead : null,
     reproductionCommand: reproResult.command,
     failureSignature: reproResult.failureSignature,
     addressesRootCause: verification ? !!verification.addressesRootCause : false,

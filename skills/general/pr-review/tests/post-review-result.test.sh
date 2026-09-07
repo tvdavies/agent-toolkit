@@ -6,13 +6,21 @@ SCRIPT="$ROOT/scripts/post-review.sh"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/bin"
+reviewed_head=3fe402e15f8fe7403b4edd8d6975b807c369068e
+# All legacy automation fixtures supply the analysis-time SHA, never query it
+# immediately before posting. Individual negative tests override/unset it.
+export PRSMASH_REVIEW_EXPECTED_HEAD="$reviewed_head"
 
 cat > "$TMP/bin/gh" <<'GH'
 #!/usr/bin/env bash
 set -euo pipefail
 
 if [[ "$1 $2" == "pr view" ]]; then
-  printf '%s\n' "$GH_PR_JSON"
+  if [[ "$*" == *"--jq .headRefOid"* ]]; then
+    printf '%s\n' "${GH_RECHECK_HEAD:-$(printf '%s' "$GH_PR_JSON" | jq -r .headRefOid)}"
+  else
+    printf '%s\n' "$GH_PR_JSON"
+  fi
 elif [[ "$1 $2" == "pr comment" ]]; then
   [[ -n "${GH_CALL_LOG:-}" ]] && echo comment >> "$GH_CALL_LOG"
   if [[ -n "${GH_COMMENT_BODY_CAPTURE:-}" ]]; then
@@ -35,6 +43,8 @@ elif [[ "$1" == "api" && "$*" == *"/pulls/"*"/reviews" && "$*" != *"--input"* ]]
     exit 1
   fi
   printf '%s\n' "${GH_REVIEWS_JSON:-[]}"
+elif [[ "$1" == "api" && "$*" == *"application/vnd.github.v3.diff"* ]]; then
+  cat "$GH_DIFF_FILE"
 elif [[ "$1" == "api" ]]; then
   has_input=false
   for arg in "$@"; do
@@ -94,6 +104,7 @@ run_with_json() {
     -u PRSMASH_APPROVAL_LINE_LIMIT \
     -u PRSMASH_APPROVAL_MAX_LINES \
     -u PRSMASH_AUTO_APPROVE_ALL \
+    -u GH_RECHECK_HEAD \
     PATH="$TMP/bin:$PATH" \
     GH_PR_JSON="$json" \
     GH_CALL_LOG="$call_log" \
@@ -257,6 +268,56 @@ fi
 [[ ! -e "$result" ]] || fail "stale-head attempt wrote a result"
 [[ ! -e "$call_log" ]] || fail "stale-head attempt posted to GitHub"
 
+# Missing, abbreviated and malformed analysis-time heads fail closed.
+for invalid_head in "" 3fe402e NOT_A_SHA; do
+  if run_case APPROVE alice 11 6 PRSMASH_REVIEW_EXPECTED_HEAD="$invalid_head"; then
+    fail "invalid/missing reviewed head was accepted: '$invalid_head'"
+  fi
+  rg -q -- '--expected-head requires' "$stderr_file" || fail "missing expected-head error"
+  [[ ! -e "$result" && ! -e "$call_log" ]] || fail "invalid head produced a side effect"
+done
+
+# The initial metadata can match, but a move before mutation must still fail.
+if run_case APPROVE alice 11 6 GH_RECHECK_HEAD=4fe402e15f8fe7403b4edd8d6975b807c369068e; then
+  fail "head moved between initial lookup and mutation was accepted"
+fi
+[[ ! -e "$result" && ! -e "$call_log" ]] || fail "late stale head posted"
+
+# Modern flag-only callers work; conflicting legacy env cannot be overridden.
+rm -f "$call_log" "$result"
+env -u PRSMASH_REVIEW_EXPECTED_HEAD PATH="$TMP/bin:$PATH" \
+    GH_PR_JSON="$(pr_json alice 11 6)" GH_CALL_LOG="$call_log" \
+    GH_REVIEW_PAYLOAD_CAPTURE="$review_payload" \
+    PRSMASH_REVIEW_RESULT_FILE="$result" \
+    "$SCRIPT" --body "$TMP/body.md" --verdict APPROVE --pr 5938 \
+    --expected-head "$reviewed_head" >"$stdout_file" 2>"$stderr_file" \
+  || fail "flag-only reviewed head rejected"
+assert_approved
+jq -e --arg head "$reviewed_head" '.commit_id == $head' "$review_payload" >/dev/null \
+  || fail "review was not pinned to the reviewed head"
+
+rm -f "$call_log" "$result"
+if env PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" \
+    GH_CALL_LOG="$call_log" PRSMASH_REVIEW_RESULT_FILE="$result" \
+    "$SCRIPT" --body "$TMP/body.md" --verdict APPROVE --pr 5938 \
+    --expected-head 4fe402e15f8fe7403b4edd8d6975b807c369068e \
+    >"$stdout_file" 2>"$stderr_file"; then
+  fail "conflicting flag/env expected heads accepted"
+fi
+rg -q 'conflicts with' "$stderr_file" || fail "missing conflicting-head diagnostic"
+[[ ! -e "$result" && ! -e "$call_log" ]] || fail "conflicting heads posted"
+
+# Missing reviewed head also blocks edit-last and dry-run, not just reviews.
+for mode in --edit-last --dry-run; do
+  if env -u PRSMASH_REVIEW_EXPECTED_HEAD PATH="$TMP/bin:$PATH" \
+      GH_PR_JSON="$(pr_json alice 11 6)" GH_CALL_LOG="$call_log" \
+      "$SCRIPT" --body "$TMP/body.md" --verdict CHANGES_SUGGESTED --pr 5938 "$mode" \
+      >"$stdout_file" 2>"$stderr_file"; then
+    fail "missing head accepted with $mode"
+  fi
+  [[ ! -e "$call_log" ]] || fail "missing head with $mode posted"
+done
+
 # --- Verdict interface guards ---
 
 # The legacy --event flag is rejected outright.
@@ -346,5 +407,38 @@ rg -q 'could not list reviews' "$stderr_file" || fail "missing reviews-listing w
 if rg -q '^dismiss$' "$call_log"; then
   fail "dismissal ran despite a failed reviews listing"
 fi
+
+# Explicit caller artefact paths can contain quotes/spaces. Python must receive
+# paths/data as argv, not interpolate them into source code.
+inline="$TMP/caller's inline.json"
+printf '%s\n' '{"comments":[{"path":"src/file.ts","line":1,"body":"A concrete finding"}]}' > "$inline"
+cat > "$TMP/current.diff" <<'DIFF'
+diff --git a/src/file.ts b/src/file.ts
+--- a/src/file.ts
++++ b/src/file.ts
+@@ -1 +1 @@
+-old
++new
+DIFF
+rm -f "$call_log" "$result"
+env PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" \
+    GH_DIFF_FILE="$TMP/current.diff" GH_CALL_LOG="$call_log" \
+    GH_REVIEW_PAYLOAD_CAPTURE="$review_payload" PRSMASH_REVIEW_RESULT_FILE="$result" \
+    "$SCRIPT" --body "$TMP/body.md" --inline "$inline" --verdict REQUEST_CHANGES \
+    --pr 5938 --expected-head "$reviewed_head" >"$stdout_file" 2>"$stderr_file" \
+  || fail "quoted inline artefact path failed"
+jq -e --arg head "$reviewed_head" '.commit_id == $head and (.comments | length) == 1 and .comments[0].path == "src/file.ts"' "$review_payload" >/dev/null \
+  || fail "inline review lost its comment or reviewed head"
+
+# Stale modern flag-only caller, not just the legacy environment path.
+rm -f "$call_log" "$result"
+if env -u PRSMASH_REVIEW_EXPECTED_HEAD PATH="$TMP/bin:$PATH" \
+    GH_PR_JSON="$(pr_json alice 11 6)" GH_CALL_LOG="$call_log" \
+    "$SCRIPT" --body "$TMP/body.md" --verdict APPROVE --pr 5938 \
+    --expected-head 4fe402e15f8fe7403b4edd8d6975b807c369068e \
+    >"$stdout_file" 2>"$stderr_file"; then
+  fail "stale flag-only caller accepted"
+fi
+[[ ! -e "$call_log" && ! -e "$result" ]] || fail "stale flag-only caller posted"
 
 echo "post-review result tests passed"

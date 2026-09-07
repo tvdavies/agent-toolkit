@@ -16,18 +16,25 @@ The founding rule survives unchanged: **the advisor never edits source code.** I
 
 ### Dispatch
 
-Spawn **one** `general-purpose` subagent with `isolation: "worktree"`. Executor model: default `sonnet`; use what the user named if they named one (`execute 003 haiku`).
+Use **one** executor via the host's approved delegation tool and current schema.
+Verify a dedicated isolated worktree/clone, one writer, scoped editing authority,
+and a supported way to return its preserved diff. Choose an available capable
+agent/model under caller policy; no mandatory model name. If the tool cannot
+provide safe isolation, hand off the plan for manual execution. Never invoke an
+agent CLI via shell or relax isolation as a fallback.
 
 The subagent prompt must contain:
 
-1. **The full plan file text, inlined.** The worktree contains only committed files — if `plans/` is uncommitted, the executor can't read it. Never assume; always inline.
+1. **The full plan file text, inlined.** Runtime snapshots differ; do not assume
+   uncommitted/untracked plans or host paths are available to the child.
 2. The executor preamble:
 
 > You are the executor for the implementation plan below. Follow it step by
 > step. Run every verification command and confirm the expected result before
 > moving on. Touch only the files listed as in scope. If any STOP condition
 > occurs, stop immediately and report. Do not improvise around obstacles.
-> Commit your work in the worktree following the plan's git workflow section.
+> Commit only if the caller authorized it, following the plan's git workflow.
+> Never infer push/merge permission from this execution request.
 > One override: SKIP the plan's instruction to update `plans/README.md` —
 > your reviewer maintains the index. Before reporting, audit every claim in
 > your report against an actual tool result from this session — only report
@@ -63,10 +70,17 @@ Review like a tech lead reviewing a PR against the spec — never fix anything y
 | Verdict | When | Action |
 |---|---|---|
 | **APPROVE** | Criteria pass, scope clean, quality holds | Update index status to DONE. Present to the user: diff summary, worktree path and branch, anything from NOTES. **Merging is the user's decision — never merge, push, or commit to their branch.** |
-| **REVISE** | Fixable gaps | SendMessage to the same executor with specific, actionable feedback ("criterion 3 fails: X; the error handling in `api.ts:90` swallows the error — use the Result pattern per the plan"). **Max 2 revision rounds**, then BLOCK. |
+| **REVISE** | Fixable gaps | Use the host's supported follow-up tool for the same executor with specific, actionable feedback ("criterion 3 fails: X; the error handling in `api.ts:90` swallows the error — use the Result pattern per the plan"). **Max 2 revision rounds**, then BLOCK. |
 | **BLOCK** | STOP condition hit, scope violated unrecoverably, or revisions exhausted | Mark BLOCKED in the index with the reason. Refine or rewrite the plan with what was learned. Tell the user what happened and what changed in the plan. |
 
-Running verification commands inside the executor's worktree is fine — it's isolated and disposable. The no-mutating-commands rule protects the user's working tree, not the worktree.
+Assign one independent verifier per revision. Pause the writer before inspection,
+then verify the exact preserved patch/base in a separate disposable environment
+when execution can write files. Inspect commands first: isolation does not make
+service mutations, installs, snapshot updates or arbitrary tests read-only.
+Never alter the patch under review. Run required checks once; repeat only after
+a changed revision or a diagnosed transient failure (one retry), and stop on
+no progress. If follow-up or patch transfer is unsupported, report a blocker;
+do not invent a tool schema or send work through an agent CLI.
 
 ---
 
