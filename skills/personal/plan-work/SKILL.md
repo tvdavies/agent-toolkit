@@ -1,25 +1,37 @@
 ---
 name: plan-work
-description: Investigate a bounded task and produce a human-approved implementation plan on plans.myslop.app before any code is written. Use when the user asks to "plan this", "write up a plan", "produce a design doc", "propose an approach for review", or wants explicit approval before implementation begins.
-compatibility: Requires bash, curl, jq, network access to plans.myslop.app, and the installed plan-review and unslop skills.
+description: Investigate a bounded task and draft an implementation plan in the requested format. Use when the user asks to "plan this", "write up a plan", "produce a design doc", or "propose an approach for review". Publish or track approval only when the caller requests it.
+compatibility: Local drafting needs repository read access and an output channel. Optional plan-service publication needs the installed plan-review skill, bash, curl, jq, and network access.
 ---
 
-<!-- Canonical copy. The Dispatch repo vendors this skill at
-     dispatch/skills/plan-work; keep them in step. -->
+<!-- Toolkit source. Dispatch vendors an adapted copy separately; local sync
+     does not update Dispatch. Review vendoring as a separate change. -->
 
 # Plan Work
 
-Turn one bounded piece of work into an implementation-ready, human-approved
-plan. Planning is read-only: no source changes, no feature branch, no worktree
-created merely to investigate.
+Turn one bounded piece of work into an implementation-ready plan. Planning is
+read-only on source: write only the requested artefact, with no feature branch
+or worktree created merely to investigate.
 
-## Shared mechanics
+## Caller-owned authority
 
-Load the installed `plan-review` skill by name. Its `plan.sh` script owns every
-plan-service call — publish, status, comments, replies, resolution, revisions —
-and resolves the API token itself, failing with the exact remedy when the token
-is missing or invalid. Never hand-roll curl calls, token checks, or
-pre-verification; run the command you need and surface its error verbatim.
+The caller owns output format, publication authorization, wait mode, and
+implementation authority, within the runtime's safety and stage restrictions.
+A draft or review request returns the requested output and stops. HTML-only
+requests stay HTML-only; do not route them through the plan service. Explicitly
+requested upload/publication is honoured at the requested destination, using
+an available authorized capability. Missing publishing capability is a named
+blocker, not permission to switch destinations or silently return a draft.
+
+Neither headless nor autonomous execution implies publication or polling.
+Plan approval records a review decision; it does not itself authorize implementation.
+
+## Optional service mechanics
+
+For authorized plan-service actions, load the installed `plan-review` skill by
+name. Its `plan.sh` script owns every service call and token resolution. Never
+hand-roll curl calls or token checks. If the skill is unavailable, return the
+local plan and report that publication is blocked. Do not guess an install path.
 
 ## Dispatch integration
 
@@ -55,9 +67,10 @@ In the target repository or system:
 
 ## 3. Write the plan
 
-Write Markdown that lets a human decide quickly and an implementer act without
-rediscovering the design. Before drafting, load the installed `unslop` skill by
-name and apply it to every piece of plan prose.
+Use the requested format (Markdown by default) so a human can decide quickly
+and an implementer can act without rediscovering the design. If `unslop` is
+installed, load it by name for editable prose only; preserve code, quotations,
+schemas, and required template labels. Otherwise write plain, concise prose.
 
 Principles:
 
@@ -136,7 +149,8 @@ The core sections every plan keeps: TL;DR, Background, Goals and non-goals,
 Proposed solution, Implementation sequence, and How we'll know it worked.
 The rest earn their place or shrink to a line.
 
-Follow the `plan-review` authoring constraints: the service renders a bounded
+Only when publishing to the plan service, follow `plan-review` authoring
+constraints: the service renders a bounded
 Markdown subset (no raw HTML, no setext headings), and every top-level block is
 an individually commentable anchor — one idea per paragraph or list item, and
 keep unchanged blocks word-stable across versions. For diagrams, export
@@ -150,20 +164,25 @@ content; the plan fits its length budget; the prose has had an unslop pass;
 links are valid and credential-free; no source change or secret is included;
 and the plan can be implemented without rediscovering a hidden decision.
 
-## 4. Publish and share
+## 4. Deliver, and publish only if authorized
 
-Publish with `plan.sh create --title "…" --md plan.md` and give the returned
-`url` to the reviewer — that is where they read, comment on blocks, approve,
-or request changes.
+Return the requested plan or review artefact. When the caller explicitly asks
+for plan-service publication, use `plan.sh create --title "…" --md plan.md` and
+share the returned `url`. A request to upload an HTML report instead uses the
+requested file-upload capability, not `plan.sh`. Report the actual outcome and
+URL, never a promise to upload. Without publication authorization, stop here.
 
-## 5. Wait for review — by context
+## 5. Wait only as directed
 
-- **Interactive session (default):** stop after sharing the URL. Do not burn
-  turns polling while the human reads. Process feedback when they return, ask
-  you to check, or explicitly ask you to wait — only then poll.
-- **Autonomous, non-Dispatch:** poll `plan.sh status` every 30–60 s; act when
-  `status` leaves `open` or new comments arrive.
-- **Dispatch wake:** never wait here — `plan-ticket` owns the seeded wait.
+- **Interactive or autonomous, non-Dispatch (default):** stop after delivering
+  the artefact or URL. No default polling. Check once when asked to check.
+- **Explicit wait request/policy:** use an available event-driven wait, or a
+  caller-bounded polling interval and deadline (30–60 s between checks is
+  reasonable). Stop at approval, requested changes, deadline, or a capability
+  failure. No unbounded wait loop.
+- **Dispatch wake:** `plan-ticket` retains its required publication, current-
+  version approval, and seeded `plan_feedback` wait semantics. Never replace
+  that stage contract with the interactive draft default or poll here.
 
 ## 6. Iterate
 
@@ -183,11 +202,8 @@ For each round of feedback:
 
 ## 7. Approved — hand off
 
-Approval is the service's verdict, never your own assessment: proceed only
-when `plan.sh status` shows `status` is exactly `approved` for the current
-version. A new version resets approval.
-
-Then hand off with the plan URL, the tokenless `raw_url` (readable by any
-agent or tool), the approved version number, and the key decisions — whether
-the implementer is you in this session, another agent or skill (for example
-`start-ticket`), or a human.
+When the caller requires approval, verify that `plan.sh status` is exactly
+`approved` for the current version; a new version resets approval. Return the
+plan URL, tokenless `raw_url`, approved version, and key decisions. Stop unless
+the caller separately authorized implementation and the owning stage permits
+that handoff. An approval notification alone never starts coding.

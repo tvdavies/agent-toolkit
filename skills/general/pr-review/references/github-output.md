@@ -1,15 +1,15 @@
 # GitHub PR Comment Format
 
-This document defines the template and formatting rules for posting PR review results as a GitHub comment. Only load this file when the user requests posting to GitHub (via `--post` flag or "post to PR" / "post to GitHub").
+This document defines publication formatting for an explicitly authorized PR review (`--post` or explicit caller publishing policy). Headless mode is not authority. Use [severity-verdict.md](severity-verdict.md) for severity and required-coverage gates. INCOMPLETE is report-only, not a helper verdict; never coerce it into an approval or a comment that dismisses a prior block.
 
 ## Report Templates
 
-Write the complete markdown to `$REVIEW_TMPDIR/pr-review.md` before posting. Initialise the directory first:
-
-```bash
-REVIEW_TMPDIR="${PR_REVIEW_TMPDIR:-${TMPDIR:-/tmp}}"
-mkdir -p "$REVIEW_TMPDIR"
-```
+Write the complete markdown to `$REVIEW_TMPDIR/pr-review.md` before posting.
+Reuse the one directory allocated in SKILL.md with
+`REVIEW_TMPDIR=$(bash "$SKILL_DIR/scripts/review-tmpdir.sh")`. Do not allocate
+again here. The helper preserves an explicit `PR_REVIEW_TMPDIR` and otherwise
+creates a unique private directory. Resolve `SKILL_DIR` from this installed
+skill, not the repository cwd.
 
 Use the appropriate template based on the verdict.
 
@@ -27,7 +27,11 @@ For clean PRs with no findings or only minor positives. Keep it short.
 ---
 ```
 
-No findings sections, no "What's Good" padding, no build status (CI covers that), no Files Reviewed section (GitHub's Files Changed tab covers that).
+No findings sections or generic praise padding. Include a concise coverage line
+in every template: reviewed head/scope, required checks satisfied (with CI or
+local evidence), and optional skips/reasons. Never assume CI covers a check
+without current-head evidence. If posting REQUEST_CHANGES with required gaps,
+include those gaps visibly; do not hide them inside a collapsed section.
 
 ### APPROVE_WITH_SUGGESTIONS Template
 
@@ -108,7 +112,10 @@ Use these exact strings based on the verdict:
 
 ## Ticket Compliance Section
 
-Only include if a ticket was found. The status headline MUST be the only thing visible without expansion; the rationale and requirement breakdown go inside the collapsible block.
+Include the assessment when a ticket was retrieved. Put its detailed breakdown
+inside the collapsible block below. An identified but inaccessible ticket is
+unavailable required coverage and must be visible in the summary, not silently
+omitted or described as compliant.
 
 ```markdown
 <details>
@@ -214,7 +221,7 @@ Each severity tier is a collapsible section with a count in the summary line. On
 
 ## Incremental Review Template
 
-When posting an incremental re-review (`--since`), use this template instead of the full review template. Post it through `post-review.sh --verdict VERDICT` exactly like a full review — the verdict still drives the real GitHub event, and the script's manual-approval gate is the only thing that may downgrade an approval verdict to a comment. Never use `--edit-last` for incremental reviews, so the PR timeline preserves the progression.
+When posting an incremental re-review (`--since`), use this template instead of the full review template. Post it through `post-review.sh --verdict VERDICT --expected-head "$HEAD_OID"` exactly like a full review — the verdict still drives the real GitHub event, and the script's manual-approval gate is the only thing that may downgrade an approval verdict to a comment. Never use `--edit-last` for incremental reviews, so the PR timeline preserves the progression.
 
 ```markdown
 ## {VERDICT_BADGE} Incremental Review
@@ -319,7 +326,8 @@ Same format as severity sections in the full review, grouped by severity:
 ### Incremental Verdict Rules
 
 The verdict is based on **Still Open + New** findings combined (resolved findings are excluded):
-- APPROVE: No critical or should-fix findings remaining
+- INCOMPLETE: Required coverage is missing and no critical is confirmed; do not publish through the helper
+- APPROVE: No findings remaining, with complete required coverage
 - APPROVE_WITH_SUGGESTIONS: Only suggestions remaining
 - CHANGES_SUGGESTED: At least one should-fix finding still open or newly introduced, but no criticals — non-blocking, exactly as in a full review
 - REQUEST_CHANGES: At least one critical finding still open or newly introduced
@@ -330,7 +338,9 @@ Pass the resulting verdict to `post-review.sh --verdict` unchanged — increment
 
 ## Inline Review Comments
 
-CRITICAL and SHOULD_FIX findings get posted as inline review comments on the specific lines in the diff. This creates GitHub conversation threads that must be resolved before merge. SUGGESTION findings are body-only — no inline thread.
+CRITICAL and SHOULD_FIX findings get inline comments on lines in the diff.
+Repository branch protection may require resolving conversations even though
+SHOULD_FIX does not submit a blocking review event. SUGGESTION is body-only.
 
 ### Inline Comment Template
 
@@ -406,37 +416,51 @@ The combined reason code is `untrusted-author-over-line-limit`. The default firs
 
 ## Posting Commands
 
-Use the `post-review.sh` script for all posting. It handles body comment + inline review as two separate operations, with validation and graceful fallback.
+Use the bundled `post-review.sh` for all posting. Approval/request-changes
+submit body, event and inline comments as one review. COMMENT mode is multi-step
+(body, optional inline review, possible dismissal of our stale block). Report
+partial failures and reconcile before any retry.
+
+Every invocation, including dry-run and edit-last, requires the **head actually
+reviewed**: `--expected-head "$HEAD_OID"`. Automated callers may keep using
+`PRSMASH_REVIEW_EXPECTED_HEAD` as a legacy alternative; conflicting flag/env
+values are rejected. Never fetch a fresh head merely to bypass a mismatch.
+The helper checks head before mutations and pins review `commit_id`; GitHub
+issue comments do not offer an atomic head precondition, so a last-moment
+server-side race remains possible. Always retain the reviewed SHA in the report.
 
 ### Full review with inline comments
 ```bash
-bash scripts/post-review.sh \
-    --body $REVIEW_TMPDIR/pr-review.md \
-    --inline $REVIEW_TMPDIR/pr-review-inline.json \
+bash "$SKILL_DIR/scripts/post-review.sh" \
+    --body "$REVIEW_TMPDIR/pr-review.md" \
+    --inline "$REVIEW_TMPDIR/pr-review-inline.json" \
     --verdict REQUEST_CHANGES \
-    --pr 1234
+    --pr 1234 --expected-head "$HEAD_OID"
 ```
 
 ### Body only (no inline comments)
 ```bash
-bash scripts/post-review.sh \
-    --body $REVIEW_TMPDIR/pr-review.md --verdict APPROVE --pr 1234
+bash "$SKILL_DIR/scripts/post-review.sh" \
+    --body "$REVIEW_TMPDIR/pr-review.md" --verdict APPROVE --pr 1234 \
+    --expected-head "$HEAD_OID"
 ```
 
 ### Update existing review comment
 ```bash
-bash scripts/post-review.sh \
-    --body $REVIEW_TMPDIR/pr-review.md --edit-last --pr 1234
+bash "$SKILL_DIR/scripts/post-review.sh" \
+    --body "$REVIEW_TMPDIR/pr-review.md" --edit-last --pr 1234 \
+    --expected-head "$HEAD_OID"
 ```
 
 ### Dry run (inspect payload without posting)
 ```bash
-bash scripts/post-review.sh \
-    --body $REVIEW_TMPDIR/pr-review.md --inline $REVIEW_TMPDIR/pr-review-inline.json \
-    --verdict REQUEST_CHANGES --pr 1234 --dry-run
+bash "$SKILL_DIR/scripts/post-review.sh" \
+    --body "$REVIEW_TMPDIR/pr-review.md" --inline "$REVIEW_TMPDIR/pr-review-inline.json" \
+    --verdict REQUEST_CHANGES --pr 1234 --expected-head "$HEAD_OID" --dry-run
 ```
 
 **Important:** Always pass `--pr NUMBER` explicitly. Never rely on auto-detection from the current branch. Never call `gh pr review`, `gh pr comment`, or the reviews API directly — `post-review.sh` is the only sanctioned posting path.
 
 ### If no PR exists
-Inform the user that no PR was found and offer to create one, or just output the review conversationally.
+Return the report and explain that publication is blocked: no target PR was
+found. Do not create a PR under a review request.

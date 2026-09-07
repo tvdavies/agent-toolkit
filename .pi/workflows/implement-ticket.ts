@@ -7,7 +7,7 @@ export const meta = {
     { title: "Understand", detail: "Triage the input (ticket vs report; existing branch/PR; duplicates; size) and, in parallel, fetch the requirement and map the affected code and conventions." },
     { title: "Plan", detail: "Generate independent implementation approaches, score them with parallel judges, and synthesize the winning plan grafting the best ideas from runners-up." },
     { title: "Implement", detail: "Carry out the winning plan in a fresh isolated git clone, writing code and tests and running the repo's test command, scoped to the ticket." },
-    { title: "Review", detail: "Independent reviewers across correctness, test-adequacy, and regression-risk try to find real problems and re-run tests; do one bounded fix pass if needed." },
+    { title: "Review", detail: "Independent correctness, test-adequacy and regression-risk review; one independent execution owner per revision, with one bounded fix pass if needed." },
     { title: "Ship", detail: "Commit on a well-named branch, push, and open a well-described PR against the base branch (unless opted out)." },
   ],
 };
@@ -69,7 +69,7 @@ const codeMapSchema = {
   additionalProperties: false,
   required: ["testCommand", "affectedPaths", "conventions", "existingTests", "integrationPoints", "notes"],
   properties: {
-    testCommand: { type: "string", description: "the exact command to run the test suite for this repo (e.g. 'bun test', 'npm test', 'pytest'); 'bun test' if unsure and bun is present" },
+    testCommand: { type: "string", description: "the repository's documented required/relevant test command (e.g. 'npm test', 'pytest'); empty if no verified command is available, never guess based on installed runtimes" },
     affectedPaths: {
       type: "array",
       items: {
@@ -160,7 +160,10 @@ if (!ticket || !codeMap) {
   };
 }
 
-const testCommand = (codeMap.testCommand && String(codeMap.testCommand).trim()) || "bun test";
+const testCommand = (codeMap.testCommand && String(codeMap.testCommand).trim()) || "";
+if (!testCommand) {
+  return { plan: null, worktree: null, testResult: { command: "", passed: false, outputTail: "No verified repository test command available." }, reviewVerdict: "blocked", summary: "Establish the required verification command before implementation; no test runner was guessed and no code was changed." };
+}
 const triageInfo = triage || {
   inputType: "change-request",
   baseBranch: "",
@@ -396,14 +399,14 @@ const implementRun = await agent(
     `- Write the code AND the tests. Each acceptance criterion must be covered by a test where feasible.\n` +
     `- Follow the repo conventions captured in the code map. Mirror existing test style and location.\n` +
     `- Stay strictly within scope. Do NOT do anything in OUT OF SCOPE. No drive-by refactors.\n` +
-    `- Run the test command: ${testCommand}. If failures are caused by your change, fix them and re-run until green (or until you are confident a remaining failure is pre-existing and unrelated — say so explicitly).\n` +
+    `- Inspect and run the repo test command: ${testCommand}, using disposable fixtures, never live services or production credentials. Run once per revision; at most two targeted repair/retest cycles for failures caused by this change. Stop on deterministic infrastructure failure or no progress, report remaining failures, and do not loop until green.\n` +
     `- Do NOT commit, push, or open a PR — the Ship phase handles that after the change is reviewed.\n\n` +
     jsonContract(
       `filesChanged (string[]), testsAdded (string[]), testCommandRun (string, the exact command you ran), ` +
         `testsPassed (boolean), testOutputTail (string), summary (string: what you implemented and how it satisfies the acceptance criteria)`,
     ) +
     `\nDo NOT try to report the worktree path or diff path yourself — the orchestrator derives those from the run.`,
-  { label: "implement", phase: "Implement", isolation: "worktree", effort: "high", returnMetadata: true, network: true, allowFailure: true },
+  { label: "implement", phase: "Implement", effort: "high", returnMetadata: true, network: true, allowFailure: true },
 );
 const implementText = implementRun && typeof implementRun.value === "string" ? implementRun.value : "";
 
@@ -460,10 +463,17 @@ phase("Review");
 const reviewSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["lens", "verdict", "issues"],
+  required: ["lens", "verdict", "issues", "verification"],
   properties: {
     lens: { type: "string" },
     verdict: { type: "string", enum: ["pass", "concerns", "fail"] },
+    verification: {
+      type: "object", additionalProperties: false, required: ["status", "command", "outputTail"],
+      properties: {
+        status: { type: "string", enum: ["passed", "failed", "unavailable", "not-run"] },
+        command: { type: "string" }, outputTail: { type: "string" },
+      },
+    },
     issues: {
       type: "array",
       items: {
@@ -485,24 +495,24 @@ const reviewLenses = [
   {
     key: "correctness",
     brief:
-      "CORRECTNESS: does the code actually satisfy EVERY acceptance criterion? Look for logic errors, unhandled edge cases, and criteria that are claimed-but-not-met. Re-run the test command yourself to confirm the claimed result.",
+      "CORRECTNESS: does the code actually satisfy EVERY acceptance criterion? Inspect logic errors, edge cases and claimed-but-not-met criteria. Do not rerun the suite: regression-risk owns execution. Add a targeted check only for a specific uncovered concern; otherwise verification.status=not-run.",
   },
   {
     key: "test-adequacy",
     brief:
-      "TEST-ADEQUACY: do the tests genuinely prove the criteria, or are they shallow/tautological? Check for missing edge cases, tests that would pass even if the feature were broken, and uncovered acceptance criteria. Re-run the tests.",
+      "TEST-ADEQUACY: inspect whether tests genuinely prove the criteria, missing edge cases, assertions that pass even when the feature breaks, and uncovered criteria. Do not rerun the suite: regression-risk owns execution. A concrete concern can justify one targeted check; otherwise verification.status=not-run.",
   },
   {
     key: "regression-risk",
     brief:
-      "REGRESSION-RISK: could this break existing behavior or integration points? Look at the full diff for out-of-scope edits, broken contracts, and changes to shared code. Re-run the FULL test suite, not just the new tests.",
+      "REGRESSION-RISK: you are the single independent execution owner for this revision. Inspect the complete diff, contracts and integration points. Inspect command safety, then run the agreed repository-required and change-relevant checks once, including the full suite when the repo requires it. Use disposable fixtures, not live services. Record the actual command and output in verification. Failed or unavailable required checks mean verdict=fail; no repeat for reassurance.",
   },
 ];
 
 // Each reviewer receives the implementation diff in its own fresh writable clone.
 const reviewWorktreeNote =
   `The implementation diff has already been applied to your current isolated clone. ` +
-  `Inspect it with \`git diff HEAD\` / \`git status\` and run the tests in your current working directory with \`${testCommand}\`. ` +
+  `Inspect it with \`git diff HEAD\` / \`git status\`. The execution owner's agreed test command is \`${testCommand}\`; other lenses inspect tests and run only concern-driven targeted checks. Do not edit source, tests or snapshots. ` +
   `Do not access or mutate another agent's workspace.`;
 
 const reviews = (
@@ -510,7 +520,7 @@ const reviews = (
     reviewLenses.map((lens) => () =>
       agent(
         `You are an adversarial reviewer. Your job is to REFUTE the claim that this change is correct and complete, through the ${lens.brief}\n\n` +
-          `Only report problems you can back with concrete evidence (a file:line or actual command/test output). Do not invent issues; if it is solid, say so. Re-run "${testCommand}" yourself in the worktree rather than trusting the implementer's claim.\n\n` +
+          `Only report problems backed by concrete file:line or command evidence. Do not invent issues. Return lens="${lens.key}". Keep the assigned execution ownership; source review alone is not proof a test ran.\n\n` +
           `${sharedContext}\n\n` +
           `IMPLEMENTATION REPORT:\n${JSON.stringify(
             {
@@ -539,7 +549,9 @@ for (const r of reviews) {
     if (issue.severity === "blocker" || issue.severity === "major") realIssues.push({ lens: r.lens, ...issue });
   }
 }
-const anyFailVerdict = reviews.some((r) => r.verdict === "fail");
+const executionReview = reviews.find((r) => r.lens === "regression-risk");
+const independentTestsPassed = !!(executionReview && executionReview.verification && executionReview.verification.status === "passed" && executionReview.verification.command && executionReview.verification.outputTail);
+const anyFailVerdict = reviews.length !== reviewLenses.length || !independentTestsPassed || reviews.some((r) => r.verdict === "fail");
 log(`Review complete. Reviewers: ${reviews.length}. Evidence-backed blocker/major issues: ${realIssues.length}.`);
 
 // The active worktree/diff handed back to the user. It moves to the fix-pass worktree
@@ -547,8 +559,8 @@ log(`Review complete. Reviewers: ${reviews.length}. Evidence-backed blocker/majo
 let activeWorktreePath = implementation.worktreePath;
 let activeDiffPath = implementation.diffPath;
 let fixResult = null;
-let postFixTestsPassed = implementation.testsPassed;
-let postFixTestTail = implementation.testOutputTail;
+let postFixTestsPassed = implementation.testsPassed && independentTestsPassed;
+let postFixTestTail = executionReview && executionReview.verification ? executionReview.verification.outputTail : "Independent execution evidence unavailable.";
 
 if (realIssues.length > 0 || anyFailVerdict || !implementation.testsPassed) {
   log(`Running one bounded fix pass for ${realIssues.length} issue(s).`);
@@ -572,12 +584,12 @@ if (realIssues.length > 0 || anyFailVerdict || !implementation.testsPassed) {
           .map((i, n) => `${n + 1}. [${i.severity}/${i.lens}] ${i.claim}\n   evidence: ${i.evidence}\n   suggested fix: ${i.fix}`)
           .join("\n") || "(no specific issues, but tests were not green — get them green)"
       }\n\n` +
-      `After fixing, re-run "${testCommand}".\n\n` +
+      `After fixing, inspect and run "${testCommand}" once with safe disposable fixtures. At most one repair/retest for an observed failure; stop on deterministic infrastructure failure or no progress. Do not loop until green.\n\n` +
       jsonContract(
         `fixedIssues (string[]), remainingIssues (string[]: issues you could NOT fix within scope, with why), ` +
           `testCommandRun (string), testsPassed (boolean), testOutputTail (string), summary (string)`,
       ),
-    { label: "fix-pass", phase: "Review", isolation: "worktree", effort: "high", patches: [implementation.diffPath], returnMetadata: true, network: true, allowFailure: true },
+    { label: "fix-pass", phase: "Review", effort: "high", patches: [implementation.diffPath], returnMetadata: true, network: true, allowFailure: true },
   );
   const fixText = fixRun && typeof fixRun.value === "string" ? fixRun.value : "";
 
@@ -615,7 +627,7 @@ let finalReviewIssues = realIssues;
 let finalFailVerdict = anyFailVerdict;
 if (fixResult && activeDiffPath) {
   postFixReview = await agent(
-    `Independently verify the COMPLETE post-fix change already seeded into your current isolated clone. Re-run "${testCommand}". Adjudicate every original finding and every item the fixer says remains; report only blocker/major problems that still exist with concrete file:line or command evidence. If all earlier issues are truly fixed and tests pass, return pass with no issues.\n\n` +
+    `You are the single independent execution owner for this post-fix revision. Verify the COMPLETE change already seeded into your isolated clone without source edits. Inspect command safety and run "${testCommand}" once with disposable fixtures; no live services or unbounded retries. Record actual command/output in verification; failed or unavailable required checks mean verdict=fail. Adjudicate every original finding and every remaining issue; report only evidence-backed blocker/major problems. Return pass only if earlier issues are truly fixed and required tests pass.\n\n` +
       `${sharedContext}\n\n` +
       `ORIGINAL FINDINGS:\n${JSON.stringify(realIssues, null, 2)}\n\n` +
       `FIX REPORT:\n${JSON.stringify(fixResult, null, 2)}`,
@@ -623,7 +635,9 @@ if (fixResult && activeDiffPath) {
   );
   if (postFixReview) {
     finalReviewIssues = (postFixReview.issues || []).filter((issue) => issue.severity === "blocker" || issue.severity === "major");
-    finalFailVerdict = postFixReview.verdict === "fail";
+    postFixTestsPassed = !!(postFixReview.verification && postFixReview.verification.status === "passed" && postFixReview.verification.command && postFixReview.verification.outputTail);
+    postFixTestTail = postFixReview.verification ? postFixReview.verification.outputTail : "Independent post-fix execution evidence unavailable.";
+    finalFailVerdict = postFixReview.verdict === "fail" || !postFixTestsPassed;
   } else {
     finalReviewIssues = [{
       lens: "post-fix",

@@ -1,20 +1,30 @@
 ---
 name: plan-review
-description: Author an implementation plan as markdown, publish it to plans.myslop.app for human review, then track comments and approvals, reply to feedback, and publish revised versions. Use whenever a plan, design, or proposal should be reviewed and approved by a human before implementation.
+description: Mechanics for explicitly authorized plan publication and feedback on plans.myslop.app. Use when asked to publish a plan, check its review status, reply to comments, or revise a published plan. Does not grant implementation authority or require publication for local draft/review requests.
 compatibility: Requires bash, curl, jq, and network access to plans.myslop.app.
 ---
 
 <!-- Canonical copy. Derived from https://plans.myslop.app/skill.md with the
-     raw curl/token mechanics replaced by scripts/plan.sh. The Dispatch repo
-     vendors this skill at dispatch/skills/plan-review; keep them in step. -->
+     raw curl/token mechanics replaced by scripts/plan.sh. Dispatch vendors an
+     adapted copy separately; toolkit sync does not update that copy. -->
 
 # plan-review
 
-Publish plans to https://plans.myslop.app where humans review them: they
-comment on individual blocks (paragraphs, list items, headings), approve, or
-request changes. You reply as the agent, resolve addressed comments, and
-publish new versions until the plan is approved. Reviewers see every version
-and can diff any two.
+Publish authorized plans to https://plans.myslop.app, where humans comment on
+blocks, approve, or request changes. Reviewers can see and compare versions.
+
+## Caller-owned authority
+
+The caller owns publication authorization, destination, wait mode, and
+implementation authority within runtime/stage restrictions. This skill only
+supplies service mechanics. For an interactive draft/review, return the
+requested output and stop. An HTML-only request does not need the plan service.
+Honour an explicit upload/publication request using the requested destination;
+if that capability is unavailable, name the blocker rather than silently
+substituting a draft or another destination.
+
+No default polling, including headless/autonomous use. Plan approval does not
+itself authorize implementation. Only the owning caller/stage can do that.
 
 ## The script owns the API
 
@@ -48,7 +58,8 @@ authentication.
 
 ## Authoring
 
-Write the plan as markdown. The service renders a bounded subset: ATX headings,
+For service publication, write the plan as markdown. These restrictions do not
+apply to a local HTML deliverable. The service renders a bounded subset: ATX headings,
 paragraphs, fenced code, `-`/`1.` lists (nesting allowed), blockquotes, pipe
 tables, `---` rules, images, links, and inline code/bold/italic/strikethrough.
 Raw HTML is escaped, not rendered; avoid setext (`===`) headings.
@@ -65,17 +76,26 @@ Raw HTML is escaped, not rendered; avoid setext (`===`) headings.
 
 ## Workflow
 
-1. `create` the plan and **give the returned `url` to the user** — that is
-   where they review (sign-in required; the link itself is unguessable).
+1. When publication is authorized, `create` the plan and **give the returned
+   `url` to the user** (review sign-in required; the link itself is unguessable).
+   Otherwise deliver the requested local draft/review and stop.
 2. When feedback arrives, read it with `status`/`comments`. Reply in-thread
    with `comment --reply-to`; apply, discuss, or decline with grounded
    reasoning. `resolve` a thread only after actually addressing it.
 3. For changes, `revise` with the full updated markdown and a one-line
    `--note`. A new version resets status to `open`; batch feedback into one
    version rather than micro-revising.
-4. On `approved`, proceed with the work.
+4. On current-version `approved`, report the decision and version and stop.
+   A new version resets approval. Start implementation only with separate
+   caller authorization and permission from the owning stage.
 
-Outside Dispatch, poll `status` every 30–60 s while waiting. Under Dispatch
-(`DISPATCH_TASK_ID` set), never poll: the `plan-ticket` skill records one
-seeded `plan_feedback` wait and exits, and the reconciler wakes the lane when
-review state changes.
+Check once when asked to check. Wait only on explicit caller request/policy,
+prefer event-driven waits, and use a bounded interval/deadline if polling is
+necessary (30–60 s between checks). Stop on approval, changes requested, the
+deadline, or failure; do not remain alive merely because the service is open.
+
+Under Dispatch (`DISPATCH_TASK_ID` set), `plan-ticket` remains the driver. It
+owns required publication, verified current-version approval and the handoff.
+Never poll: `plan-ticket` records one seeded `plan_feedback` wait and exits;
+the reconciler wakes the lane on review-state change. Do not weaken that
+stage's required approval/wait semantics with the interactive draft default.

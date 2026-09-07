@@ -10,11 +10,17 @@ metadata:
 
 A git worktree is a second working directory backed by the same repository, checked out
 on its own branch. Worktrees let independent pieces of work proceed in parallel without
-touching each other's files or the main checkout. This toolkit manages worktrees under
-`~/.pi-worktrees/<repo>/` on prefixed branches.
+touching each other's files or the main checkout. When installed, this toolkit's
+worktree extension defaults to `~/.pi-worktrees/<repo>/` on prefixed branches;
+other hosts may use different managed roots or isolated clones.
 
-You have agent-callable tools that do the same things as the `/wt-*` commands. Prefer them
-over raw `git worktree` so everything follows the same convention.
+Check available tools and their current schemas first. Prefer verified managed
+worktree tools when present. The signatures below describe this toolkit, not a
+promise about another host. Without those tools, inspect `git worktree list
+--porcelain`, verify ownership/isolation, and use ordinary `git worktree add`
+only if authorized. Never launch an agent CLI as a fallback or bypass a denied
+operation. If safe isolation cannot be established, stop mutations and report it.
+Creating isolation does not authorize commits, pushes, integration or cleanup.
 
 ## When to use a worktree
 
@@ -25,9 +31,12 @@ over raw `git worktree` so everything follows the same convention.
   do code-changing PR work in the primary checkout merely because that branch is already there.
 - **A task touching more than one repo** → call the tools once per repo, passing each
   repo's path as `repo`.
-- **You are a delegated worker** → you already start in your own auto-created worktree, so
-  you usually need these tools only to adopt a *different* existing branch/PR, or to work in
-  *another* repo. If you don't need a different worktree, just work where you are.
+- **You are a delegated worker** → inspect the actual runtime isolation contract,
+  absolute cwd, repository root, branch/HEAD and status. A child may share a
+  checkout or get a unique worktree/clone. Reuse a verified dedicated environment;
+  never assume delegation itself establishes isolation. One writer per checkout,
+  including installs/builds/tests that write files. Read-only reviewers must not
+  mutate another worker's environment.
 
 ## Tools
 
@@ -51,15 +60,18 @@ over raw `git worktree` so everything follows the same convention.
 2. Preserve intended dirty files or local commits in that current PR worktree. Determine whether it is ahead, behind, or diverged from the remote head; do not require exact HEAD equality before understanding legitimate local work.
 3. Otherwise use `worktree_list({ repo })` and identify the primary checkout plus any existing managed PR worktree.
 4. `worktree_adopt({ pr: "123", repo })` when no suitable managed PR worktree exists.
-5. Verify the returned path is under the managed worktree root and is not the primary checkout before any code-related command.
+5. Verify the returned path matches the host's configured managed root (or documented isolated clone), belongs to this task and is not the primary checkout before mutation.
 6. If adoption returned the primary checkout because the head branch is already checked out there, ensure the exact PR head object is fetched without changing primary-checkout files, then call `worktree_new` with a unique PR-specific name and `base` set to that exact SHA. For a GitHub fork PR, fetching `pull/PR_NUMBER/head` from the base remote can make the head object available before worktree creation. Verify the fetched SHA before continuing. Work on the temporary local branch and push only with an explicit `HEAD:PR_HEAD_BRANCH` refspec after re-checking the remote head.
 7. Do all installs, edits, builds, tests, commits, and conflict resolution in the verified worktree.
 8. Remove it only when clean and safely integrated or pushed; never delete the remote PR head branch.
 
 **New isolated feature**
-1. `worktree_new({ name: "fix-login-cache" })` → path on `…/fix-login-cache`.
-2. Work, commit. `worktree_merge({ target: "main", mode: "squash" })` → commit the squash.
-3. `worktree_remove({ branch: "…/fix-login-cache", deleteBranch: true })`.
+1. Inspect/list first; create only if no suitable dedicated environment exists.
+2. `worktree_new({ name: "fix-login-cache" })` → verify the returned path/branch.
+3. Do only the authorized work there. Commit/integrate only if separately
+   authorized; `worktree_merge` is not an automatic next step.
+4. Remove only when authorized, clean and safely integrated/pushed (or explicitly
+   abandoned). Preserve unintegrated work and report the path.
 
 **Multi-repo task** — repeat per repo, passing `repo`:
 `worktree_new({ name: "shared-change", repo: "/path/to/other-repo" })`.

@@ -1,6 +1,10 @@
 # Finding Format Specification
 
-This document defines the contract between sub-agents and the synthesiser. All sub-agents MUST follow this format exactly.
+This document defines the finding format for reviewers and synthesis. Use
+[severity-verdict.md](severity-verdict.md) for the shared severity/coverage verdict
+contract: only CRITICAL blocks, SHOULD_FIX is nonblocking, missing required
+coverage cannot become approval. Reviewers also return assessment status,
+reason and files actually reviewed; this finding structure alone is not coverage.
 
 ## Finding Structure
 
@@ -29,7 +33,7 @@ Issues that MUST be fixed before merge:
 - Security vulnerabilities (injection, auth bypass, secret exposure)
 - Data loss or corruption risks
 - Breaking changes to public APIs or shared contracts
-- Explicit violations of CLAUDE.md rules marked as critical
+- Verified violations of required repository safety/correctness contracts
 - Race conditions or concurrency bugs that cause incorrect behaviour
 
 ### SHOULD_FIX (confidence 80-89)
@@ -38,7 +42,7 @@ Issues that would cause a real problem in production, create meaningful confusio
 
 - Missing input validation at system boundaries
 - Performance issues that affect user experience
-- Error handling gaps that would cause silent failures or data loss
+- Error handling gaps with meaningful but nonblocking impact (verified silent data loss is CRITICAL)
 - Logic errors or correctness risks in business-critical paths
 - Tests that give false confidence (assertions that always pass, testing the wrong thing)
 
@@ -68,7 +72,8 @@ Before reporting any CRITICAL finding, you MUST:
 3. Search for related handling elsewhere in the same file (e.g. a condition check, a try/catch, a validation step)
 4. If the concern is about a code path (e.g. "X could happen"), trace the path to confirm it is actually reachable
 
-If you cannot confirm the issue after these steps, downgrade to SHOULD_FIX or drop it entirely. A false CRITICAL is worse than a missed SUGGESTION — it wastes reviewer time and erodes trust in the review.
+If you cannot confirm the issue after these steps, drop it or record a named
+coverage gap. Downgrade only when evidence supports a real lower-severity issue. A false CRITICAL is worse than a missed SUGGESTION — it wastes reviewer time and erodes trust in the review.
 
 ## Scoping Rule
 
@@ -112,7 +117,8 @@ After reviewing, list the files you reviewed. For files with findings, include t
 
 ## Anti-padding Rule
 
-If you find nothing noteworthy, say so clearly. Do NOT manufacture findings to justify your existence. An empty category is a good sign, not a failure. A review that says "No issues found" is perfectly valid and valuable — it means the code is clean.
+If you find nothing noteworthy, say so clearly. Do NOT manufacture findings to justify your existence. An empty category is a good sign, not a failure. "No issues found" is valid after a completed assessment; it is not proof the
+code is bug-free. Missing reviewer output is incomplete coverage, not a clean review.
 
 ## Examples
 
