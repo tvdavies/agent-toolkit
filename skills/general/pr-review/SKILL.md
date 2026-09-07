@@ -24,6 +24,16 @@ Multi-agent pull request review that analyses code changes across six dimensions
 
 For `--pr NUMBER` reviews, the current working directory must already be the exact PR worktree. Do not search the filesystem for another checkout if git commands fail. In headless mode, fail cleanly rather than reviewing from a guessed repository.
 
+## Search and Filesystem Discipline
+
+The host filesystem is large and shared; unbounded scans cause serious system-wide I/O damage. These rules bind the orchestrator AND every sub-agent, and must be copied into each sub-agent prompt:
+
+- Never run filesystem-wide or home-wide scans: no `find /`, `find ~`, `grep -r /`, `du /`, `locate`, or any search rooted outside the worktree.
+- Root every `find`, `grep`/`rg`, and `ls` at the current working directory (the PR worktree) or `$REVIEW_TMPDIR`. Nothing else.
+- To locate a binary, use `command -v NAME` only. If it is not on PATH, treat it as unavailable, note the limitation in the review, and move on. Never search the filesystem for it.
+- To inspect an npm package, use the worktree's `node_modules` and lockfile only. If it is not installed there, state that it could not be inspected locally. Never hunt for other checkouts or global installs.
+- If a required tool, dependency, or file cannot be found within these bounds, record it as a review limitation instead of widening the search.
+
 ## Review Temporary Directory
 
 All generated review artifacts MUST be written under the per-review temporary directory:
@@ -199,6 +209,7 @@ If a different `subagent` implementation is active and does not expose those opt
 
 Each sub-agent receives:
 - The current working directory and an explicit instruction to stay there
+- The "Search and Filesystem Discipline" rules verbatim (no filesystem-wide or home-wide scans; every search rooted in the worktree or `$REVIEW_TMPDIR`; `command -v` only for binaries; missing tools are recorded as limitations, never hunted for)
 - The base branch and diff range
 - The exact path to the persisted full diff: `$REVIEW_TMPDIR/pr.diff` (do not invent a different `/tmp/pr-*.diff` path)
 - The list of changed files with categories
