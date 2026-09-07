@@ -54,6 +54,21 @@ CLI through shell as a fallback. If delegation is optional, review directly
 and label it non-independent. If independence is REQUIRED by the caller or
 risk gate below and unavailable, report incomplete coverage.
 
+## Search and Filesystem Discipline
+
+The host filesystem is large and shared; unbounded scans cause serious system-wide I/O damage. These rules bind the orchestrator AND every sub-agent, and must be copied into each sub-agent prompt:
+
+- Never run filesystem-wide or home-wide scans: no `find /`, `find ~`, `grep -r /`, `du /`, `locate`, or any search rooted outside the worktree.
+- Root every `find`, `grep`/`rg`, and `ls` at the current working directory (the PR worktree) or `$REVIEW_TMPDIR`. Nothing else.
+- To locate a binary, use `command -v NAME` only. If it is not on PATH, treat it as unavailable, note the limitation in the review, and move on. Never search the filesystem for it.
+- To inspect an npm package, use the worktree's `node_modules` and lockfile only. If it is not installed there, state that it could not be inspected locally. Never hunt for other checkouts or global installs.
+- If a required tool, dependency, or file cannot be found within these bounds, record it as a review limitation instead of widening the search.
+
+For a runtime-isolated child, "worktree" means that child's assigned isolated
+clone, never the host or another child's checkout. Supply the concrete allowed
+root and any accessible `REVIEW_TMPDIR`; an inaccessible parent artefact is a
+limitation, not permission to search for it elsewhere.
+
 ## One temporary directory per run
 
 Allocate once, before gathering context. The helper preserves an explicit
@@ -159,7 +174,10 @@ Load [finding-format.md](references/finding-format.md). Cover the dimensions
 below; combine related lenses for a small change. Parallel independent review
 is useful for broad or consequential changes, not a mandatory fixed fan-out.
 Give every reviewer the exact scope, relevant guidance, finding format and
-coverage matrix. Assign one independent execution owner, not one full suite
+coverage matrix. Copy the Search and Filesystem Discipline rules verbatim into
+every delegated review prompt, including the independent approval challenge;
+adapt only the supplied paths to that child's assigned isolated clone.
+Assign one independent execution owner, not one full suite
 per reviewer. Other reviewers run only a justified targeted check.
 
 - **Correctness, security and performance:** trace reachable failure paths,

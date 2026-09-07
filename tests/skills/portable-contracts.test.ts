@@ -51,6 +51,22 @@ describe("portable skill contracts (static guards, not model behaviour claims)",
     expect(text).toMatch(/agent\s+CLI through shell/);
   });
 
+  test("PR filesystem restrictions survive integration and bind every delegated prompt", () => {
+    const text = skill("pr-review");
+    const discipline = text.split("## Search and Filesystem Discipline\n")[1]?.split("\n## ")[0];
+    expect(discipline).toBeDefined();
+    expect(discipline).toContain("no `find /`, `find ~`, `grep -r /`, `du /`, `locate`");
+    expect(discipline).toContain("Root every `find`, `grep`/`rg`, and `ls` at the current working directory (the PR worktree) or `$REVIEW_TMPDIR`. Nothing else.");
+    expect(discipline).toContain("use `command -v NAME` only");
+    expect(discipline).toContain("use the worktree's `node_modules` and lockfile only");
+    expect(discipline).toContain("Never hunt for other checkouts or global installs");
+    expect(discipline).toContain("record it as a review limitation instead of widening the search");
+    const prose = text.replace(/\s+/g, " ");
+    expect(prose).toContain("Copy the Search and Filesystem Discipline rules verbatim into every delegated review prompt, including the independent approval challenge");
+    expect(prose).toContain("that child's assigned isolated clone");
+    expect(text).not.toMatch(/^(<<<<<<<|=======|>>>>>>>)/m);
+  });
+
   test("verification matrix distinguishes target, isolation, current-head CI and effects", () => {
     const text = skill("pr-review");
     for (const phrase of ["exact head with current-head CI", "missing/pending/failed/stale CI", "Local change, isolated checkout", "Shared/dirty/unrelated checkout", "Scripts\ncan install packages", "Run each agreed check once per patch revision"]) expect(text).toContain(phrase);

@@ -51,6 +51,29 @@ describe("saved review-pr contract (mocked child capabilities, no models)", () =
     expect(calls).toEqual([]);
   });
 
+  test("context, every reviewer and every verifier inherit clone-rooted search discipline", async () => {
+    const calls: Call[] = [];
+    const normal = reviewer();
+    await run("review-pr", 1, (call) => {
+      if (call.opts.label.startsWith("review-")) {
+        const dimension = call.opts.label.slice(7);
+        return { dimension, status: "passed", reason: "complete", filesReviewed: ["src/file.ts"], findings: [{ ...finding("SHOULD_FIX"), dimension }] };
+      }
+      return normal(call);
+    }, calls);
+    expect(calls.filter((call) => call.opts.label === "context")).toHaveLength(1);
+    expect(calls.filter((call) => call.opts.label.startsWith("review-"))).toHaveLength(6);
+    expect(calls.filter((call) => call.opts.label.startsWith("verify-"))).toHaveLength(6);
+    for (const { prompt } of calls) {
+      expect(prompt).toContain("no find /, find ~, grep -r /, du /, locate");
+      expect(prompt).toContain("Root every find, grep/rg, and ls at your current working directory (your assigned isolated PR clone) or an explicitly allocated REVIEW_TMPDIR within that clone. Nothing else");
+      expect(prompt).toContain("use command -v NAME only");
+      expect(prompt).toContain("use only this clone's node_modules and lockfile");
+      expect(prompt).toContain("Never hunt for other checkouts or global installs");
+      expect(prompt).toContain("record a review limitation instead of widening the search");
+    }
+  });
+
   test("all findings/coverage cases match the bundled severity contract", async () => {
     const reference = readFileSync(path.join(root, "skills/general/pr-review/references/severity-verdict.md"), "utf8");
     const functionText = reference.match(/```js\n([\s\S]*?)\n```/)?.[1];
