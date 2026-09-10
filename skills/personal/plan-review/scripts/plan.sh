@@ -21,10 +21,18 @@ Usage: plan.sh COMMAND [ARGS]
   comment  PLAN --body TEXT [--reply-to COMMENT_ID | --block BLOCK_ID]
                                          Agent comment, threaded reply, or block comment
   resolve  PLAN COMMENT_ID               Mark a thread addressed
+  verify                                Selected key identity and effective permissions
+  review   PLAN --version N --verdict approved|changes_requested [--note NOTE]
+                                         Submit an explicitly authorized agent review
+  approve  PLAN --version N [--note NOTE] Approve the version you actually reviewed
+  request-changes PLAN --version N [--note NOTE]
+                                         Request a revision (also: reject)
   markdown PLAN [--version N]            Stored markdown, no token required
   snapshot PLAN                          Canonical review snapshot for wait fingerprints
 
 PLAN is a https://plans.myslop.app/p/<id> URL or bare plan id.
+Review commands require plans:review and explicit caller authorization.
+There is no automatic version lookup, retry, credential escalation or key rotation.
 USAGE
   exit 2
 }
@@ -73,6 +81,16 @@ api() { # METHOD PATH [--body]   (JSON body on stdin when --body is given)
     401)
       echo "plan.sh: the plan-service API token was rejected (401 unauthorized). It is missing, mistyped, or revoked; mint a valid one: curl -fsS $BASE_URL/setup.sh | bash" >&2
       exit 3
+      ;;
+    403)
+      echo "plan.sh: permission denied (403 forbidden): $body" >&2
+      echo "Ask the signed-in owner to edit this existing key's Permissions at $BASE_URL/dashboard. Do not replace the key or retry with a stronger credential automatically." >&2
+      exit 4
+      ;;
+    409)
+      echo "plan.sh: version conflict (409): $body" >&2
+      echo "Fetch and review the current version before submitting a new verdict. Do not replay the old verdict with a new version number." >&2
+      exit 5
       ;;
     *)
       echo "plan.sh: $method $path failed (HTTP $http): $body" >&2
@@ -168,6 +186,33 @@ cmd_resolve() {
   printf '{}' | api POST "/api/agent/plans/$id/comments/$cid/resolve" --body
 }
 
+cmd_verify() {
+  [ $# -eq 0 ] || usage
+  resolve_token
+  api GET /api/verify
+}
+
+cmd_review() {
+  local preset=$1 id version="" verdict="$1" note=""
+  shift
+  id=$(plan_id "${1:-}"); shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --version) [ $# -ge 2 ] || usage; version=$2; shift 2 ;;
+      --verdict) [ -z "$preset" ] && [ $# -ge 2 ] || usage; verdict=$2; shift 2 ;;
+      --note) [ $# -ge 2 ] || usage; note=$2; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  # Pin the exact reviewed version. Never fetch/choose it for the caller.
+  [[ "$version" =~ ^[1-9][0-9]*$ ]] || usage
+  case "$verdict" in approved|changes_requested) ;; *) usage ;; esac
+  resolve_token
+  jq -n --argjson version "$version" --arg verdict "$verdict" --arg note "$note" \
+    '{version: $version, verdict: $verdict} + (if $note != "" then {note: $note} else {} end)' \
+    | api POST "/api/agent/plans/$id/review" --body
+}
+
 cmd_markdown() {
   local id version=""
   id=$(plan_id "${1:-}"); shift
@@ -197,7 +242,7 @@ cmd_snapshot() {
       current_version: $status.current_version,
       unresolved_comment_count: $status.unresolved_comment_count
     },
-    reviews: ([$status.reviews[]? | {version, verdict, by, created_at}]
+    reviews: ([$status.reviews[]? | {version, verdict, by, created_at, author}]
       | sort_by(.created_at, .version, .by, .verdict)),
     comments: ([$comments.comments[]?
       | {id, version, block_id, parent_id, author, body, resolved}]
@@ -215,6 +260,10 @@ case "$command" in
   comments) cmd_comments "$@" ;;
   comment) cmd_comment "$@" ;;
   resolve) cmd_resolve "$@" ;;
+  verify) cmd_verify "$@" ;;
+  review) cmd_review "" "$@" ;;
+  approve) cmd_review approved "$@" ;;
+  request-changes|reject) cmd_review changes_requested "$@" ;;
   markdown) cmd_markdown "$@" ;;
   snapshot) cmd_snapshot "$@" ;;
   *) usage ;;

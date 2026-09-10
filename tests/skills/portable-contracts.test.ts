@@ -28,11 +28,21 @@ describe("portable skill contracts (static guards, not model behaviour claims)",
 
   test("plan service CLI documentation stays usable without forcing the route", () => {
     const text = skill("plan-review", "personal");
-    for (const command of ["create", "revise", "status", "comments", "comment", "resolve", "markdown", "snapshot"]) {
+    for (const command of ["create", "revise", "status", "comments", "comment", "resolve", "verify", "review", "approve", "request-changes", "reject", "markdown", "snapshot"]) {
       expect(text).toContain(`plan.sh ${command}`);
     }
     expect(text).toContain('bash "$SKILL_DIR/scripts/plan.sh"');
     expect(existsSync(path.join(root, "skills/personal/plan-review/scripts/plan.sh"))).toBe(true);
+  });
+
+  test("agent verdicts require explicit publication authority, pinned versions and a separate reviewer identity", () => {
+    const text = skill("plan-review", "personal");
+    expect(text).toContain("a capability, not an instruction to approve");
+    expect(text).toContain("returns findings, not a vote");
+    expect(text).toContain("--version 3");
+    expect(text).toContain("without rotating the key");
+    expect(text).toContain("agent-only approval does not satisfy that gate");
+    expect(text).toContain("Do not change credentials");
   });
 
   test("headless never grants publishing authority or silently drops required review", () => {
