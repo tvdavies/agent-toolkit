@@ -5,7 +5,7 @@ compatibility: Requires git, GitHub CLI, jq, network access, and a repository wi
 disable-model-invocation: true
 metadata:
   author: tvd
-  version: 1.1.0
+  version: 1.1.1
 ---
 
 # Babysit PR
@@ -42,7 +42,7 @@ Never inspect the current branch to choose a different PR, or ask which PR the u
 
 ## Shared skills and protocol
 
-1. Resolve this skill directory from the loaded `SKILL.md` path and call it `SKILL_DIR`.
+1. Resolve symlinks in the loaded `SKILL.md` path (for example with `realpath`), then call its physical directory `SKILL_DIR`. Resolve `../_shared` from that directory, not from an installation link such as `~/.agents/skills/babysit-pr`.
 2. Load the installed `worktrees` skill by name before creating, adopting, reusing, or removing a worktree. Its generic worktree mechanics are authoritative.
 3. Read `$SKILL_DIR/../_shared/pr-readiness/PROTOCOL.md`. Follow its blocker classification, current-head readiness criteria, push-before-resolve ordering, bot/human handling, and no-merge rule.
 4. Before posting any reply or top-level comment, load the installed `writing-for-humans` skill by name and apply its send-ready process.
@@ -75,6 +75,8 @@ Record:
 
 If the PR is merged, report `MERGED` and stop. If it is closed without merging, report `CLOSED UNMERGED` and stop. Do not reopen, retarget, or merge it.
 
+Repeat the terminal-state check at the start of every processing cycle and immediately before a push. If the user reports a merge, verify it with GitHub: an external merge takes precedence over pending checks, reviews and local validation caveats. Record any unverified checks honestly, preserve intended local work, and do not resume remediation or push to the merged PR.
+
 ## Phase 2: Establish or reuse a dedicated worktree
 
 Do this before any code-related command, even when the PR branch is already checked out somewhere. Prefer the worktree you are already in when it is the correct isolated PR workspace; do not create redundant worktrees.
@@ -103,19 +105,30 @@ Keep `WT` for the entire monitoring session. All installs, edits, conflict resol
 ## Phase 3: Process the current state autonomously
 
 1. Fetch the shared blocker inventory and authoritative current-head state. Read every unresolved thread, top-level review comment, latest review, and failed-check log.
-2. Handle merge conflicts first, inside `WT`, using the repository's established base-update policy. Revalidate the complete result. Stop rather than guess if conflict resolution changes product behaviour or cannot be completed safely.
+2. Handle merge conflicts first, inside `WT`, using the repository's established base-update policy and the conflict publication cycle below. Revalidate the complete result. Stop rather than guess if conflict resolution changes product behaviour or cannot be completed safely.
 3. Classify feedback as `apply`, `discuss`, or `decline` under the shared protocol:
    - Apply correct, clear feedback by default.
    - Ask the reviewer a focused question when a genuine tradeoff or ambiguity remains.
    - Decline only with verified code- or requirement-based reasoning.
 4. Diagnose failed checks from their logs. Fix code failures at their root. Rerun a job without code changes only when evidence shows a genuine infrastructure or test flake.
 5. Group related code changes, run relevant validation in `WT`, and inspect the full diff.
-6. Immediately before pushing, fetch the PR again and compare `headRefOid` with the expected remote head. If another commit landed, update `WT`, reconsider affected feedback, and rerun validation.
+6. Immediately before pushing, fetch the PR again, confirm it is still open, and compare `headRefOid` with the expected remote head. If another commit landed, update `WT`, reconsider affected feedback, and rerun validation.
 7. Commit logical changes and push normally to the actual PR head branch. Temporary local worktree branches use the explicit `HEAD:PR_HEAD_BRANCH` refspec. Never use force.
 8. After the pushed commit is visible on GitHub, prepare concise human-facing replies, post them with the shared reply script, and resolve threads according to the shared bot/human matrix.
 9. Re-fetch blockers and authoritative state for the new head. Require a clean intended `git status` after each successful push.
 
 Do not ask the user to approve a routine remediation plan. Ask only when a decision is unsafe to make autonomously, such as contradictory product requirements, destructive data behaviour, or permission to perform a prohibited operation. Prohibited operations remain prohibited even if they would be convenient.
+
+### Conflict publication and validation
+
+A local merge commit is not a resolved GitHub conflict. The conflict cycle is **integrate, validate, push, verify remotely, then watch the new head**. Do not enter the watcher on the old conflicting head while a safe, authorised resolution remains unpublished.
+
+1. Fetch the current base and PR head. Preserve intended local commits and inspect overlapping changes. If the retained candidate already contains the current base and its resolution is still valid, reuse it; do not create a redundant merge or empty commit.
+2. Separate mandatory pre-push checks from merge-readiness checks. Revalidate the integrated diff with relevant tests and required local checks. Do not invent a requirement that every full build run locally before an ordinary push. After mandatory pre-push checks pass, use configured current-head CI for checks it actually runs. An unavailable local heavy-validation slot alone is not a reason to leave a safe resolution unpublished.
+3. Explicit pre-publication validation, permission and spending gates still apply. If one cannot be satisfied, report that exact gate and the unpublished SHA; do not describe the remote conflict as fixed. Do not take another task's heavy-validation slot, bypass a failing check, or treat a routine babysit invocation as a budget increase.
+4. Recheck the live PR state/head, then commit and push normally within those gates. Routine publication does not need another generic approval. After an accepted push, verify the actual remote branch ref and read back GitHub's head and mergeability. GitHub may briefly show the previous SHA or conflict state; use bounded readback retries or the watcher to let that projection settle. Do not push again merely because the first API response is stale. If the branch advanced to an unexpected SHA, reconcile it under the normal moved-head rules.
+5. Claim the conflict cleared only when GitHub reports `MERGEABLE` for the published head, or stop as `MERGED` if someone has merged it. A conflict-free PR can still have pending checks or reviews; watch those on the new head rather than calling it ready.
+6. Keep any remaining validation caveats explicit. A green test/typecheck job does not prove a full application build if CI never ran one. Required readiness checks that CI does not cover still need verification or an explicit owner decision; publication is not permission to merge.
 
 ## Phase 4: Establish a race-safe watch baseline
 
@@ -203,6 +216,10 @@ Remove the managed worktree only when it is clean, all intended commits are conf
 User says: `Babysit PR 847 until it is ready.`
 
 Adopt PR 847 into a managed worktree, apply valid comments, validate and push the fix, reply and resolve only after the push, then wait for new checks or reviews. Stop at `READY TO MERGE`; do not merge.
+
+### Publish a conflict resolution already present locally
+
+GitHub reports a conflict, but the retained worktree is ahead with an intended main integration. Preserve it, refresh both remote refs, inspect the complete result and run the required pre-push validation. If mandatory gates are satisfied, push the existing integration normally, verify the published SHA and remote mergeability, then watch its CI/reviews. Do not stop at "resolved locally" or wait on the old PR head merely because a full local build slot is unavailable. Any explicit pre-publication gate still binds.
 
 ### Watch pending checks
 

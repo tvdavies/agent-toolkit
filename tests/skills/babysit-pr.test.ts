@@ -244,6 +244,37 @@ describe("babysit-pr skill", () => {
     expect(worktrees).toContain("A request for isolation is not satisfied by returning the primary checkout");
   });
 
+  it("finishes conflict recovery by publishing and verifying the remote state", () => {
+    const source = readFileSync(skillFile, "utf8");
+    expect(source).toContain("### Conflict publication and validation");
+    expect(source).toContain("A local merge commit is not a resolved GitHub conflict");
+    expect(source).toContain("already contains the current base");
+    expect(source).toContain("do not create a redundant merge or empty commit");
+    expect(source).toContain("Do not enter the watcher on the old conflicting head");
+    expect(source).toContain("verify the actual remote branch ref");
+    expect(source).toContain("Do not push again merely because the first API response is stale");
+    expect(source).toContain("GitHub reports `MERGEABLE` for the published head");
+  });
+
+  it("separates publication safety from remaining merge-readiness validation", () => {
+    const source = readFileSync(skillFile, "utf8");
+    expect(source).toContain("Separate mandatory pre-push checks from merge-readiness checks");
+    expect(source).toContain("Do not invent a requirement that every full build run locally before an ordinary push");
+    expect(source).toContain("configured current-head CI for checks it actually runs");
+    expect(source).toContain("Explicit pre-publication validation, permission and spending gates still apply");
+    expect(source).toContain("Do not take another task's heavy-validation slot");
+    expect(source).toContain("A green test/typecheck job does not prove a full application build");
+  });
+
+  it("resolves physical helper paths and checks for external merges every cycle", () => {
+    const source = readFileSync(skillFile, "utf8");
+    expect(source).toContain("Resolve symlinks in the loaded `SKILL.md` path");
+    expect(source).toContain("physical directory");
+    expect(source).toContain("Repeat the terminal-state check at the start of every processing cycle and immediately before a push");
+    expect(source).toContain("an external merge takes precedence over pending checks, reviews and local validation caveats");
+    expect(source).toContain("do not resume remediation or push to the merged PR");
+  });
+
   it("uses the blocking watcher rather than agent sleep turns", () => {
     const source = readFileSync(skillFile, "utf8");
     expect(source).toContain("wait-for-pr-change.sh\" snapshot");
@@ -342,6 +373,45 @@ describe("wait-for-pr-change.sh", () => {
     expect(event.oldHash).not.toBe(event.newHash);
     expect(event.snapshot.pr.headRefOid).toBe("def456");
     expect(JSON.parse(readFileSync(baseline, "utf8")).pr.headRefOid).toBe("def456");
+  });
+
+  it("detects settled conflict metadata while new-head checks are still pending", () => {
+    const conflicting = { ...defaultPrState(), mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" };
+    writeFileSync(prState, `${JSON.stringify(conflicting)}\n`);
+    const baseline = join(temp, "baseline-conflict.json");
+    writeFileSync(baseline, `${snapshot()}\n`);
+    const published = { ...defaultPrState(), mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" };
+    writeFileSync(prState, `${JSON.stringify(published)}\n`);
+
+    const result = runWaiter(["wait", "7", "--repo", "acme/widgets", "--baseline", baseline, "--interval", "1", "--timeout", "2"]);
+    expect(result.status, result.stderr).toBe(0);
+    const event = JSON.parse(result.stdout);
+    expect(event.event).toBe("changed");
+    expect(event.snapshot.pr.headRefOid).toBe(conflicting.headRefOid);
+    expect(event.snapshot.pr.mergeable).toBe("MERGEABLE");
+    expect(event.snapshot.pr.mergeStateStatus).toBe("BLOCKED");
+    expect(event.snapshot.pr.statusCheckRollup.find((check: { name: string }) => check.name === "unit").status).toBe("IN_PROGRESS");
+  });
+
+  it("detects an external merge even when old checks remain pending", () => {
+    const baseline = join(temp, "baseline-external-merge.json");
+    writeFileSync(baseline, `${snapshot()}\n`);
+    const merged = {
+      ...defaultPrState(),
+      state: "MERGED",
+      mergedAt: "2026-01-01T03:00:00Z",
+      mergeable: "UNKNOWN",
+      mergeStateStatus: "UNKNOWN",
+    };
+    writeFileSync(prState, `${JSON.stringify(merged)}\n`);
+
+    const result = runWaiter(["wait", "7", "--repo", "acme/widgets", "--baseline", baseline, "--interval", "1", "--timeout", "2"]);
+    expect(result.status, result.stderr).toBe(0);
+    const event = JSON.parse(result.stdout);
+    expect(event.event).toBe("changed");
+    expect(event.snapshot.pr.state).toBe("MERGED");
+    expect(event.snapshot.pr.mergedAt).toBe(merged.mergedAt);
+    expect(JSON.parse(readFileSync(baseline, "utf8")).pr.state).toBe("MERGED");
   });
 
   it("returns a structured timeout without changing an equal baseline", () => {
