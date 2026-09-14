@@ -9,7 +9,7 @@ Custom Pi extensions bundled by the Agent Toolkit package. The package exports o
 - `delegation-policy/` — requires agent delegation through approved Pi tools rather than shell-launched agent harnesses.
 - `openai-fast-cpa.ts` and `openai-fast.json` — the local OpenAI fast provider/model configuration.
 - `scheduler.ts` — in-session delayed prompts and `/schedule`.
-- `session-handoff/` — explicit, human-confirmed `/skill:handoff`/`/handoff` launches, plus independent stable Pi/own-window naming through `set_session_name` and `/session-label`.
+- `session-handoff/` — chat-requested `handoff_sessions` batches with human confirmation, optional `/skill:handoff`/`/handoff` commands, and independent stable Pi/own-window naming through `set_session_name` and `/session-label`.
 - `send-user-message.ts` — lightweight user progress notes.
 - `workflows/` — saved and generated multi-agent workflows, isolated child repositories, sandboxing, and the workflow child safety floor.
 - `worktrees.ts` — deterministic worktree tooling and personal worktree commands.
@@ -28,12 +28,17 @@ The installed package points at this checkout, so edits to an existing extension
 
 ## Handoff and session labels
 
-After syncing and `/reload`, invoke `/skill:handoff [file|URL]` (or `/handoff`) to
-open one fresh Pi conversation in a detached window of the current tmux session.
-A visible confirmation is mandatory. Without a reference, an editor collects a
-brief. The new conversation prepares read-only, reports its first action and waits;
-launching it is not implementation, publishing or deployment authority. The parent
-receives a tmux window/pane receipt, not proof of model readiness.
+After syncing and `/reload`, ask in chat to create sessions—for example, three
+sessions for Ally, Wally and Billy. The discoverable `handoff` skill uses the
+`handoff_sessions` tool for a bounded batch of 1–6 sessions with one visible human
+confirmation. Each entry can carry a local file, HTTP(S) URL or short brief. This
+permits model invocation in response to your request, not autonomous spawning.
+
+`/skill:handoff [file|URL]` and `/handoff` remain optional one-session commands;
+without a reference or instructions, an editor collects a brief. New conversations
+prepare read-only and wait. The parent receives per-session window/pane receipts,
+not proof of model readiness; a partial failure stops the rest without rollback,
+retries, messaging or replacing existing windows.
 
 The separate `session-name` skill can use `set_session_name` when a sustained task
 becomes clear. It preserves assigned identities such as Ally, protects manual

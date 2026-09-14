@@ -47,7 +47,12 @@ Pi discovers `~/.agents/skills` automatically. If `~/.pi/agent/settings.json` ex
 
 ### Explicit handoffs and stable names
 
-Two separate skills support manual workstream sessions:
+Two separate skills support manual workstream sessions. You can ask in normal chat:
+“Create three new sessions: Ally for Agent Node, Wally for Workflow 2.0, and Billy
+for the other bugs. Use their handoff documents.” The model discovers `handoff`
+and uses `handoff_sessions`, with one human confirmation for the whole batch.
+
+The one-session slash commands are optional alternatives:
 
 ```text
 /skill:handoff ./handoffs/ally.md --name Ally
@@ -55,10 +60,12 @@ Two separate skills support manual workstream sessions:
 /skill:handoff --instructions "Inspect the retry bug, then wait"
 ```
 
-`handoff` is explicit-only: the companion Pi command requires a human confirmation
-before opening one fresh, detached tmux window. With no arguments it asks for a
-brief. The child prepares read-only and waits for the user to start implementation.
-It is not an autonomous delegation or retry route.
+`handoff` permits model invocation only for an explicit user request, not autonomous
+spawning. The tool accepts 1–6 sessions, each with an optional local file, URL or
+brief, and opens detached tmux windows after approval. All entries are checked
+before launch; partial failures stop the batch without recreating earlier windows.
+Children prepare read-only and wait for the user to start implementation. The
+no-argument slash command still opens an editor for a brief.
 
 `session-name` is independently available to the agent when a stable task or
 assigned identity becomes clear. Names such as `Ally - Agent Node` keep their

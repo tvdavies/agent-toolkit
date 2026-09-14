@@ -6,17 +6,23 @@ const handoff = source("skills/general/handoff/SKILL.md");
 const naming = source("skills/general/session-name/SKILL.md");
 
 describe("separate handoff and session-name skill contracts", () => {
-  it("keeps handoff explicit-only, with an optional reference and a human-owned command", () => {
+  it("makes handoff discoverable for explicit chat requests, through one confirmed batch tool", () => {
     expect(handoff).toMatch(/^name: handoff$/m);
-    expect(handoff).toMatch(/^disable-model-invocation: true$/m);
-    for (const phrase of ["/skill:handoff", "local handoff file", "HTTP(S) URL", "visible human confirmation", "no model-callable tool", "read-only", "waits for the user", "not an OS"]) {
-      // The OS-boundary distinction is documented by the companion extension.
-      expect(phrase === "not an OS" ? source("extensions/session-handoff/README.md") : handoff).toContain(phrase);
+    expect(handoff).not.toMatch(/^disable-model-invocation: true$/m);
+    for (const phrase of ["/skill:handoff", "local handoff files", "HTTP(S) URL", "human", "confirmation", "read-only", "waits for the user", "handoff_sessions", "create three new sessions"]) {
+      expect(handoff).toContain(phrase);
     }
-    expect(source("extensions/session-handoff/handoff.ts")).not.toContain("pi.registerTool(");
+    expect(handoff).toContain("Model invocation is allowed; autonomous spawning is not");
+    expect(handoff).toContain("no slash command is required");
+    expect(handoff).toContain("one `sessions` array");
+    expect(handoff).toContain("1–6 entries");
+    expect(source("extensions/session-handoff/handoff.ts")).toContain('name: "handoff_sessions"');
     expect(handoff).toContain("Do not run Pi through bash");
-    expect(handoff).toContain("Without a reference or instructions");
-    expect(handoff).toContain("does not copy the parent's conversation");
+    expect(handoff).toContain("Without a reference or brief");
+    expect(handoff).toContain("not copy the\n   entire parent transcript automatically");
+    expect(handoff).toContain("not launch requests");
+    expect(handoff).toContain("marked `not-started`");
+    expect(handoff).toContain("host-enforced launch gate");
   });
   it("allows meaningful self-naming independently, without turning it into delegation", () => {
     expect(naming).toMatch(/^name: session-name$/m);

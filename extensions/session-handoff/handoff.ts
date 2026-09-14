@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { createHash } from "node:crypto";
 import { realpath, stat, access } from "node:fs/promises";
 import { constants } from "node:fs";
@@ -7,15 +8,21 @@ import { resolve } from "node:path";
 import { currentTerminal, executable, labelPart, ownPane, run, words, type Run, type Terminal } from "./tmux";
 
 export const HANDOFF_ENTRY = "toolkit.handoff/v1";
-export type Handoff = { cwd: string; reference?: string; identity?: string; instructions: string };
+export const MAX_HANDOFFS = 6;
+export type HandoffInput = { cwd?: string; reference?: string; identity?: string; instructions?: string };
+export type Handoff = HandoffInput & { cwd: string; instructions: string };
 export type Receipt = { key: string; status: "attempting" | "unknown" | "created-unverified"; window?: string; pane?: string };
+export type BatchSession = { key: string; identity?: string; status: "not-started" | "existing" | "unknown" | "created-unverified"; window?: string; pane?: string };
+export type BatchOutcome = { status: "completed" | "cancelled" | "stopped"; sessions: BatchSession[]; error?: string };
+// Keep the human approval preview readable: allow tabs/newlines, not terminal or bidi controls.
+const CONTROL_CODES = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 
 function expandHome(path: string): string {
   return path === "~" ? homedir() : path.startsWith("~/") ? resolve(homedir(), path.slice(2)) : path;
 }
 
 export async function parseHandoff(input: string, cwd: string): Promise<Handoff> {
-  if (input.length > 16_384 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(input)) throw new Error("Invalid or oversized handoff arguments.");
+  if (input.length > 16_384 || CONTROL_CODES.test(input)) throw new Error("Invalid or oversized handoff arguments.");
   const args = words(input);
   let directory = cwd, identity: string | undefined, reference: string | undefined, instructions = "";
   let positional = false;
@@ -28,7 +35,7 @@ export async function parseHandoff(input: string, cwd: string): Promise<Handoff>
       seen.add(arg);
       const value = args[++i];
       if (!value || value.startsWith("--")) throw new Error(`Missing value for ${arg}`);
-      if (arg === "--cwd") directory = resolve(cwd, expandHome(value));
+      if (arg === "--cwd") directory = value;
       if (arg === "--name") identity = labelPart(value, 24);
       if (arg === "--instructions") instructions = value;
     } else {
@@ -36,8 +43,20 @@ export async function parseHandoff(input: string, cwd: string): Promise<Handoff>
       reference = arg.replace(/^@/, "");
     }
   }
-  directory = await realpath(directory);
+  return normaliseHandoff({ cwd: directory, reference, identity, instructions }, cwd);
+}
+
+/** Shared validation for argv and structured tool input; never round-trip through shell text. */
+export async function normaliseHandoff(input: HandoffInput, cwd: string): Promise<Handoff> {
+  const instructions = input.instructions ?? "";
+  if (instructions.length > 12_000 || CONTROL_CODES.test(instructions)) throw new Error("Keep the brief below 12,000 characters and omit terminal control codes.");
+  const identity = input.identity === undefined ? undefined : labelPart(input.identity, 24);
+  const path = input.cwd ?? cwd;
+  if (!path || path.length > 4_096 || CONTROL_CODES.test(path)) throw new Error("Invalid working directory.");
+  const directory = await realpath(resolve(cwd, expandHome(path)));
   if (!(await stat(directory)).isDirectory()) throw new Error("The working directory must be a directory.");
+  let reference = input.reference;
+  if (reference !== undefined && CONTROL_CODES.test(reference)) throw new Error("Invalid handoff reference.");
   if (reference !== undefined) {
     if (!reference || reference.length > 4_096 || /[\r\n\t]/.test(reference)) throw new Error("Invalid handoff reference.");
     if (/^[a-z][a-z\d+.-]*:/i.test(reference)) {
@@ -122,51 +141,121 @@ const defaults: HandoffDependencies = { execute: run, terminal: currentTerminal,
 
 export function registerHandoff(pi: ExtensionAPI, deps: HandoffDependencies = defaults): void {
   let busy = false;
-  async function open(args: string, ctx: ExtensionContext): Promise<void> {
-    if (busy) { ctx.ui.notify("A handoff dialog or launch is already in progress.", "warning"); return; }
+  async function request(getSpecs: () => Promise<Handoff[] | undefined>, ctx: ExtensionContext, source: "command" | "tool", signal?: AbortSignal): Promise<BatchOutcome> {
+    const sessions: BatchSession[] = [];
+    if (busy) return { status: "stopped", sessions, error: "A handoff dialog or launch is already in progress." };
     busy = true;
     try {
-      if (!ctx.hasUI || !ctx.isIdle() || deps.dispatched()) throw new Error("Handoff requires an idle human-controlled session, outside an active Dispatch stage.");
+      signal?.throwIfAborted();
+      // A tool runs during an agent turn, so idle is required only by the slash command.
+      if (!ctx.hasUI || (source === "command" && !ctx.isIdle()) || deps.dispatched()) throw new Error("Handoff requires a human-controlled terminal outside an active Dispatch stage; slash commands also require an idle session.");
       const pane = await ownPane(await deps.terminal(), deps.execute);
       if (pane.linked) throw new Error("Launch from an unlinked tmux window so the destination session is unambiguous.");
-      let spec = await parseHandoff(args, ctx.cwd);
-      if (!spec.reference && !spec.instructions) {
-        const brief = await ctx.ui.editor("What should the new session work on?", "");
-        if (!brief?.trim()) return;
-        if (brief.length > 12_000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(brief)) throw new Error("Keep the brief below 12,000 characters and omit terminal control codes.");
-        spec = { ...spec, instructions: brief.trim() };
+      const specs = await getSpecs();
+      if (!specs) return { status: "cancelled", sessions };
+      if (specs.length < 1 || specs.length > MAX_HANDOFFS || JSON.stringify(specs).length > 24_000) throw new Error(`Request 1–${MAX_HANDOFFS} sessions and keep the combined handoff fields below 24,000 characters.`);
+      const keys = specs.map(handoffKey);
+      if (new Set(keys).size !== keys.length) throw new Error("Duplicate handoffs in one batch. Give each requested session a distinct identity or brief.");
+      sessions.push(...specs.map((spec, index): BatchSession => ({ key: keys[index]!, identity: spec.identity, status: "not-started" })));
+      const saved = readReceipts(ctx.sessionManager.getEntries());
+      // Validate the entire batch, including uncertain prior attempts, before creating anything.
+      for (const session of sessions) {
+        signal?.throwIfAborted();
+        const existing = await findExisting(session.key, deps.execute);
+        if (existing) { session.status = "existing"; session.window = existing; continue; }
+        const prior = saved.findLast(item => item.key === session.key);
+        if (prior?.status === "unknown" || prior?.status === "attempting") {
+          Object.assign(session, { status: "unknown", window: prior.window, pane: prior.pane });
+          throw new Error("A previous attempt has an uncertain outcome. Inspect its receipt/tmux before requesting a new handoff; no retry was launched.");
+        }
       }
-      const key = handoffKey(spec);
-      const existing = await findExisting(key, deps.execute);
-      if (existing) { ctx.ui.notify(`This handoff already has tmux window ${existing}; nothing restarted or sent.`, "info"); return; }
-      const prior = readReceipts(ctx.sessionManager.getEntries()).findLast(item => item.key === key);
-      if (prior?.status === "unknown" || prior?.status === "attempting") throw new Error("A previous attempt has an uncertain outcome. Inspect its receipt/tmux before requesting a new handoff; no retry was launched.");
+      const count = sessions.filter(session => session.status === "not-started").length;
+      if (!count) return { status: "completed", sessions };
       const piPath = await deps.piPath(); // PATH lookup only, never pi --help/version.
-      if (!await ctx.ui.confirm("Open one fresh Pi session?", [
-        `tmux session: ${pane.session}`, `Directory: ${spec.cwd}`, `Reference: ${spec.reference ?? "none"}`,
-        `Assigned identity: ${spec.identity ?? "none"}`, `Brief: ${spec.instructions || "Read the handoff"}`,
-        "Prepare read-only and wait. This starts a model turn using the configured Pi defaults; it may consume model usage. No implementation or live changes are authorised.",
-      ].join("\n"))) return;
-      // Recheck after the human dialog: another command may have created it.
-      const raced = await findExisting(key, deps.execute);
-      if (raced) { ctx.ui.notify(`Handoff already exists in ${raced}; nothing launched.`, "info"); return; }
-      const receipt = await launchHandoff(spec, pane.session, piPath, deps.execute, data => pi.appendEntry(HANDOFF_ENTRY, data));
-      ctx.ui.notify(`Created tmux ${receipt.window}/${receipt.pane}. Pi readiness is not verified; inspect that window. Current focus is unchanged.`, "info");
+      signal?.throwIfAborted();
+      const confirmed = await ctx.ui.confirm(`Open ${count} fresh Pi session${count === 1 ? "" : "s"}?`, [
+        `tmux session: ${pane.session}. Current focus will stay unchanged.`,
+        ...specs.map((spec, index) => [
+          `${index + 1}. ${spec.identity ?? "Unnamed"} (${sessions[index]!.status === "existing" ? "already open; untouched" : "new"})`,
+          `Directory: ${spec.cwd}`, `Reference: ${spec.reference ?? "none"}`, `Brief: ${spec.instructions || (spec.reference ? "Read the handoff" : "Wait for a task")}`,
+        ].join("\n")),
+        "Prepare read-only and wait. Each new session starts a model turn using the configured Pi defaults and may consume model usage. No implementation or live changes are authorised. Confirm only the sessions you explicitly requested.",
+      ].join("\n\n"), { signal });
+      signal?.throwIfAborted();
+      if (!confirmed) return { status: "cancelled", sessions };
+      for (const [index, spec] of specs.entries()) {
+        const session = sessions[index]!;
+        if (session.status === "existing") continue;
+        signal?.throwIfAborted();
+        const raced = await findExisting(session.key, deps.execute);
+        if (raced) { session.status = "existing"; session.window = raced; continue; }
+        signal?.throwIfAborted();
+        try {
+          const receipt = await launchHandoff(spec, pane.session, piPath, deps.execute, data => {
+            // Capture partial IDs even if persisting the receipt or window setup fails.
+            session.window = data.window; session.pane = data.pane;
+            pi.appendEntry(HANDOFF_ENTRY, data);
+          });
+          Object.assign(session, receipt);
+        } catch (error) {
+          session.status = "unknown";
+          throw error; // Stop the batch. Preserve earlier windows and unstarted entries.
+        }
+      }
+      return { status: "completed", sessions };
     } catch (error) {
-      ctx.ui.notify(error instanceof Error ? error.message : "Handoff failed; no automatic retry.", "error");
+      return { status: "stopped", sessions, error: error instanceof Error ? error.message : "Handoff failed; no automatic retry." };
     } finally { busy = false; }
   }
 
+  async function open(args: string, ctx: ExtensionContext): Promise<void> {
+    const outcome = await request(async () => {
+      let spec = await parseHandoff(args, ctx.cwd);
+      if (!spec.reference && !spec.instructions) {
+        const brief = await ctx.ui.editor("What should the new session work on?", "");
+        if (!brief?.trim()) return undefined;
+        spec = await normaliseHandoff({ ...spec, instructions: brief.trim() }, ctx.cwd);
+      }
+      return [spec];
+    }, ctx, "command");
+    if (outcome.error) { ctx.ui.notify(outcome.error, "error"); return; }
+    if (outcome.status === "cancelled") return;
+    for (const session of outcome.sessions) {
+      ctx.ui.notify(session.status === "existing"
+        ? `This handoff already has tmux window ${session.window}; nothing restarted or sent.`
+        : `Created tmux ${session.window}/${session.pane}. Pi readiness is not verified; inspect that window. Current focus is unchanged.`, "info");
+    }
+  }
+
+  pi.registerTool({
+    name: "handoff_sessions",
+    label: "Open requested Pi sessions",
+    description: "Use the handoff skill when the user explicitly asks in chat to create/open one or more manual Pi sessions, e.g. three sessions for Ally, Wally and Billy. Never choose this for autonomous delegation or a failed/denied agent-route fallback. Opens 1–6 fresh detached windows in the current tmux session after ONE human confirmation of the whole batch. Children prepare read-only and wait. Optional local file/HTTP(S) URL per session. Stop on cancellation or partial failure: report receipts, never retry or recreate earlier windows. Requires an interactive terminal; no headless/Dispatch-stage use.",
+    executionMode: "sequential",
+    parameters: Type.Object({ sessions: Type.Array(Type.Object({
+      identity: Type.Optional(Type.String({ minLength: 1, maxLength: 24, description: "Identity assigned by the user to this session, e.g. Ally." })),
+      reference: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: "Local handoff file (relative to caller cwd) or HTTP(S) URL. Optional." })),
+      cwd: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: "Destination cwd; defaults to this session's cwd. Does not create or take over worktrees." })),
+      instructions: Type.Optional(Type.String({ maxLength: 12000, description: "Bounded brief from the user's request; optional with a reference or for a blank waiting session." })),
+    }, { additionalProperties: false }), { minItems: 1, maxItems: MAX_HANDOFFS }) }, { additionalProperties: false }),
+    async execute(_id, params, signal, _update, ctx) {
+      const outcome = await request(async () => {
+        if (params.sessions.length < 1 || params.sessions.length > MAX_HANDOFFS || JSON.stringify(params.sessions).length > 24_000) throw new Error(`Request 1–${MAX_HANDOFFS} sessions with at most 24,000 characters of combined handoff fields.`);
+        return Promise.all(params.sessions.map(input => normaliseHandoff(input, ctx.cwd)));
+      }, ctx, "tool", signal);
+      return { content: [{ type: "text", text: JSON.stringify(outcome) }], details: outcome, isError: outcome.status === "stopped" };
+    },
+  });
   pi.registerCommand("handoff", { description: "User-confirmed handoff to one fresh tmux Pi window: [file|URL] [--name Name] [--cwd path] [--instructions text]", handler: open });
   pi.on("input", async (event, ctx) => {
     const match = /^\/skill:handoff(?:\s+([\s\S]*))?$/.exec(event.text.trim());
     if (!match) return { action: "continue" };
     if (event.source !== "interactive") {
-      ctx.ui.notify("Invoke /skill:handoff directly in the interactive terminal; programmatic skill launches are refused.", "error");
+      ctx.ui.notify("Do not synthesise slash commands. For an explicit chat request, use handoff_sessions with human confirmation.", "error");
       return { action: "handled" };
     }
     await open(match[1] ?? "", ctx);
     return { action: "handled" };
   });
-  // Deliberately no model-callable launch tool, startup hook, scheduler or retry loop.
+  // No automatic startup hook, scheduler, unattended mode or retry loop.
 }

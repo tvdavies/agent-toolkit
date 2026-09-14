@@ -1,9 +1,10 @@
 # Manual handoff and stable session naming
 
-Two independent skills share one small extension. `handoff` is hidden from model
-skill discovery (`disable-model-invocation: true`); `session-name` is discoverable
-at meaningful naming points. That frontmatter is a discovery control, not an OS
-security boundary. The actual launcher is a human-confirmed command, never a tool.
+Two independent, model-discoverable skills share one extension. `handoff` responds
+to explicit user requests in chat using `handoff_sessions`; `session-name` responds
+at meaningful naming points. Model invocation is allowed, autonomous spawning is
+not. The launcher requires human confirmation, whether reached through the batch
+tool or a direct slash command. Skill discoverability is not an OS security boundary.
 
 ## Install and activate
 
@@ -19,7 +20,20 @@ dependency. Launching requires tmux's direct multi-argument `new-window` executi
 and `-e` environment support. It passes one fixed-prefix prompt, not `--`, which
 older supported Pi parsers interpret as an unknown flag and swallow with its value.
 
-## Commands
+## Chat and commands
+
+The user can say: “Create three new sessions: Ally for Agent Node, Wally for
+Workflow 2.0, and Billy for the other bugs. Use their handoff documents.”
+
+The model reads `handoff` and calls `handoff_sessions` once with a `sessions` array
+of 1–6 objects. Each accepts optional `identity`, `reference`, `cwd` and
+`instructions`. The tool normalises structured fields directly, validates the
+entire batch, then presents one confirmation listing all entries and the number
+of new windows. No approval flag, arbitrary executable or tmux target is accepted.
+Combined fields are capped at 24,000 characters; handoff documents remain references,
+not copied file contents. A blank named entry waits for a task.
+
+These optional direct commands still open one session (or change a label):
 
 ```text
 /skill:handoff
@@ -45,14 +59,21 @@ used until preparation can establish the meaningful label.
 
 ## Launch boundary
 
+- The model-callable `handoff_sessions` tool works during an active model turn;
+  requiring `ctx.isIdle()` there would prevent chat use. It still requires a human
+  TUI and verified current tmux pane. A shared in-flight guard excludes overlapping
+  tool/command dialogs, and tool calls use sequential execution mode.
 - `/skill:handoff` is intercepted before skill expansion, only for direct
-  interactive input. Extension/RPC input is refused. `/handoff` is an equivalent
-  command; both require an idle TUI, a visible human confirmation and a verified
-  current tmux pane. No model-callable launch tool is registered.
-- Confirmation discloses that preparation starts a model turn and can consume
-  configured model usage. No model, provider, trust, billing or context settings
-  are changed. There is no background/fleet mode, timer, retry, resume or shell
-  fallback. Active Dispatch-stage processes are refused.
+  interactive input. Extension/RPC command injection is refused; the model should
+  use the dedicated tool, not fabricate slash commands. `/handoff` is equivalent.
+  The command route additionally requires an idle session.
+- One confirmation discloses every entry and that each new session starts a model
+  turn and can consume configured usage. An explicit user request is the model's
+  authority check; the confirmation is the host-enforced gate. The extension does
+  not attempt to infer user intent from a model-authored assertion. Cancellation
+  authorises nothing. No model, provider, trust, billing or context settings are
+  changed. No background/fleet mode, timer, automatic retry, resume or shell fallback
+  exists. Active Dispatch-stage processes are refused.
 - The process's terminal device must match `#{pane_tty}` for `TMUX_PANE`.
   An inherited pane environment in a headless child or overlay is insufficient.
 - `tmux new-window -d` uses an absolute Pi executable, the validated cwd and direct
@@ -63,14 +84,20 @@ used until preparation can establish the meaningful label.
   visible label. Matching open windows are reported rather than reused/restarted.
 - A returned receipt is `created-unverified`, not authenticated/ready/completed.
   A failure or timeout after the first mutation records an `unknown` outcome;
-  a repeated request in that parent is held for human inspection. No window is
-  killed or silently replaced. The child can still fail while loading/authenticating;
-  inspect its window. A tmux pane receipt is not an exact Pi session ID.
+  a repeated request in that parent is held for human inspection. Batch results
+  distinguish `existing`, `created-unverified`, `unknown` and `not-started` entries.
+  A partial failure stops the rest immediately, preserving earlier windows and
+  receipts rather than rolling them back or replaying the batch. Abort signals are
+  checked before approval and between launches; an already-started mutation is
+  recorded before stopping. No window is killed or silently replaced. The child
+  can still fail while loading/authenticating; inspect its window. A tmux pane
+  receipt is not an exact Pi session ID.
 
-This is a human-operated conversation handoff, not an exception for tools to
-bypass `subagent`, workflows or Dispatch ownership. The companion delegation-policy
+This specific tool is a permitted manual-conversation handoff route for an explicit
+user request, not permission to bypass `subagent`, workflows or Dispatch ownership
+for autonomous work or a denied/failed delegation fallback. The companion policy
 change describes the same narrow boundary; do not broaden it to generic shell
-launches or turn a fetched document into launch authority.
+launches, extra unrequested sessions or authority granted by a fetched document.
 
 ## Naming boundary
 
@@ -105,8 +132,11 @@ npm test
 
 All launch/naming tests inject mock terminal and process runners. They do not start
 Pi, authenticate, spend model usage, change real tmux state or run a live child.
-They cover confirmation/cancellation, explicit source gating, direct argv, optional
-references, prompt boundaries, duplicate/uncertain attempts, persisted state,
-identity/manual-name protection, cooldown, concurrency within one parent, and
-shared/inherited-pane refusal. A real end-to-end launch remains an explicit human
-acceptance check after installation/reload, not an automated test.
+They cover an in-turn three-session tool call with one confirmation, command-source
+gating, whole-batch validation, direct argv, optional references, partial-failure
+receipts, duplicate/uncertain attempts, aborts, concurrent dialog refusal, persisted
+naming state, identity/manual-name protection, cooldown and shared/inherited-pane
+refusal. Static skill/policy tests check discoverability and explicit-request
+instructions, not semantic intent detection or model obedience. A real end-to-end
+launch remains an explicit human acceptance check after installation/reload, not
+an automated test.
