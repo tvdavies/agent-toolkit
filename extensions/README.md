@@ -9,6 +9,7 @@ Custom Pi extensions bundled by the Agent Toolkit package. The package exports o
 - `delegation-policy/` — requires agent delegation through approved Pi tools rather than shell-launched agent harnesses.
 - `openai-fast-cpa.ts` and `openai-fast.json` — the local OpenAI fast provider/model configuration.
 - `scheduler.ts` — in-session delayed prompts and `/schedule`.
+- `session-handoff/` — explicit, human-confirmed `/skill:handoff`/`/handoff` launches, plus independent stable Pi/own-window naming through `set_session_name` and `/session-label`.
 - `send-user-message.ts` — lightweight user progress notes.
 - `workflows/` — saved and generated multi-agent workflows, isolated child repositories, sandboxing, and the workflow child safety floor.
 - `worktrees.ts` — deterministic worktree tooling and personal worktree commands.
@@ -24,6 +25,23 @@ Synchronise dependencies, skills, the local Pi package, workflows, and managed t
 ```
 
 The installed package points at this checkout, so edits to an existing extension are live on disk. Run `sync.sh` after adding an extension or changing runtime dependencies, then run `/reload` in active Pi sessions.
+
+## Handoff and session labels
+
+After syncing and `/reload`, invoke `/skill:handoff [file|URL]` (or `/handoff`) to
+open one fresh Pi conversation in a detached window of the current tmux session.
+A visible confirmation is mandatory. Without a reference, an editor collects a
+brief. The new conversation prepares read-only, reports its first action and waits;
+launching it is not implementation, publishing or deployment authority. The parent
+receives a tmux window/pane receipt, not proof of model readiness.
+
+The separate `session-name` skill can use `set_session_name` when a sustained task
+becomes clear. It preserves assigned identities such as Ally, protects manual
+names, makes repeat labels no-ops and rate-limits topic changes. Only a verified,
+unshared single-pane window is eligible; it never renames the containing tmux
+session (`ll`, for example). A user-confirmed `/session-label` can override naming
+state. See [`session-handoff/README.md`](session-handoff/README.md) for the boundary,
+commands and failure behaviour.
 
 ## Workflows
 
