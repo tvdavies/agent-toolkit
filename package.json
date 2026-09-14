@@ -10,6 +10,11 @@
       "./extensions"
     ]
   },
+  "pi-subagents": {
+    "agents": [
+      "./agents"
+    ]
+  },
   "scripts": {
     "sync": "./scripts/sync.sh",
     "test": "bun test ./extensions ./tests",

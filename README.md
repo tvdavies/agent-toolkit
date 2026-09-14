@@ -74,9 +74,27 @@ the Pi display name and its own safe-to-rename window—not the shared tmux sess
 See the [extension documentation](extensions/session-handoff/README.md) for commands,
 manual overrides and activation requirements.
 
+### Code-writer delegation
+
+The package also exposes a native pi-subagents `code-writer` role (`agents/code-writer.md`)
+that edits code on its own configured model hierarchy while the parent keeps investigation,
+tests and review. After `sync.sh` and `/reload`, set the ordered hierarchy explicitly, reload,
+and optionally prefer delegation for the session:
+
+```text
+/code-writer models anthropic-claude-code/claude-fable-5-1 openai-codex/gpt-6-astra openai-codex/gpt-5.6-luna
+/reload
+/code-writer on
+```
+
+Nothing is enabled automatically; each command that changes configuration or routing asks
+for a UI confirmation. Native fallback applies to retryable provider/quota failures
+before any tool use; after partial work the parent inspects the diff and issues an explicit
+continuation. See [`extensions/code-writer/README.md`](extensions/code-writer/README.md).
+
 ## Extensions and workflows
 
-The Pi package exports only `extensions/`. See [`extensions/README.md`](extensions/README.md) for the active inventory and workflow security model.
+The Pi package exports `extensions/` and, for native pi-subagents, the `agents/` directory. See [`extensions/README.md`](extensions/README.md) for the active inventory and workflow security model.
 
 Saved workflows live in `.pi/workflows/` and remain available through the workflows extension:
 
@@ -141,6 +159,7 @@ behavioural scenarios; normal tests do not run paid models.
 ## Repository layout
 
 ```text
+agents/                     Packaged native pi-subagents agent definitions
 extensions/                 Active Pi extensions
 skills/general/             Portable skills
 skills/personal/            Personal/local skills

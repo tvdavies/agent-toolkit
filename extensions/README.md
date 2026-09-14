@@ -6,6 +6,7 @@ Custom Pi extensions bundled by the Agent Toolkit package. The package exports o
 
 - `anthropic-claude-code.ts` — registers Anthropic models using local Claude Code OAuth credentials or an explicitly configured proxy key file.
 - `btw.ts` — quick side-question handling.
+- `code-writer/` — packaged native `code-writer` subagent role (`agents/code-writer.md`) with the human `/code-writer` command for an ordered model hierarchy, native quota fallback configuration, and a session-scoped delegation-preferred routing mode. See [`code-writer/README.md`](code-writer/README.md).
 - `delegation-policy/` — requires agent delegation through approved Pi tools rather than shell-launched agent harnesses.
 - `openai-fast-cpa.ts` and `openai-fast.json` — the local OpenAI fast provider/model configuration.
 - `scheduler.ts` — in-session delayed prompts and `/schedule`.
@@ -47,6 +48,18 @@ unshared single-pane window is eligible; it never renames the containing tmux
 session (`ll`, for example). A user-confirmed `/session-label` can override naming
 state. See [`session-handoff/README.md`](session-handoff/README.md) for the boundary,
 commands and failure behaviour.
+
+## Code writer
+
+After `sync.sh` and `/reload`, configure the writer's ordered hierarchy explicitly and optionally prefer delegation for the session:
+
+```text
+/code-writer models anthropic-claude-code/claude-fable-5-1 openai-codex/gpt-6-astra openai-codex/gpt-5.6-luna
+/reload
+/code-writer on
+```
+
+Each mutating command asks for a UI confirmation and fails closed without one. `models` writes `subagents.agentOverrides.code-writer` (model, `fallbackModels` in order, fresh context, `fast: false`, explicit extensions) and replaces the command-owned strict per-agent `modelScope` rule with every listed model, under Pi's settings lock, preserving the global allow-list, provider-preference maps and unrelated settings; it refuses rather than widening policy or writing a hierarchy that native project settings would override or neutralise. Native fallback covers retryable provider/quota failures before any tool activity only; after partial work the parent inspects the diff and issues an explicit continuation. `on` validates the current stored/effective configuration read-only (before and after the dialog) and is refused with routing unchanged when native would not launch the stored hierarchy under a strict writer scope; it is a prompt-level routing preference, not a sandbox. Inspected against native pi-subagents 0.66.0.
 
 ## Workflows
 
