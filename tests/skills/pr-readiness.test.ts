@@ -77,6 +77,21 @@ describe("shared PR readiness protocol", () => {
     expect(protocol).not.toContain("daemon");
   });
 
+  it("keeps review requests independent of billing estimates while preserving operational safeguards", () => {
+    const protocol = readFileSync(join(sharedDir, "PROTOCOL.md"), "utf8");
+    expect(protocol).toContain("Necessary manual review and re-review requests are part of authorised PR babysitting");
+    expect(protocol).toContain("without asking the user for separate approval");
+    expect(protocol).toContain("Review budgets, included usage and additional usage billing are managed outside the agent");
+    expect(protocol).toContain("Do not estimate review charges, maintain spending reservations, enforce review-wave caps");
+    expect(protocol).toContain("Historical task budget notes are not PR-review permission gates");
+    expect(protocol).toContain("do not claim that it is free or incurs a specific charge");
+    expect(protocol).toContain("If the user or another actor has already triggered that review, observe it rather than issuing a duplicate");
+    expect(protocol).toContain("an unchanged head that already has valid coverage without a concrete review need");
+    expect(protocol).toContain("does not authorise changing subscriptions, buying credits, raising spending caps");
+    expect(protocol).toContain("Report actual provider access failures or rejections");
+    expect(protocol).toContain("Current-head review, required human approval and the no-merge rule remain unchanged");
+  });
+
   it("is consumed only by the remote-review control policies", () => {
     const babysit = read("skills/general/babysit-pr/SKILL.md");
     const yolo = read("skills/general/yolo-ticket/SKILL.md");

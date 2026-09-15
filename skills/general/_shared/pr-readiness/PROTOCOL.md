@@ -53,6 +53,16 @@ An empty rollup is not automatically green. If the repository normally runs chec
 
 When the repository uses an automated reviewer, verify that it reviewed the current `headRefOid`; feedback on an older head is stale evidence.
 
+### Automated review request policy
+
+Necessary manual review and re-review requests are part of authorised PR babysitting. When automatic reviews are paused or current-head coverage is missing, use the provider's existing manual review command without asking the user for separate approval.
+
+Review budgets, included usage and additional usage billing are managed outside the agent. Do not estimate review charges, maintain spending reservations, enforce review-wave caps, or pause publication or review requests to ask about billing. Historical task budget notes are not PR-review permission gates. File counts, plan labels, remaining-usage indicators and old receipts do not reliably establish whether a request is included or additionally billed; do not claim that it is free or incurs a specific charge.
+
+Before requesting a review, verify the current head and check for a request or review already in progress. If the user or another actor has already triggered that review, observe it rather than issuing a duplicate. Do not request another review of an unchanged head that already has valid coverage without a concrete review need.
+
+Use the existing review route only. This policy does not authorise changing subscriptions, buying credits, raising spending caps, or changing billing or automatic-review settings. Report actual provider access failures or rejections; do not turn uncertainty about usage billing into an invented blocker. Current-head review, required human approval and the no-merge rule remain unchanged.
+
 ## Triage
 
 Read every unresolved thread and every failed-check log before deciding an action.

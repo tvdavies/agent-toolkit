@@ -261,9 +261,20 @@ describe("babysit-pr skill", () => {
     expect(source).toContain("Separate mandatory pre-push checks from merge-readiness checks");
     expect(source).toContain("Do not invent a requirement that every full build run locally before an ordinary push");
     expect(source).toContain("configured current-head CI for checks it actually runs");
-    expect(source).toContain("Explicit pre-publication validation, permission and spending gates still apply");
+    expect(source).toContain("Explicit pre-publication validation and permission gates still apply");
+    expect(source).toContain("PR-review usage or billing uncertainty is not a publication gate");
+    expect(source).not.toContain("permission and spending gates");
+    expect(source).not.toContain("treat a routine babysit invocation as a budget increase");
     expect(source).toContain("Do not take another task's heavy-validation slot");
     expect(source).toContain("A green test/typecheck job does not prove a full application build");
+  });
+
+  it("requests necessary current-head reviews without billing approval or duplicate requests", () => {
+    const source = readFileSync(skillFile, "utf8");
+    expect(source).toContain("request necessary reviews or re-reviews");
+    expect(source).toContain("automated review request policy");
+    expect(source).toContain("without a separate billing approval");
+    expect(source).toContain("do not duplicate a review already requested or running");
   });
 
   it("resolves physical helper paths and checks for external merges every cycle", () => {

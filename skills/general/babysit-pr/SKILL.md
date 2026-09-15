@@ -5,12 +5,12 @@ compatibility: Requires git, GitHub CLI, jq, network access, and a repository wi
 disable-model-invocation: true
 metadata:
   author: tvd
-  version: 1.1.1
+  version: 1.1.2
 ---
 
 # Babysit PR
 
-Use this skill only after the user explicitly asks to babysit, watch, monitor, address feedback on, make mergeable, or unblock a named PR or the unambiguous current PR. That explicit invocation authorises routine remediation for this PR: inspect feedback and logs, edit code in an isolated worktree, validate, commit, push to the PR head branch, reply to reviewers, resolve handled threads, and rerun verified flakes. Work autonomously until the PR is ready to merge, already merged, precisely blocked, or nothing has happened on the PR for the full inactivity budget defined in Phase 5; do not present a plan or pause for routine confirmation.
+Use this skill only after the user explicitly asks to babysit, watch, monitor, address feedback on, make mergeable, or unblock a named PR or the unambiguous current PR. That explicit invocation authorises routine remediation for this PR: inspect feedback and logs, edit code in an isolated worktree, validate, commit, push to the PR head branch, reply to reviewers, resolve handled threads, request necessary reviews or re-reviews, and rerun verified flakes. Work autonomously until the PR is ready to merge, already merged, precisely blocked, or nothing has happened on the PR for the full inactivity budget defined in Phase 5; do not present a plan or pause for routine confirmation.
 
 ## Non-negotiable rules
 
@@ -115,7 +115,7 @@ Keep `WT` for the entire monitoring session. All installs, edits, conflict resol
 6. Immediately before pushing, fetch the PR again, confirm it is still open, and compare `headRefOid` with the expected remote head. If another commit landed, update `WT`, reconsider affected feedback, and rerun validation.
 7. Commit logical changes and push normally to the actual PR head branch. Temporary local worktree branches use the explicit `HEAD:PR_HEAD_BRANCH` refspec. Never use force.
 8. After the pushed commit is visible on GitHub, prepare concise human-facing replies, post them with the shared reply script, and resolve threads according to the shared bot/human matrix.
-9. Re-fetch blockers and authoritative state for the new head. Require a clean intended `git status` after each successful push.
+9. Re-fetch blockers and authoritative state for the new head. Follow the shared protocol's automated review request policy: request missing current-head review when needed, without a separate billing approval, and do not duplicate a review already requested or running. Require a clean intended `git status` after each successful push.
 
 Do not ask the user to approve a routine remediation plan. Ask only when a decision is unsafe to make autonomously, such as contradictory product requirements, destructive data behaviour, or permission to perform a prohibited operation. Prohibited operations remain prohibited even if they would be convenient.
 
@@ -125,7 +125,7 @@ A local merge commit is not a resolved GitHub conflict. The conflict cycle is **
 
 1. Fetch the current base and PR head. Preserve intended local commits and inspect overlapping changes. If the retained candidate already contains the current base and its resolution is still valid, reuse it; do not create a redundant merge or empty commit.
 2. Separate mandatory pre-push checks from merge-readiness checks. Revalidate the integrated diff with relevant tests and required local checks. Do not invent a requirement that every full build run locally before an ordinary push. After mandatory pre-push checks pass, use configured current-head CI for checks it actually runs. An unavailable local heavy-validation slot alone is not a reason to leave a safe resolution unpublished.
-3. Explicit pre-publication validation, permission and spending gates still apply. If one cannot be satisfied, report that exact gate and the unpublished SHA; do not describe the remote conflict as fixed. Do not take another task's heavy-validation slot, bypass a failing check, or treat a routine babysit invocation as a budget increase.
+3. Explicit pre-publication validation and permission gates still apply. If one cannot be satisfied, report that exact gate and the unpublished SHA; do not describe the remote conflict as fixed. Do not take another task's heavy-validation slot or bypass a failing check. PR-review usage or billing uncertainty is not a publication gate; review budgets are managed outside the agent under the shared protocol's automated review request policy.
 4. Recheck the live PR state/head, then commit and push normally within those gates. Routine publication does not need another generic approval. After an accepted push, verify the actual remote branch ref and read back GitHub's head and mergeability. GitHub may briefly show the previous SHA or conflict state; use bounded readback retries or the watcher to let that projection settle. Do not push again merely because the first API response is stale. If the branch advanced to an unexpected SHA, reconcile it under the normal moved-head rules.
 5. Claim the conflict cleared only when GitHub reports `MERGEABLE` for the published head, or stop as `MERGED` if someone has merged it. A conflict-free PR can still have pending checks or reviews; watch those on the new head rather than calling it ready.
 6. Keep any remaining validation caveats explicit. A green test/typecheck job does not prove a full application build if CI never ran one. Required readiness checks that CI does not cover still need verification or an explicit owner decision; publication is not permission to merge.
