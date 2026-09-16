@@ -388,6 +388,55 @@ export function readStoredWriterConfig(settings: unknown, origin = "user"): Stor
 }
 
 // ---------------------------------------------------------------------------
+// User-level routing default (`codeWriter.routingDefault`)
+// ---------------------------------------------------------------------------
+
+/** Extension-owned namespace in the user settings file; native pi-subagents does not read it. */
+export const ROUTING_DEFAULT_NAMESPACE = "codeWriter";
+export const ROUTING_DEFAULT_KEY = "routingDefault";
+/** Dotted name used in messages and documentation. */
+export const ROUTING_DEFAULT_SETTING = `${ROUTING_DEFAULT_NAMESPACE}.${ROUTING_DEFAULT_KEY}`;
+
+/**
+ * Read the user-level routing default. Absent namespace or flag means
+ * `false` (the pre-existing behaviour). Unsupported shapes throw rather than
+ * being coerced: the flag is only ever read from the user file, never from
+ * project settings.
+ */
+export function readRoutingDefault(settings: unknown, file = "user settings.json"): boolean {
+	if (!isObject(settings)) throw new Error(`${file} must contain a JSON object.`);
+	const namespace = settings[ROUTING_DEFAULT_NAMESPACE];
+	if (namespace === undefined) return false;
+	if (!isObject(namespace)) throw invalid(file, ROUTING_DEFAULT_NAMESPACE, "an object");
+	const flag = namespace[ROUTING_DEFAULT_KEY];
+	if (flag === undefined) return false;
+	if (typeof flag !== "boolean") throw invalid(file, ROUTING_DEFAULT_SETTING, "a boolean");
+	return flag;
+}
+
+export interface RoutingDefaultPlan {
+	settings: JsonObject;
+	enabled: boolean;
+	/** Value in effect before this plan (false when absent). */
+	previous: boolean;
+}
+
+/**
+ * Compute the settings object with only `codeWriter.routingDefault` set.
+ * Every other key, including unknown siblings inside the namespace and the
+ * whole `subagents` tree, is carried over untouched; nothing is validated or
+ * repaired beyond the namespace itself, so disabling the default stays
+ * possible while the writer configuration is unusable.
+ */
+export function planRoutingDefault(current: unknown, enabled: boolean): RoutingDefaultPlan {
+	if (!isObject(current)) throw new Error("user settings.json must contain a JSON object.");
+	const previous = readRoutingDefault(current);
+	const namespace = isObject(current[ROUTING_DEFAULT_NAMESPACE]) ? current[ROUTING_DEFAULT_NAMESPACE] : {};
+	const settings: JsonObject = { ...current, [ROUTING_DEFAULT_NAMESPACE]: { ...namespace, [ROUTING_DEFAULT_KEY]: enabled } };
+	return { settings, enabled, previous };
+}
+
+// ---------------------------------------------------------------------------
 // Native project root resolution (mirrors installed pi-subagents 0.66.0
 // `findConfiguredProjectRoot`; the bundled 0.28 runtime lacks this API).
 // ---------------------------------------------------------------------------

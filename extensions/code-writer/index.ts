@@ -1,7 +1,8 @@
 /**
  * `code-writer`: a native pi-subagents code-writing role with a human-editable
  * ordered model hierarchy, plus a session-scoped delegation-preferred routing
- * mode. Human slash commands confirmed through the trusted UI are the only
+ * mode and an opt-in user-level routing default that fresh session branches
+ * inherit. Human slash commands confirmed through the trusted UI are the only
  * writers of configuration; there is no model-facing setter, launcher, or
  * runtime fork of native fallback.
  */
@@ -10,14 +11,16 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { CODE_WRITER_AGENT, formatHierarchyModel, hierarchyModels, type ModelHierarchy, parseHierarchy, splitHierarchyArguments } from "./hierarchy";
-import { appendRoutingPolicy, readRoutingState, ROUTING_ENTRY, type RoutingState } from "./routing";
+import { appendRoutingPolicy, readRoutingState, resolveRouting, ROUTING_ENTRY, type RoutingResolution, type RoutingState } from "./routing";
 import {
-	assertActivatable, type JsonObject, type ParentModel, planSettingsUpdate, projectSettingsPath, readSettingsFile,
-	readStoredWriterConfig, type SettingsPlan, type StoredWriterConfig, updateSettingsFile,
+	assertActivatable, type JsonObject, type ParentModel, planRoutingDefault, planSettingsUpdate, projectSettingsPath, readRoutingDefault,
+	readSettingsFile, readStoredWriterConfig, ROUTING_DEFAULT_SETTING, type RoutingDefaultPlan, type SettingsPlan, type StoredWriterConfig,
+	updateSettingsFile,
 } from "./settings";
 
 export { CODE_WRITER_AGENT } from "./hierarchy";
 export { ROUTING_ENTRY, ROUTING_MARKER } from "./routing";
+export { ROUTING_DEFAULT_SETTING } from "./settings";
 
 export const ANTHROPIC_PROVIDER_EXTENSION_PATH = fileURLToPath(new URL("../anthropic-claude-code.ts", import.meta.url));
 export const CODE_WRITER_AGENT_FILE = fileURLToPath(new URL("../../agents/code-writer.md", import.meta.url));
@@ -121,6 +124,7 @@ export default function codeWriterExtension(pi: ExtensionAPI, deps: CodeWriterDe
 	// A child session must never carry the parent's routing preference or register the human command.
 	if (deps.isChildProcess()) return;
 
+	/** Explicit decision recorded on the active session branch; never synthesised from the user default. */
 	let routing: RoutingState | undefined;
 	const restore = (ctx: ExtensionContext) => { routing = readRoutingState(ctx.sessionManager.getBranch()); };
 
@@ -128,19 +132,67 @@ export default function codeWriterExtension(pi: ExtensionAPI, deps: CodeWriterDe
 	pi.on("session_start", (_event, ctx) => restore(ctx));
 	pi.on("session_tree", (_event, ctx) => restore(ctx));
 
-	pi.on("before_agent_start", (event) => ({
-		systemPrompt: appendRoutingPolicy(event.systemPrompt, routing?.preferred === true),
-	}));
-
 	/** Read-only check that the configuration as stored/effective right now would launch the writer on its hierarchy. */
-	function checkActivatable(ctx: ExtensionCommandContext) {
+	function checkActivatable(ctx: ExtensionContext, userSettings: unknown = readSettingsFile(deps.settingsPath()).parsed) {
 		return assertActivatable({
-			userSettings: readSettingsFile(deps.settingsPath()).parsed,
+			userSettings,
 			projectSettings: readProjectSettings(deps.projectSettingsPath(ctx.cwd)),
 			anthropicProviderExtensionPath: deps.anthropicProviderExtensionPath,
 			parentModel: parentModel(ctx),
 		});
 	}
+
+	const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+	/**
+	 * Effective routing right now: the explicit branch decision wins; otherwise
+	 * the stored user default applies only when the packaged writer exists and
+	 * the current stored/effective configuration passes the activation check.
+	 * Every failure (unreadable file, unsupported flag type, unusable writer,
+	 * project conflict) is a reason for status, never an exception or a repair.
+	 */
+	function resolve(ctx: ExtensionContext): RoutingResolution {
+		const stored = readStoredDefault();
+		if (routing) return resolveRouting(routing, stored.value, stored.ok ? undefined : stored.problem);
+		if (!stored.ok) return resolveRouting(undefined, false, stored.problem);
+		if (!stored.value) return resolveRouting(undefined, false);
+		if (!deps.agentFileExists()) return resolveRouting(undefined, true, "The packaged code-writer agent definition is missing (run scripts/sync.sh and /reload).");
+		try {
+			checkActivatable(ctx, stored.settings);
+			return resolveRouting(undefined, true);
+		} catch (error) {
+			return resolveRouting(undefined, true, message(error));
+		}
+	}
+
+	type StoredDefault = { ok: true; value: boolean; settings: unknown } | { ok: false; value: false; problem: string };
+
+	/** The stored user default, with an unreadable file or unsupported flag reported as a reason instead of thrown. */
+	function readStoredDefault(): StoredDefault {
+		try {
+			const settings = readSettingsFile(deps.settingsPath()).parsed;
+			return { ok: true, value: readRoutingDefault(settings), settings };
+		} catch (error) {
+			return { ok: false, value: false, problem: `${ROUTING_DEFAULT_SETTING} could not be read: ${message(error)}` };
+		}
+	}
+
+	// Bounded diagnostics: an ineffective or unreadable default is reported once per distinct reason, not on every turn.
+	let reportedProblem: string | undefined;
+	pi.on("before_agent_start", (event, ctx) => {
+		const resolution = resolve(ctx);
+		if (resolution.defaultProblem && resolution.source === "none") {
+			if (resolution.defaultProblem !== reportedProblem && ctx.hasUI) {
+				ctx.ui.notify(resolution.storedDefault
+					? `code-writer: the stored routing default (${ROUTING_DEFAULT_SETTING}) is on but cannot take effect here: ${resolution.defaultProblem} See /code-writer status.`
+					: `code-writer: ${resolution.defaultProblem} Routing stays off; see /code-writer status.`, "warning");
+			}
+			reportedProblem = resolution.defaultProblem;
+		} else {
+			reportedProblem = undefined;
+		}
+		return { systemPrompt: appendRoutingPolicy(event.systemPrompt, resolution.preferred, resolution.source === "default" ? "default" : "session") };
+	});
 
 	async function setRouting(preferred: boolean, ctx: ExtensionCommandContext): Promise<void> {
 		const preview = preferred ? checkActivatable(ctx) : undefined;
@@ -160,9 +212,77 @@ export default function codeWriterExtension(pi: ExtensionAPI, deps: CodeWriterDe
 			: "code-writer routing off for this session.", "info");
 	}
 
+	/**
+	 * Persist the user-level routing default. Enabling first proves the current
+	 * stored/effective writer configuration activates, shows the scope in the
+	 * dialog, then revalidates the locked file content and freshly read project
+	 * policy before writing only the owned flag. Disabling needs no usable writer.
+	 * Neither touches the model hierarchy or the session's explicit decision.
+	 */
+	const MISSING_AGENT_FOR_DEFAULT = "The packaged code-writer agent definition is missing (run scripts/sync.sh and /reload); refusing to enable the routing default. Nothing was written.";
+
+	async function setRoutingDefault(enabled: boolean, ctx: ExtensionCommandContext): Promise<void> {
+		const path = deps.settingsPath();
+		// Preview only: the owned namespace must be writable as it stands (malformed shapes are refused, never overwritten).
+		const current = readSettingsFile(path).parsed;
+		readRoutingDefault(current);
+		if (enabled) {
+			if (!deps.agentFileExists()) throw new Error(MISSING_AGENT_FOR_DEFAULT);
+			const preview = checkActivatable(ctx, current);
+			await confirmHuman(ctx, "Turn the code-writer routing default on for new sessions?", [
+				`File: ${path} (${ROUTING_DEFAULT_SETTING}: true)`,
+				"Scope: future parent sessions and any session branch without an explicit /code-writer on or off choice will inherit delegation-preferred routing. An explicit /code-writer off on a branch still opts out. Subagent children and project settings are unaffected.",
+				`Hierarchy in effect: ${hierarchyModels(preview.hierarchy).map((entry, index) => `${index + 1}. ${formatHierarchyModel(entry)}`).join("  ")}`,
+				...preview.warnings.map((warning) => `Warning: ${warning}`),
+				"The model hierarchy is not changed. Sessions where the configuration cannot launch the writer inherit nothing and report the reason in /code-writer status.",
+			].join("\n"));
+			// Configuration may have changed while the dialog was open: recheck every prerequisite (packaged agent, locked
+			// content, fresh project policy) inside the locked planning callback before writing.
+			const result = updateSettingsFile<RoutingDefaultPlan>(path, (file) => {
+				if (!deps.agentFileExists()) throw new Error(MISSING_AGENT_FOR_DEFAULT);
+				checkActivatable(ctx, file.parsed);
+				return planRoutingDefault(file.parsed, true);
+			});
+			ctx.ui.notify([
+				`Wrote ${ROUTING_DEFAULT_SETTING}: true to ${result.written}. New parent sessions and branches without an explicit /code-writer on/off choice inherit delegation-preferred routing.`,
+				routingSourceLine(resolve(ctx)),
+			].join("\n"), "info");
+			return;
+		}
+		await confirmHuman(ctx, "Turn the code-writer routing default off for new sessions?", [
+			`File: ${path} (${ROUTING_DEFAULT_SETTING}: false)`,
+			"Scope: future parent sessions and branches without an explicit /code-writer on or off choice no longer inherit delegation-preferred routing. Explicit session choices, the model hierarchy and every other setting are untouched.",
+		].join("\n"));
+		const result = updateSettingsFile<RoutingDefaultPlan>(path, (file) => planRoutingDefault(file.parsed, false));
+		ctx.ui.notify([
+			`Wrote ${ROUTING_DEFAULT_SETTING}: false to ${result.written}.`,
+			routingSourceLine(resolve(ctx)),
+		].join("\n"), "info");
+	}
+
+	/** An unreadable/invalid stored default: it is neither on nor off, and must not be reported as off. */
+	const defaultUnreadable = (resolution: RoutingResolution): boolean => !resolution.storedDefault && resolution.defaultProblem !== undefined;
+
+	/** One line naming where the current effective routing comes from and, for an ineffective default, why. */
+	function routingSourceLine(resolution: RoutingResolution): string {
+		if (resolution.session) {
+			const suffix = resolution.storedDefault && !resolution.session.preferred
+				? "; it overrides the stored default on"
+				: defaultUnreadable(resolution) ? "; the stored default could not be read, so branches without an explicit choice cannot inherit it" : "";
+			return `Routing source: explicit session choice (/code-writer ${resolution.session.preferred ? "on" : "off"} recorded on this branch)${suffix}.`;
+		}
+		if (resolution.source === "default") return "Routing source: inherited from the stored user default (no explicit /code-writer on/off on this branch).";
+		if (resolution.storedDefault) return `Routing source: none. The stored default is on but ineffective here: ${resolution.defaultProblem}`;
+		if (resolution.defaultProblem) return `Routing source: none. ${resolution.defaultProblem}`;
+		return "Routing source: none (no explicit session choice; stored default off).";
+	}
+
 	function status(ctx: ExtensionCommandContext): void {
 		const lines: string[] = [];
-		lines.push(`Session routing: ${routing?.preferred ? "preferred (parent asked to delegate substantive code/test edits to code-writer; mechanical edits only to routine-worker)" : "off"}.`);
+		const resolution = resolve(ctx);
+		lines.push(`Session routing: ${resolution.preferred ? "preferred (parent asked to delegate substantive code/test edits to code-writer; mechanical edits only to routine-worker)" : "off"}.`);
+		lines.push(routingSourceLine(resolution));
+		lines.push(`Stored routing default (${ROUTING_DEFAULT_SETTING}, user settings only): ${defaultUnreadable(resolution) ? `unreadable/invalid, treated as off: ${resolution.defaultProblem}` : resolution.storedDefault ? "on" : "off"}. Change it with /code-writer default on|off; project settings cannot set it.`);
 		lines.push(`Agent definition: ${deps.agentFileExists() ? "packaged" : "missing (run scripts/sync.sh and /reload)"}.`);
 		try {
 			lines.push(...describeStored(readStoredWriterConfig(readSettingsFile(deps.settingsPath()).parsed)));
@@ -212,9 +332,9 @@ export default function codeWriterExtension(pi: ExtensionAPI, deps: CodeWriterDe
 	}
 
 	pi.registerCommand("code-writer", {
-		description: "code-writer role: status | on | off | models <provider/id[:thinking]> ... (confirmed in the UI)",
+		description: "code-writer role: status | on | off | default on|off | models <provider/id[:thinking]> ... (confirmed in the UI)",
 		getArgumentCompletions: (prefix) => {
-			const items = ["status", "on", "off", "models"].filter((item) => item.startsWith(prefix)).map((item) => ({ value: item, label: item }));
+			const items = ["status", "on", "off", "default on", "default off", "models"].filter((item) => item.startsWith(prefix)).map((item) => ({ value: item, label: item }));
 			return items.length > 0 ? items : null;
 		},
 		handler: async (args, ctx) => {
@@ -234,6 +354,14 @@ export default function codeWriterExtension(pi: ExtensionAPI, deps: CodeWriterDe
 					case "off":
 						await setRouting(false, ctx);
 						return;
+					case "default": {
+						if (rest.length !== 1 || (rest[0] !== "on" && rest[0] !== "off")) {
+							ctx.ui.notify(`Usage: /code-writer default on|off (sets ${ROUTING_DEFAULT_SETTING} in user settings after confirmation)`, "warning");
+							return;
+						}
+						await setRoutingDefault(rest[0] === "on", ctx);
+						return;
+					}
 					case "models": {
 						if (rest.length === 0) {
 							ctx.ui.notify(`Usage: /code-writer models <provider/id[:thinking]> ... (ordered; example: ${EXAMPLE_HIERARCHY})`, "warning");
@@ -243,7 +371,7 @@ export default function codeWriterExtension(pi: ExtensionAPI, deps: CodeWriterDe
 						return;
 					}
 					default:
-						ctx.ui.notify("Usage: /code-writer [status|on|off|models <provider/id[:thinking]> ...]", "warning");
+						ctx.ui.notify("Usage: /code-writer [status|on|off|default on|off|models <provider/id[:thinking]> ...]", "warning");
 				}
 			} catch (error) {
 				ctx.ui.notify(`code-writer: ${error instanceof Error ? error.message : String(error)}`, "error");

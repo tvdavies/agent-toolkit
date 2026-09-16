@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { parseHierarchy } from "./hierarchy";
 import {
 	acquireSettingsLock, assertActivatable, assertSupportedSubagentSettings, findConfiguredProjectRoot, globalScopeViolations, LOCK_STALE_MS,
-	MAX_SETTINGS_BYTES, planSettingsUpdate, projectConflicts, projectSettingsPath, readSettingsFile, readStoredWriterConfig,
-	requiredProviderExtensions, settingsLockPath, updateSettingsFile,
+	MAX_SETTINGS_BYTES, planRoutingDefault, planSettingsUpdate, projectConflicts, projectSettingsPath, readRoutingDefault, readSettingsFile,
+	readStoredWriterConfig, requiredProviderExtensions, ROUTING_DEFAULT_SETTING, settingsLockPath, updateSettingsFile,
 } from "./settings";
 
 const ANTHROPIC = "/toolkit/extensions/anthropic-claude-code.ts";
@@ -249,6 +249,64 @@ describe("code-writer settings plan", () => {
 		});
 		expect(readStoredWriterConfig({})).toEqual({ providerOverrideKeys: [] });
 		expect(readStoredWriterConfig({ subagents: { agentOverrides: { "code-writer": { model: "a/b", extensions: false } }, agentOverridesByProvider: { p: { "code-writer": { model: "x/y" } } } } })).toMatchObject({ extensions: false, providerOverrideKeys: ["user subagents.agentOverridesByProvider.p.code-writer.model"] });
+	});
+});
+
+describe("code-writer routing default setting", () => {
+	it("reads absent as false and only accepts a boolean flag inside an object namespace", () => {
+		expect(ROUTING_DEFAULT_SETTING).toBe("codeWriter.routingDefault");
+		expect(readRoutingDefault({})).toBe(false);
+		expect(readRoutingDefault(existingSettings())).toBe(false);
+		expect(readRoutingDefault({ codeWriter: {} })).toBe(false);
+		expect(readRoutingDefault({ codeWriter: { other: 1 } })).toBe(false);
+		expect(readRoutingDefault({ codeWriter: { routingDefault: false } })).toBe(false);
+		expect(readRoutingDefault({ codeWriter: { routingDefault: true } })).toBe(true);
+		expect(() => readRoutingDefault({ codeWriter: { routingDefault: "true" } })).toThrow("'codeWriter.routingDefault' value; expected a boolean");
+		expect(() => readRoutingDefault({ codeWriter: { routingDefault: 1 } })).toThrow("expected a boolean");
+		expect(() => readRoutingDefault({ codeWriter: { routingDefault: null } })).toThrow("expected a boolean");
+		expect(() => readRoutingDefault({ codeWriter: true })).toThrow("'codeWriter' value; expected an object");
+		expect(() => readRoutingDefault({ codeWriter: [] })).toThrow("expected an object");
+		expect(() => readRoutingDefault([])).toThrow("must contain a JSON object");
+		expect(() => readRoutingDefault(null)).toThrow("must contain a JSON object");
+		expect(() => readRoutingDefault({ codeWriter: 1 })).toThrow("user settings.json has an unsupported 'codeWriter'");
+	});
+
+	it("plans only the owned flag, preserving unknown siblings and everything else, without validating the writer configuration", () => {
+		const current = { ...existingSettings(), codeWriter: { experimental: { keep: true } } };
+		const frozen = JSON.parse(JSON.stringify(current));
+		const plan = planRoutingDefault(current, true);
+		expect(plan).toEqual({ settings: { ...frozen, codeWriter: { experimental: { keep: true }, routingDefault: true } }, enabled: true, previous: false });
+		expect(current).toEqual(frozen); // input untouched
+		expect(plan.settings.subagents).toEqual(frozen.subagents);
+		expect(planRoutingDefault({}, false)).toEqual({ settings: { codeWriter: { routingDefault: false } }, enabled: false, previous: false });
+		expect(planRoutingDefault({ codeWriter: { routingDefault: true } }, false)).toEqual({ settings: { codeWriter: { routingDefault: false } }, enabled: false, previous: true });
+		// Broken writer configuration is irrelevant to the plan (default off must remain possible).
+		const broken = { subagents: { modelScope: { enforce: "yes" } }, codeWriter: { routingDefault: true } };
+		expect(planRoutingDefault(broken, false).settings).toEqual({ subagents: { modelScope: { enforce: "yes" } }, codeWriter: { routingDefault: false } });
+		// Unsupported namespace/flag shapes are refused rather than overwritten.
+		expect(() => planRoutingDefault({ codeWriter: "on" }, true)).toThrow("expected an object");
+		expect(() => planRoutingDefault({ codeWriter: { routingDefault: "true" } }, false)).toThrow("expected a boolean");
+		expect(() => planRoutingDefault([], true)).toThrow("must contain a JSON object");
+	});
+
+	it("writes through the locked transaction, keeping indentation and unrelated concurrent edits", () => {
+		const home = realpathSync(mkdtempSync(join(tmpdir(), "code-writer-default-")));
+		try {
+			const path = join(home, "settings.json");
+			writeFileSync(path, `${JSON.stringify(existingSettings(), null, "\t")}\n`);
+			const result = updateSettingsFile(path, (file) => planRoutingDefault(file.parsed, true));
+			const written = readFileSync(path, "utf8");
+			expect(written.startsWith("{\n\t\"theme\": \"dark\"")).toBe(true);
+			expect(JSON.parse(written)).toEqual({ ...existingSettings(), codeWriter: { routingDefault: true } });
+			expect(result.plan.previous).toBe(false);
+			expect(readRoutingDefault(JSON.parse(written))).toBe(true);
+			expect(readdirSync(home)).toEqual(["settings.json"]);
+			mkdirSync(settingsLockPath(path));
+			expect(() => updateSettingsFile(path, (file) => planRoutingDefault(file.parsed, false))).toThrow("locked by another Pi process");
+			expect(readFileSync(path, "utf8")).toBe(written);
+		} finally {
+			rmSync(home, { recursive: true, force: true });
+		}
 	});
 });
 
