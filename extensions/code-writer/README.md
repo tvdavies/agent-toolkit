@@ -1,6 +1,6 @@
 # code-writer
 
-A dedicated native [pi-subagents](https://github.com/nicobailon/pi-subagents) code-writing role whose model is chosen independently of the parent session, with a human-editable ordered model hierarchy and native quota/availability fallback to the next candidate. The parent keeps investigation, decisions, test execution, review and validation.
+A dedicated native [pi-subagents](https://github.com/nicobailon/pi-subagents) code-writing role for **substantive** patches, whose model is chosen independently of the parent session, with a human-editable ordered model hierarchy and native quota/availability fallback to the next candidate. The parent keeps product/architecture decisions, coordination, test execution, final acceptance and, when justified, an independent `reviewer` pass; genuinely mechanical edits and bounded reading may go to the existing cheaper roles (see [Routing mode](#routing-mode)).
 
 Inspected against the independently installed native pi-subagents **0.66.0**. The toolkit's bundled pi-subagents 0.28 dependency is used only by the separate workflows adapter and is not upgraded or imported here.
 
@@ -19,12 +19,12 @@ Inspected against the independently installed native pi-subagents **0.66.0**. Th
 Then in each Pi session: `/reload`, followed by an explicit hierarchy and, if wanted, the routing preference:
 
 ```text
-/code-writer models anthropic-claude-code/claude-fable-5-1 openai-codex/gpt-6-astra openai-codex/gpt-5.6-luna
+/code-writer models anthropic-claude-code/claude-fable-5-1:medium
 /reload
 /code-writer on
 ```
 
-Nothing is enabled or written on package load; the example hierarchy above is documentation and is never saved unless you type it. Your default parent model and the other worker roles are untouched.
+Nothing is enabled or written on package load; the example above (one medium-thinking model, no fallbacks) is documentation and is never saved unless you type it. Ordered multi-model hierarchies (for example `anthropic-claude-code/claude-fable-5-1:medium openai-codex/gpt-6-astra`, with explicitly approved backups of comparable capability) remain fully supported: the command is general, only the documented default is a single model. Your default parent model and the other worker roles are untouched.
 
 ## Commands
 
@@ -75,7 +75,16 @@ Exactly, and nothing else:
 
 `/code-writer on` first checks, read-only, that the configuration **as it currently stands** would launch the writer on the stored hierarchy — nothing is planned or repaired: the user file and the effective project file (native project root; unsupported root policy fails closed) must pass the bounded schema validation; the stored override must not be `disabled`, must have `fallbackModels`/`extensions` not set to `false`, must parse as a usable hierarchy and carry every provider extension that hierarchy needs; no `agentOverridesByProvider` map may touch the writer; the hierarchy must be inside the enforced global scope (`inherit` resolved to the current parent model); the project file must not override the writer; and the **effective** writer scope rule (the project's if a project `modelScope` exists, otherwise the user's) must be enforced, strict and equal to the stored hierarchy's model set. The check runs before the dialog (which shows the hierarchy in effect) and again after approval, so a configuration change during the dialog refuses activation with routing unchanged; benign unrelated changes are preserved. `/code-writer off` remains available as a confirmed opt-out regardless of configuration state.
 
-`/code-writer on` is an honestly labelled *preference*, not a sandbox. It appends a marked section to the parent system prompt asking the parent to route source/test edits to `subagent({ agent: "code-writer", … , context: "fresh", async: true })`, to write a coherent bounded task rather than prewritten edit calls, to omit per-call `model` so the configured hierarchy owns selection, to keep decisions/tests/review itself, never to silently fall back to editing directly, and to honour an explicit user opt-out. The parent's own `edit`, `write` and `bash` tools stay enabled; blocking two tools would not stop shell writes, and this slice does not pretend otherwise.
+`/code-writer on` is an honestly labelled *preference*, not a sandbox and not an enforced complexity classifier. It appends a marked section to the parent system prompt that splits delegated work by kind:
+
+| Work | Role | Notes |
+|---|---|---|
+| Bounded reading: callers, coverage, a named review question | `review-evidence` / `scout` | Evidence only; never approval or a decision. |
+| Mechanical edits only: settled behaviour, explicit file scope, an existing pattern to propagate exactly, cheap verification | `routine-worker` | If it is unclear whether work is mechanical, it is not; it goes to the writer. |
+| Substantive implementation and tests; any coding needing judgement beyond that gate | `code-writer` | `subagent({ agent: "code-writer", … , context: "fresh", async: true })`, a coherent bounded task rather than prewritten edit calls, no per-call `model`. |
+| Independent review of consequential changes when useful or required | `reviewer` | Not an obligatory stage for every patch; informs but never replaces parent acceptance. |
+
+Product/architecture decisions, coordination, command and test execution and final acceptance stay with the parent. The addendum asks for enough delegated reading to avoid duplicated work without a mandatory scout-plan-write-review ceremony, one writer per checkout, fresh unpinned launches for every role, honest reporting of the route taken, explicit partial-work continuation instead of task replay, and never to silently fall back to editing directly (tiny explicitly requested non-code edits excepted). Roles are chosen from the agents actually available in the session: an unavailable or unsuitable role is reported and the user asked, never replaced by a cheaper worker. The parent's own `edit`, `write` and `bash` tools stay enabled; blocking two tools would not stop shell writes, and this slice does not pretend otherwise. The named non-writer roles are existing user/builtin agents; this extension does not install, configure or launch them, and it changes no native launch protocol.
 
 The preference is persisted as a Pi custom entry (`toolkit.code-writer/routing-v1`) and restored from the **active branch** (`sessionManager.getBranch()`, not `getEntries()`, which spans every tree branch) on every `session_start` — startup, `/new`, `/fork`, `/resume`, `/reload` — and again on `session_tree` after `/tree` navigation. The mocked tests cover these hooks with branch fixtures; they do not exercise the live SDK lifecycle. The extension registers nothing inside subagent child processes (`PI_SUBAGENT_CHILD=1`), so the parent-only policy does not propagate into children.
 
@@ -86,8 +95,8 @@ Fallback is native pi-subagents behaviour; the toolkit does not run a parallel r
 - Automatic fallback to the next hierarchy model happens for retryable provider/model failures — rate limit, quota, overload, unavailable model, provider timeout — **before any tool activity**.
 - No fallback after tool activity, on cancellation or the run deadline, on ordinary task or test failure, or for unsupported setups. (The narrow native read-only HTTP 429 continuation does not apply to this writer.)
 - After partial work, the parent must report the run/worktree state, inspect and preserve the diff, and deliberately issue a **new continuation task** for the remaining work on a remaining approved model — without replaying completed changes. A retained native resume keeps its original model; it is not cross-model continuation.
-- Because models on one provider often share a quota, cross-provider backups (for example Fable → Astra → Luna) are more useful than same-provider ones.
-- Do not pin a per-run `model` in `subagent` calls: an explicit model is strict, does not rotate, and can collide with cached exclusions that configured origins skip.
+- If you configure backups, choose explicitly approved models whose capability matches the writer's work; models on one provider often share a quota, so a cross-provider backup of comparable strength is more useful than a same-provider one. Fallback is an availability measure, not a licence to downgrade substantive work to a cheaper model. The selected setup here is a single Fable model with no fallback: a provider failure is reported and the parent asks the user.
+- Do not pin a per-run `model` in ordinary `subagent` calls: the configured hierarchy is what the human approved, and a per-call pin bypasses the stored scope rule's intent and the documented fallback order.
 
 ## Tests
 

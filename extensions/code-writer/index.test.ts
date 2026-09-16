@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import codeWriterExtension, { ANTHROPIC_PROVIDER_EXTENSION_PATH, CODE_WRITER_AGENT_FILE, describeStored, EXAMPLE_HIERARCHY, ROUTING_ENTRY, ROUTING_MARKER } from "./index";
-import { appendRoutingPolicy, readRoutingState } from "./routing";
+import { appendRoutingPolicy, readRoutingState, ROUTING_ADDENDUM, ROUTING_ROLES } from "./routing";
+import { parseHierarchy } from "./hierarchy";
 import { projectSettingsPath } from "./settings";
 import { appendDelegationPolicy } from "../delegation-policy/index";
 
@@ -427,6 +428,77 @@ describe("code-writer extension", () => {
 		restored.branch.length = 0;
 		restored.start("reload");
 		expect(restored.prompt()).toBe("BASE");
+	});
+
+	it("documents a single medium Fable model as the example while longer hierarchies stay valid", async () => {
+		expect(EXAMPLE_HIERARCHY).toBe("anthropic-claude-code/claude-fable-5-1:medium");
+		const example = parseHierarchy(EXAMPLE_HIERARCHY.split(" "));
+		expect(example.fallbacks).toEqual([]);
+		expect(example.primary.thinking).toBe("medium");
+		// The example is documentation only: it is never written unless typed.
+		const h = harness(home);
+		h.start();
+		await h.run("on");
+		expect(h.last()?.text).toContain(`/code-writer models ${EXAMPLE_HIERARCHY}`);
+		expect(existsSync(h.settingsPath)).toBe(false);
+		await h.run(`models ${EXAMPLE_HIERARCHY}`);
+		expect(JSON.parse(readFileSync(h.settingsPath, "utf8")).subagents).toEqual({
+			agentOverrides: { "code-writer": { model: "anthropic-claude-code/claude-fable-5-1", thinking: "medium", defaultContext: "fresh", fast: false, extensions: ["/toolkit/extensions/anthropic-claude-code.ts"] } },
+			modelScope: { agents: { "code-writer": { enforce: true, strict: true, allow: ["anthropic-claude-code/claude-fable-5-1"] } } },
+		});
+		// A single-model example does not narrow the general hierarchy feature.
+		await h.run("models anthropic-claude-code/claude-fable-5-1 openai-codex/gpt-6-astra openai-codex/gpt-5.6-luna:low");
+		expect(JSON.parse(readFileSync(h.settingsPath, "utf8"))).toEqual(EXPECTED_WRITE);
+	});
+
+	it("routes mechanical work, substantive writing and optional review to distinct roles without a blanket cheap route", () => {
+		const text = ROUTING_ADDENDUM;
+		expect(ROUTING_ROLES).toEqual({ writer: "code-writer", mechanical: "routine-worker", evidence: ["review-evidence", "scout"], reviewer: "reviewer" });
+		// Evidence roles read; they never approve or decide.
+		expect(text).toContain("`review-evidence` or `scout`");
+		expect(text).toContain("evidence only, never approval or a decision");
+		// Luna worker only for mechanical edits behind an explicit gate; uncertainty goes to the writer.
+		expect(text).toContain("`routine-worker` is ONLY for mechanical edits: settled behaviour, an explicit file scope, an existing pattern to propagate exactly, and cheap verification");
+		expect(text).toContain("If you are unsure whether work is mechanical, it is not; send it to the writer");
+		// Substantive implementation goes to the writer with the native launch protocol, fresh and unpinned.
+		expect(text).toContain("Substantive implementation and tests, and any coding task needing judgement beyond that mechanical gate, go to the `code-writer` subagent");
+		expect(text).toContain('subagent({ agent: "code-writer", task: "<coherent bounded task>", context: "fresh", async: true })');
+		expect(text).toContain("Do not pass a per-call `model`");
+		expect(text).toContain("fresh context, no per-call model pin");
+		expect(text).not.toMatch(/model: "/);
+		// Review is optional and never replaces parent acceptance.
+		expect(text).toContain("not an obligatory stage for every patch");
+		expect(text).toContain("they do not replace it");
+		expect(text).toContain("command and test execution, and final acceptance");
+		expect(text).toContain("do not impose a scout-plan-write-review ceremony");
+		// Unavailable or unsuitable roles are reported, never downgraded or silently done inline.
+		expect(text).toContain("Choose roles from the agents actually available in this session");
+		expect(text).toContain("never substitute a cheaper worker for writer work");
+		expect(text).toContain("Never silently fall back to editing code yourself");
+		// One writer per checkout, explicit partial-work escalation, no task replay, honest labelling, opt-out.
+		expect(text).toContain("One writer per checkout");
+		expect(text).toContain("issue a new, explicit continuation task");
+		expect(text).toContain("Do not replay completed changes");
+		expect(text).toContain("not a sandbox or an enforced complexity classifier");
+		expect(text).toContain("None of these roles has a shell or runs tests");
+		expect(text).toContain("/code-writer off");
+		// No blanket lightweight coding route and no broadened tools.
+		expect(text).not.toMatch(/Route source and test edits to/);
+		expect(text).not.toMatch(/\bbash\b|tools?:/);
+		expect(text).not.toContain("routine-worker\" subagent for");
+	});
+
+	it("labels the routing dialog, notice and status with the split policy", async () => {
+		mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+		const h = harness(home);
+		writeFileSync(h.settingsPath, JSON.stringify(EXPECTED_WRITE));
+		h.start();
+		await h.run("on");
+		expect(h.dialogs[0]!.body).toContain("substantive code/test edits to the code-writer subagent, mechanical edits only to routine-worker");
+		expect(h.dialogs[0]!.body).toContain("review to reviewer when justified");
+		expect(h.last()?.text).toContain("only mechanical edits to routine-worker");
+		await h.run("status");
+		expect(h.last()?.text).toContain("Session routing: preferred (parent asked to delegate substantive code/test edits to code-writer; mechanical edits only to routine-worker)");
 	});
 
 	it("describes native extension semantics accurately", () => {

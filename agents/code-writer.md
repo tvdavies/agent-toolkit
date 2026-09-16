@@ -1,6 +1,6 @@
 ---
 name: code-writer
-description: Dedicated code-writing patch worker on its own configured model hierarchy (set with /code-writer models). Edits source and tests for one bounded task; no shell, publication, task transitions or nested delegation. Handoff is unverified; the parent owns tests, review and acceptance.
+description: Dedicated code-writing patch worker for substantive implementation and test changes on its own configured model hierarchy (set with /code-writer models). Edits source and tests for one bounded task needing judgement beyond mechanical propagation; no shell, publication, task transitions or nested delegation. Handoff is unverified; the parent owns tests, review and acceptance.
 advertise: true
 tools: read, grep, find, ls, edit, write, contact_supervisor
 extensions:

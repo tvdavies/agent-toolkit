@@ -22,8 +22,8 @@ export { ROUTING_ENTRY, ROUTING_MARKER } from "./routing";
 export const ANTHROPIC_PROVIDER_EXTENSION_PATH = fileURLToPath(new URL("../anthropic-claude-code.ts", import.meta.url));
 export const CODE_WRITER_AGENT_FILE = fileURLToPath(new URL("../../agents/code-writer.md", import.meta.url));
 
-/** Documented example only; never written unless the human types it. */
-export const EXAMPLE_HIERARCHY = "anthropic-claude-code/claude-fable-5-1 openai-codex/gpt-6-astra openai-codex/gpt-5.6-luna";
+/** Documented example only (a single medium-thinking model); never written unless the human types it. Longer ordered hierarchies remain supported. */
+export const EXAMPLE_HIERARCHY = "anthropic-claude-code/claude-fable-5-1:medium";
 
 export const FALLBACK_LIMITS = [
 	"Native fallback rotates to the next hierarchy model only for retryable provider failures (rate limit, quota, overload, unavailable model) before the child uses any tool.",
@@ -148,7 +148,7 @@ export default function codeWriterExtension(pi: ExtensionAPI, deps: CodeWriterDe
 			? [
 				`Hierarchy in effect: ${hierarchyModels(preview!.hierarchy).map((entry, index) => `${index + 1}. ${formatHierarchyModel(entry)}`).join("  ")}`,
 				...preview!.warnings.map((warning) => `Warning: ${warning}`),
-				"The parent will be asked to route code/test edits to the code-writer subagent. This is prompt policy, not a sandbox; your own tools remain available.",
+				"The parent will be asked to route substantive code/test edits to the code-writer subagent, mechanical edits only to routine-worker, bounded reading to the evidence roles, and consequential review to reviewer when justified. This is prompt policy, not a sandbox; your own tools remain available.",
 			].join("\n")
 			: "The routing preference is removed for this session.");
 		// Configuration may have changed while the dialog was open: re-check the real files before recording anything.
@@ -156,13 +156,13 @@ export default function codeWriterExtension(pi: ExtensionAPI, deps: CodeWriterDe
 		routing = { preferred, changedAt: deps.now() };
 		pi.appendEntry(ROUTING_ENTRY, routing);
 		ctx.ui.notify(preferred
-			? "code-writer routing preferred for this session. The parent is asked to route code/test edits to the code-writer subagent; this is prompt policy, not a sandbox, and your own tools remain available."
+			? "code-writer routing preferred for this session. The parent is asked to route substantive code/test edits to the code-writer subagent and only mechanical edits to routine-worker; this is prompt policy, not a sandbox, and your own tools remain available."
 			: "code-writer routing off for this session.", "info");
 	}
 
 	function status(ctx: ExtensionCommandContext): void {
 		const lines: string[] = [];
-		lines.push(`Session routing: ${routing?.preferred ? "preferred (parent asked to delegate code/test edits)" : "off"}.`);
+		lines.push(`Session routing: ${routing?.preferred ? "preferred (parent asked to delegate substantive code/test edits to code-writer; mechanical edits only to routine-worker)" : "off"}.`);
 		lines.push(`Agent definition: ${deps.agentFileExists() ? "packaged" : "missing (run scripts/sync.sh and /reload)"}.`);
 		try {
 			lines.push(...describeStored(readStoredWriterConfig(readSettingsFile(deps.settingsPath()).parsed)));
