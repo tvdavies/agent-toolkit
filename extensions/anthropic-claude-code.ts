@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Api } from "@earendil-works/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 type ClaudeOAuthFile = {
   claudeAiOauth?: {
@@ -54,7 +55,7 @@ const DISABLE_PI_DOCS_REWRITE = process.env.PI_CLAUDE_CODE_DISABLE_PI_DOCS_REWRI
 const SYSTEM_PROMPT_MODE = process.env.PI_CLAUDE_CODE_SYSTEM_PROMPT_MODE || "docs-itself-packages";
 const DEBUG_PAYLOAD_PATH = process.env.PI_CLAUDE_CODE_DEBUG_PAYLOAD_PATH;
 
-const MODELS: ProviderModel[] = [
+export const MODELS: ProviderModel[] = [
   {
     id: "claude-fable-5",
     name: "Claude Fable 5 (Claude Code creds)",
@@ -70,13 +71,17 @@ const MODELS: ProviderModel[] = [
     id: "claude-fable-5-1",
     name: "Claude Fable 5.1 (Claude Code creds)",
     reasoning: true,
+    // Keep request-level effort: the CPA route does not accept the per-message
+    // output_config bundled with Pi's supportsMidConvoEffort capability.
+    // Retained thinking after client compaction is handled by the context hook.
     compat: { forceAdaptiveThinking: true },
-    // Adaptive thinking always on, unchanged from Fable 5; API supports native xhigh effort.
-    thinkingLevelMap: { xhigh: "xhigh" },
+    // Fable 5.1 always uses adaptive thinking, including summarisation requests.
+    thinkingLevelMap: { off: null, xhigh: "xhigh" },
     input: ["text", "image"],
     // Same $10/$50 as Fable 5; cache reads at a quarter of Fable 5 ($0.25/MTok).
     cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
-    contextWindow: 1_000_000,
+    // Match Fable 5's cost-control window instead of the full 1M context.
+    contextWindow: 272_000,
     maxTokens: 128_000,
   },
   {
@@ -407,6 +412,71 @@ async function rewriteSystemInPayload(payload: unknown): Promise<unknown> {
   return next;
 }
 
+function objectRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined;
+}
+
+function thinkingIdentity(message: Record<string, unknown>, block: Record<string, unknown>, index: number): string {
+  // Pi represents native thinking and redacted_thinking as type: "thinking".
+  // Compare identities, not wall-clock cutoffs: a new response can begin in the
+  // same millisecond as compaction. These identities are never persisted/logged.
+  if (typeof block.thinkingSignature === "string" && block.thinkingSignature.length > 0) {
+    return JSON.stringify(["signed", block.thinkingSignature, block.redacted === true]);
+  }
+  return JSON.stringify(["unsigned", message.provider, message.model, message.timestamp, index, block.thinking]);
+}
+
+/** Remove only thinking carried across the latest client-side compaction.
+ * Saved session entries and newer assistant responses remain unchanged. */
+export function stripCompactedThinking<T extends AgentMessage>(messages: T[], branchEntries: readonly unknown[]): T[] {
+  let boundary = -1;
+  for (let i = branchEntries.length - 1; i >= 0; i--) {
+    if (objectRecord(branchEntries[i])?.type === "compaction") { boundary = i; break; }
+  }
+  if (boundary < 0) return messages;
+  const compaction = objectRecord(branchEntries[boundary])!;
+  let retained: unknown[];
+  if (Array.isArray(compaction.retainedTail)) {
+    retained = compaction.retainedTail;
+  } else {
+    const firstKept = typeof compaction.firstKeptEntryId === "string"
+      ? branchEntries.findIndex((entry) => objectRecord(entry)?.id === compaction.firstKeptEntryId) : -1;
+    retained = branchEntries.slice(firstKept >= 0 && firstKept < boundary ? firstKept : 0, boundary)
+      .filter((entry) => objectRecord(entry)?.type === "message")
+      .map((entry) => objectRecord(entry)?.message);
+  }
+  const invalid = new Set<string>();
+  for (const value of retained) {
+    const message = objectRecord(value);
+    if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
+    message.content.forEach((value, index) => {
+      const block = objectRecord(value);
+      if (block?.type === "thinking") invalid.add(thinkingIdentity(message, block, index));
+    });
+  }
+  if (!invalid.size) return messages;
+  let changed = false;
+  const filtered = messages.map((message) => {
+    if (message.role !== "assistant") return message;
+    const content = message.content.filter((block, index) => block.type !== "thinking"
+      || !invalid.has(thinkingIdentity(objectRecord(message)!, objectRecord(block)!, index)));
+    if (content.length === message.content.length) return message;
+    changed = true;
+    return { ...message, content };
+  });
+  return changed ? filtered : messages;
+}
+
+/** Some summarisation callers omit reasoning; Fable 5.1 cannot disable it. */
+export function ensureFableAdaptiveThinking(payload: unknown): unknown {
+  const body = objectRecord(payload);
+  if (body?.model !== "claude-fable-5-1") return payload;
+  const thinking = objectRecord(body.thinking);
+  if (body.thinking !== undefined && thinking?.type !== "disabled") return payload;
+  return { ...body, thinking: { ...thinking, type: "adaptive" } };
+}
+
 async function readTokenFile(): Promise<OAuthToken | null> {
   try {
     const raw = await fs.readFile(CREDENTIALS_PATH, "utf8");
@@ -653,8 +723,14 @@ export default async function (pi: ExtensionAPI) {
     return { systemPrompt: scrubPiPrompt(event.systemPrompt) };
   });
 
+  pi.on("context", (event, ctx) => {
+    if (!isClaudeCodeProvider(ctx) || ctx.model?.id !== "claude-fable-5-1") return;
+    const messages = stripCompactedThinking(event.messages, ctx.sessionManager.getBranch());
+    if (messages !== event.messages) return { messages };
+  });
+
   pi.on("before_provider_request", async (event, ctx) => {
     if (!isClaudeCodeProvider(ctx)) return;
-    return rewriteSystemInPayload(event.payload);
+    return rewriteSystemInPayload(ensureFableAdaptiveThinking(event.payload));
   });
 }
