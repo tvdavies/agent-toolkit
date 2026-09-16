@@ -92,6 +92,20 @@ describe("start-ticket skill", () => {
     expect(skill).not.toContain("Drive feedback to merge readiness");
   });
 
+  it("starts the exact named state rather than the first started category", () => {
+    const skill = readFileSync(skillPath, "utf8");
+    const commands = [...skill.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1]).join("\n");
+    expect(commands).toContain('issues update TEAM-123 --state "In Progress" --assignee me');
+    expect(commands).toContain("issues get TEAM-123");
+    expect(commands).toContain("--no-cache --retry 3");
+    expect(commands).not.toContain("issues start");
+    expect(skill).toContain("**Never use `linear-cli issues start`**");
+    expect(skill).toContain('state.name == "In Progress"');
+    expect(skill).toContain("authenticated user's `assignee.id`");
+    expect(skill).toContain("stop `BLOCKED`");
+    expect(skill).toContain("Changes Required");
+  });
+
   it("contains the same bounded Dispatch implement-stage integration", () => {
     const skill = readFileSync(skillPath, "utf8");
 

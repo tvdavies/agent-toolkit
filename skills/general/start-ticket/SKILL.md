@@ -128,12 +128,26 @@ the authoritative Docket context as described above.
 4. Assign the Linear issue to yourself and move it to **In Progress**:
 
    ```bash
-   linear-cli issues start TEAM-123 --output json --compact --no-pager --quiet
+   linear-cli issues update TEAM-123 --state "In Progress" --assignee me \
+     --output json --compact --no-pager --quiet --no-cache --retry 3
+   linear-cli issues get TEAM-123 \
+     --output json --compact --no-pager --quiet --no-cache --retry 3
    ```
 
-   If `issues start` is unavailable, use `issues assign TEAM-123 --assignee me`
-   and `issues update TEAM-123 -s "In Progress"` with the standard
-   JSON/no-pager flags. Verify both fields with a fresh `issues get` call.
+   **Never use `linear-cli issues start`**, even if another skill recommends it.
+   In linear-cli 0.3.15 it selects the first state with `type: started`, not the
+   state named `In Progress`; LLE has several such states, including
+   `Changes Required`, `Technical Review`, and `Ready To Merge`. The explicit
+   `--state "In Progress"` update resolves that name within the issue's own team
+   and sets the assignee in the same mutation.
+
+   Verify the fresh readback has the exact requested `identifier`,
+   `state.name == "In Progress"`, and the authenticated user's `assignee.id`
+   (resolve it with `linear-cli api query 'query { viewer { id } }'` using the
+   same JSON/no-cache flags if needed). Checking only `state.type == "started"`
+   or the command's exit code is not verification. If the named state is missing
+   or either field differs, stop `BLOCKED`; do not choose another started state,
+   continue implementation, or repeatedly overwrite a concurrent status change.
 5. If required ticket retrieval or the state update fails after transient
    retries, stop and report the exact command and error. Do not begin code
    changes against incomplete authoritative context.

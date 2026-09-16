@@ -43,7 +43,9 @@ bypass repository policy or perform a direct/manual merge.
 
 1. Resolve this skill's loaded directory as `SKILL_DIR`.
 2. Read `$SKILL_DIR/../start-ticket/SKILL.md` and execute it for the exact ticket
-   identifier.
+   identifier. Use its explicit `In Progress` update and fresh state/assignee
+   verification; never replace that step with `linear-cli issues start`, which
+   can select `Changes Required` instead. A failed verification is `BLOCKED`.
 3. Reuse the same dedicated worktree, branch, and PR throughout the entire yolo
    run. Do not start a second implementation or create a competing PR.
 4. Continue only after `start-ticket` reports `PR READY FOR REVIEW` and fresh

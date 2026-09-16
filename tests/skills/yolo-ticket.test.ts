@@ -40,6 +40,9 @@ describe("yolo-ticket skill", () => {
     expect(skill).toContain("Reuse the same dedicated worktree, branch, and PR");
     expect(skill).toContain("Keep the original ticket worktree as the only writer");
     expect(skill).toContain("push-before-resolve");
+    expect(skill).toContain("explicit `In Progress` update and fresh state/assignee");
+    expect(skill).toContain("never replace that step with `linear-cli issues start`");
+    expect(skill).toContain("A failed verification is `BLOCKED`");
   });
 
   it("selects one allowed merge method and enables only normal auto-merge", () => {

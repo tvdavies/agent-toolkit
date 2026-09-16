@@ -23,6 +23,29 @@ Use `scripts/quick-create.sh` for this standard path because it applies all four
 
 **Triage is an explicit exception, not the default.** Use it when the user asks for Triage or when recording an externally raised bug that genuinely needs triage. In that case, leave it unassigned and out of the current cycle unless the user says otherwise (`quick-create.sh --triage`).
 
+## Important: Starting means the exact In Progress state
+
+Do **not** use `linear-cli issues start`. In version 0.3.15, it chooses the first
+workflow state with type `started`, not the state named `In Progress`. LLE has
+several started states; the first can be `Changes Required`.
+
+Use the updated `scripts/start-issue.sh` wrapper, or explicitly run:
+
+```bash
+linear-cli issues update LIN-123 --state "In Progress" --assignee me \
+  --output json --compact --no-pager --quiet --no-cache --retry 3
+linear-cli issues get LIN-123 \
+  --output json --compact --no-pager --quiet --no-cache --retry 3
+```
+
+The named state is resolved within the issue's own team. Verify the exact issue
+identifier, `state.name == "In Progress"` and the authenticated user's
+`assignee.id` from fresh data, not just a successful command or `type: started`.
+The wrapper performs these checks and stops before checkout on a mismatch.
+If the team has no state named `In Progress`, stop and ask; never substitute
+another started state. With an existing dedicated worktree, use `--no-branch`
+or the explicit update above; do not check out another branch.
+
 ## Important: Agent Output Conventions
 
 When running `linear-cli` commands:
@@ -232,7 +255,7 @@ linear-cli issues list --mine --group-by state     # Grouped by status
 linear-cli issues get ID                           # Issue details
 linear-cli issues create "Title" -t TEAM -s "To Do" -a me  # Create explicitly in To Do and assign to me
 linear-cli issues update ID -s Done                # Update status
-linear-cli issues start ID                         # Start (In Progress + assign)
+linear-cli issues update ID -s "In Progress" -a me  # Exact state + assign; verify with uncached issues get
 linear-cli issues close ID                         # Mark done
 linear-cli issues comment ID -m "text"             # Add comment
 linear-cli issues assign ID --assignee me          # Assign to self
