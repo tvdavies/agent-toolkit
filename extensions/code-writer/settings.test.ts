@@ -10,7 +10,7 @@ import {
 } from "./settings";
 
 const ANTHROPIC = "/toolkit/extensions/anthropic-claude-code.ts";
-const EXAMPLE = parseHierarchy(["anthropic-claude-code/claude-fable-5-1", "openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna:low"]);
+const EXAMPLE = parseHierarchy(["anthropic-claude-code/claude-fable-5-1"]);
 const opts = (extra: Record<string, unknown> = {}) => ({ anthropicProviderExtensionPath: ANTHROPIC, ...extra });
 
 /** Mirrors the shape of a realistic global settings file without any secrets. */
@@ -22,7 +22,7 @@ function existingSettings() {
 		packages: ["npm:pi-subagents"],
 		subagents: {
 			agentOverrides: {
-				"routine-worker": { model: "openai-codex/gpt-5.6-luna", thinking: "medium", extensions: [], fast: false, fallbackModels: false },
+				"routine-worker": { model: "openai-codex/gpt-5.6-luna", thinking: "medium", extensions: [], fast: false },
 				worker: { model: "inherit", thinking: "high" },
 			},
 			modelScope: {
@@ -47,12 +47,11 @@ describe("code-writer settings plan", () => {
 		const subagents = plan.settings.subagents as Record<string, any>;
 		expect(subagents.agentOverrides["code-writer"]).toEqual({
 			model: "anthropic-claude-code/claude-fable-5-1",
-			fallbackModels: ["openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna:low"],
 			defaultContext: "fresh",
 			fast: false,
 			extensions: [ANTHROPIC],
 		});
-		expect(subagents.modelScope.agents["code-writer"]).toEqual({ enforce: true, strict: true, allow: ["anthropic-claude-code/claude-fable-5-1", "openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna"] });
+		expect(subagents.modelScope.agents["code-writer"]).toEqual({ enforce: true, strict: true, allow: ["anthropic-claude-code/claude-fable-5-1"] });
 		expect(subagents.modelScope.allow).toEqual(current.subagents.modelScope.allow);
 		expect(subagents.modelScope.enforce).toBe(true);
 		expect(subagents.modelScope.agents["routine-worker"]).toEqual({ allow: ["openai-codex/gpt-5.6-luna"] });
@@ -63,25 +62,26 @@ describe("code-writer settings plan", () => {
 		expect(plan.warnings).toEqual([]);
 	});
 
-	it("supports chained add, replace and reorder by replacing the command-owned writer scope", () => {
-		const first = planSettingsUpdate(existingSettings(), parseHierarchy(["anthropic-claude-code/claude-fable-5-1"]), opts()).settings;
-		expect(writerScope(first).allow).toEqual(["anthropic-claude-code/claude-fable-5-1"]);
-		// add
-		const second = planSettingsUpdate(first, parseHierarchy(["anthropic-claude-code/claude-fable-5-1", "openai-codex/gpt-6-astra"]), opts()).settings;
-		expect(writerScope(second).allow).toEqual(["anthropic-claude-code/claude-fable-5-1", "openai-codex/gpt-6-astra"]);
-		expect((second.subagents as any).agentOverrides["code-writer"].fallbackModels).toEqual(["openai-codex/gpt-6-astra"]);
-		// reorder
-		const third = planSettingsUpdate(second, parseHierarchy(["openai-codex/gpt-6-astra", "anthropic-claude-code/claude-fable-5-1"]), opts()).settings;
-		expect((third.subagents as any).agentOverrides["code-writer"]).toMatchObject({ model: "openai-codex/gpt-6-astra", fallbackModels: ["anthropic-claude-code/claude-fable-5-1"], extensions: [ANTHROPIC] });
-		expect(writerScope(third).allow).toEqual(["openai-codex/gpt-6-astra", "anthropic-claude-code/claude-fable-5-1"]);
-		// replace with a disjoint chain
-		const fourth = planSettingsUpdate(third, parseHierarchy(["openai-codex/gpt-5.6-sol", "openai-codex/gpt-5.6-luna"]), opts()).settings;
-		expect((fourth.subagents as any).agentOverrides["code-writer"]).toEqual({ model: "openai-codex/gpt-5.6-sol", fallbackModels: ["openai-codex/gpt-5.6-luna"], defaultContext: "fresh", fast: false, extensions: [] });
-		expect(writerScope(fourth)).toEqual({ enforce: true, strict: true, allow: ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-5.6-luna"] });
-		// global and other-agent scopes are untouched throughout
-		expect((fourth.subagents as any).modelScope.allow).toEqual(existingSettings().subagents.modelScope.allow);
-		expect((fourth.subagents as any).modelScope.agents["routine-worker"]).toEqual({ allow: ["openai-codex/gpt-5.6-luna"] });
-		expect((fourth.subagents as any).agentOverrides["routine-worker"]).toEqual(existingSettings().subagents.agentOverrides["routine-worker"]);
+	it("replaces the selected model and owned scope without changing unrelated roles", () => {
+		const first = planSettingsUpdate(existingSettings(), EXAMPLE, opts()).settings;
+		const second = planSettingsUpdate(first, parseHierarchy(["openai-codex/gpt-6-astra"]), opts()).settings;
+		expect((second.subagents as any).agentOverrides["code-writer"]).toEqual({ model: "openai-codex/gpt-6-astra", defaultContext: "fresh", fast: false, extensions: [] });
+		expect(writerScope(second)).toEqual({ enforce: true, strict: true, allow: ["openai-codex/gpt-6-astra"] });
+		expect((second.subagents as any).modelScope.allow).toEqual(existingSettings().subagents.modelScope.allow);
+		expect((second.subagents as any).agentOverrides["routine-worker"]).toEqual(existingSettings().subagents.agentOverrides["routine-worker"]);
+	});
+
+	it("refuses multi-model plans and removes legacy fallback fields during explicit reconfiguration", () => {
+		const current = existingSettings() as any;
+		const before = JSON.stringify(current);
+		expect(() => planSettingsUpdate(current, parseHierarchy(["openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna"]), opts())).toThrow("supports one model per agent");
+		expect(JSON.stringify(current)).toBe(before);
+		for (const fallbackModels of [false, [], ["openai-codex/gpt-5.6-luna"]]) {
+			current.subagents.agentOverrides["code-writer"] = { model: "openai-codex/gpt-6-astra", fallbackModels };
+			const plan = planSettingsUpdate(current, EXAMPLE, opts());
+			expect(Object.hasOwn(plan.override, "fallbackModels")).toBe(false);
+			expect(current.subagents.agentOverrides["code-writer"].fallbackModels).toEqual(fallbackModels);
+		}
 	});
 
 	it("writes a primary thinking level as the native thinking field and clears stale fields on reconfiguration", () => {
@@ -101,7 +101,7 @@ describe("code-writer settings plan", () => {
 	});
 
 	it("refuses to widen an enforced global allow-list and never warns about global enforce for the agent rule", () => {
-		const hierarchy = parseHierarchy(["anthropic-claude-code/claude-fable-5-1", "openai/gpt-5-mini"]);
+		const hierarchy = parseHierarchy(["openai/gpt-5-mini"]);
 		const parent = { parentModel: { provider: "openai-codex", id: "gpt-6-astra" } };
 		expect(() => planSettingsUpdate(existingSettings(), hierarchy, opts(parent))).toThrow(/widening the existing global subagents.modelScope: openai\/gpt-5-mini is outside user modelScope.allow/);
 		expect(() => planSettingsUpdate(existingSettings(), hierarchy, opts())).toThrow("no parent session model is available");
@@ -110,12 +110,12 @@ describe("code-writer settings plan", () => {
 		const plan = planSettingsUpdate(unenforced, hierarchy, opts());
 		// Agent enforce:true is effective independently of the global flag, so nothing to warn about.
 		expect(plan.warnings).toEqual([]);
-		expect(writerScope(plan.settings)).toEqual({ enforce: true, strict: true, allow: ["anthropic-claude-code/claude-fable-5-1", "openai/gpt-5-mini"] });
+		expect(writerScope(plan.settings)).toEqual({ enforce: true, strict: true, allow: ["openai/gpt-5-mini"] });
 	});
 
 	it("resolves a global inherit pattern to the parent model and refuses only when identity is unavailable", () => {
 		const scope = { enforce: true, strict: true, allow: ["inherit", "openai-codex/gpt-5.6-luna"] };
-		const hierarchy = parseHierarchy(["openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna"]);
+		const hierarchy = parseHierarchy(["openai-codex/gpt-6-astra"]);
 		expect(globalScopeViolations(hierarchy, scope, "user", { provider: "openai-codex", id: "gpt-6-astra" })).toEqual([]);
 		expect(globalScopeViolations(hierarchy, scope, "user", { provider: "openai-codex", id: "gpt-5.6-sol" })).toEqual(["openai-codex/gpt-6-astra is outside user modelScope.allow (allow: inherit, openai-codex/gpt-5.6-luna)"]);
 		expect(globalScopeViolations(hierarchy, scope, "user", undefined)).toEqual(["openai-codex/gpt-6-astra matches only via 'inherit' in user modelScope.allow, but no parent session model is available to resolve it"]);
@@ -144,14 +144,14 @@ describe("code-writer settings plan", () => {
 		expect(() => planSettingsUpdate(existingSettings(), EXAMPLE, opts({ projectSettings: { subagents: { modelScope: { enforce: true, allow: ["openai-codex/*"] } } } }))).toThrow("Project modelScope replaces the user scope and rejects the hierarchy");
 		// Replacing permissive scope: the new strict writer rule would be inert -> refuse with instructions.
 		const wide = { subagents: { modelScope: { enforce: true, allow: ["*"] } } };
-		expect(() => planSettingsUpdate(existingSettings(), EXAMPLE, opts({ projectSettings: wide }))).toThrow(/would be ineffective\. Add to the project settings by hand: "subagents": \{ "modelScope": \{ "agents": \{ "code-writer": \{ "enforce": true, "strict": true, "allow": \["anthropic-claude-code\/claude-fable-5-1","openai-codex\/gpt-6-astra","openai-codex\/gpt-5.6-luna"\]/);
+		expect(() => planSettingsUpdate(existingSettings(), EXAMPLE, opts({ projectSettings: wide }))).toThrow(/would be ineffective\. Add to the project settings by hand: "subagents": \{ "modelScope": \{ "agents": \{ "code-writer": \{ "enforce": true, "strict": true, "allow": \["anthropic-claude-code\/claude-fable-5-1"\]/);
 		expect(projectConflicts(EXAMPLE, wide).errors.join(" ")).toContain("Project files are never edited automatically");
 		// Equivalent enforced strict writer rule (order-insensitive, inherits strict from global) is accepted with a warning.
-		const equivalent = { subagents: { modelScope: { enforce: true, strict: true, allow: ["*"], agents: { "code-writer": { allow: ["openai-codex/gpt-5.6-luna", "openai-codex/gpt-6-astra", "anthropic-claude-code/claude-fable-5-1"] } } } } };
+		const equivalent = { subagents: { modelScope: { enforce: true, strict: true, allow: ["*"], agents: { "code-writer": { allow: ["anthropic-claude-code/claude-fable-5-1"] } } } } };
 		const plan = planSettingsUpdate(existingSettings(), EXAMPLE, opts({ projectSettings: equivalent }));
 		expect(plan.warnings.join(" ")).toContain("existing strict code-writer rule matches this hierarchy");
 		// Not strict, or a superset, is not equivalent.
-		const loose = { subagents: { modelScope: { enforce: true, allow: ["*"], agents: { "code-writer": { allow: ["openai-codex/gpt-5.6-luna", "openai-codex/gpt-6-astra", "anthropic-claude-code/claude-fable-5-1"] } } } } };
+		const loose = { subagents: { modelScope: { enforce: true, allow: ["*"], agents: { "code-writer": { allow: ["anthropic-claude-code/claude-fable-5-1"] } } } } };
 		expect(() => planSettingsUpdate(existingSettings(), EXAMPLE, opts({ projectSettings: loose }))).toThrow("would be ineffective");
 		const superset = { subagents: { modelScope: { enforce: true, strict: true, allow: ["*"], agents: { "code-writer": { allow: ["openai-codex/gpt-5.6-luna", "openai-codex/gpt-6-astra", "anthropic-claude-code/claude-fable-5-1", "openai-codex/gpt-5.6-sol"] } } } } };
 		expect(() => planSettingsUpdate(existingSettings(), EXAMPLE, opts({ projectSettings: superset }))).toThrow("would be ineffective");
@@ -237,9 +237,8 @@ describe("code-writer settings plan", () => {
 		const plan = planSettingsUpdate(existingSettings(), EXAMPLE, opts());
 		expect(readStoredWriterConfig(plan.settings)).toEqual({
 			model: "anthropic-claude-code/claude-fable-5-1",
-			fallbackModels: ["openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna:low"],
 			extensions: [ANTHROPIC],
-			agentAllow: ["anthropic-claude-code/claude-fable-5-1", "openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna"],
+			agentAllow: ["anthropic-claude-code/claude-fable-5-1"],
 			agentEnforce: true,
 			agentStrict: true,
 			globalAllow: existingSettings().subagents.modelScope.allow,
@@ -325,7 +324,9 @@ describe("code-writer activation check", () => {
 		const mutate = (edit: (s: any) => void) => { const s = stored(); edit(s); return s; };
 		expect(() => check({})).toThrow("No code-writer hierarchy is configured");
 		expect(() => check(mutate((s) => { s.subagents.agentOverrides["code-writer"].disabled = true; }))).toThrow("disabled");
-		expect(() => check(mutate((s) => { s.subagents.agentOverrides["code-writer"].fallbackModels = false; }))).toThrow("fallbackModels to false");
+		for (const legacy of [false, [], ["openai-codex/gpt-6-astra"]]) {
+			expect(() => check(mutate((s) => { s.subagents.agentOverrides["code-writer"].fallbackModels = legacy; }))).toThrow("removed field fallbackModels");
+		}
 		expect(() => check(mutate((s) => { s.subagents.agentOverrides["code-writer"].model = "gpt-6-astra"; }))).toThrow("not usable as written");
 		expect(() => check(mutate((s) => { s.subagents.agentOverrides["code-writer"].extensions = []; }))).toThrow("lacks the provider extension");
 		expect(() => check(mutate((s) => { s.subagents.agentOverrides["code-writer"].extensions = false; }))).toThrow("extensions to false");
@@ -346,7 +347,7 @@ describe("code-writer activation check", () => {
 		expect(() => check(stored(), { subagents: { agentOverridesByProvider: { "openai-codex": { "code-writer": { thinking: "low" } } } } })).toThrow("project subagents.agentOverridesByProvider.openai-codex.code-writer.thinking");
 		expect(() => check(stored(), { subagents: { modelScope: { enforce: true, allow: ["*"] } } })).toThrow("would be ineffective");
 		expect(() => check(stored(), { subagents: { projectRootResolution: "auto" } })).toThrow("'subagents.projectRootResolution'");
-		const equivalent = { subagents: { modelScope: { enforce: true, strict: true, allow: ["*"], agents: { "code-writer": { allow: ["openai-codex/gpt-5.6-luna", "openai-codex/gpt-6-astra", "anthropic-claude-code/claude-fable-5-1"] } } } } };
+		const equivalent = { subagents: { modelScope: { enforce: true, strict: true, allow: ["*"], agents: { "code-writer": { allow: ["anthropic-claude-code/claude-fable-5-1"] } } } } };
 		// With a replacing project scope, the user writer rule is irrelevant; the project rule decides.
 		const s = stored();
 		delete s.subagents.modelScope.agents["code-writer"];
@@ -355,8 +356,8 @@ describe("code-writer activation check", () => {
 
 	it("resolves a global inherit pattern with the parent model and refuses without one", () => {
 		const s = stored();
-		s.subagents.modelScope.allow = ["inherit", "anthropic-claude-code/claude-fable-5-1", "openai-codex/gpt-5.6-luna"];
-		expect(check(s).hierarchy).toEqual(EXAMPLE);
+		s.subagents.modelScope.allow = ["inherit"];
+		expect(assertActivatable({ userSettings: s, anthropicProviderExtensionPath: ANTHROPIC, parentModel: { provider: "anthropic-claude-code", id: "claude-fable-5-1" } }).hierarchy).toEqual(EXAMPLE);
 		expect(() => assertActivatable({ userSettings: s, anthropicProviderExtensionPath: ANTHROPIC })).toThrow("no parent session model is available");
 	});
 });

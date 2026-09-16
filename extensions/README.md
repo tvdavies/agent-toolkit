@@ -6,7 +6,7 @@ Custom Pi extensions bundled by the Agent Toolkit package. The package exports o
 
 - `anthropic-claude-code.ts` — registers Anthropic models using local Claude Code OAuth credentials or an explicitly configured proxy key file.
 - `btw.ts` — quick side-question handling.
-- `code-writer/` — packaged native `code-writer` subagent role (`agents/code-writer.md`) with the human `/code-writer` command for an ordered model hierarchy, native quota fallback configuration, and a session-scoped delegation-preferred routing mode. See [`code-writer/README.md`](code-writer/README.md).
+- `code-writer/` — packaged native `code-writer` subagent role (`agents/code-writer.md`) with the human `/code-writer` command for a single selected model and a session-scoped delegation-preferred routing mode. See [`code-writer/README.md`](code-writer/README.md).
 - `delegation-policy/` — requires agent delegation through approved Pi tools rather than shell-launched agent harnesses.
 - `openai-fast-cpa.ts` and `openai-fast.json` — the local OpenAI fast provider/model configuration.
 - `scheduler.ts` — in-session delayed prompts and `/schedule`.
@@ -26,6 +26,59 @@ Synchronise dependencies, skills, the local Pi package, workflows, and managed t
 ```
 
 The installed package points at this checkout, so edits to an existing extension are live on disk. Run `sync.sh` after adding an extension or changing runtime dependencies, then run `/reload` in active Pi sessions.
+
+## Fable 5.1 compaction compatibility
+
+Fable 5.1 binds thinking blocks to the conversation prefix that produced them.
+Pi's client-side compaction replaces older turns with a summary while retaining
+recent assistant/tool turns; replaying those turns' old thinking behind the new
+prefix can therefore fail with a persistent 400.
+
+For `anthropic-claude-code/claude-fable-5-1` only, a context hook identifies thinking
+carried across the latest compaction and removes it from the **outgoing copy**.
+Saved session history, text, tool calls and tool results are not modified. Newly
+generated thinking after the boundary remains intact, even if timestamps coincide.
+The filter runs on subsequent requests too and reconstructs its boundary from the
+active session branch on reload/resume. Both `firstKeptEntryId` and self-contained
+`retainedTail` compaction formats are supported, including redacted thinking.
+
+Thinking-off is marked unsupported, and summary requests which omit or disable
+thinking are normalised to adaptive mode. Existing request-level effort is kept.
+Other models, pricing and credential handling are unchanged. Fable 5.1 also uses
+the same intentional 272,000-token context budget as Fable 5.
+
+Do not enable `supportsMidConvoEffort` solely to obtain its binding-control flag:
+our CPA canary rejected the bundled per-message `output_config` with a 400. This
+fix uses Anthropic's documented keep-tail client-compaction alternative instead,
+without new beta headers or per-message effort controls. It does not replace Pi's
+compactor or enable server-side compaction. Other arbitrary history/system/tool
+rewrites can still invalidate thinking and need their own integration review.
+
+After integrating the change, reload Pi and start a fresh session or reselect
+Fable 5.1 so the active model uses the updated metadata. This is separate from
+changing prsmash's production model.
+
+References: [preserved thinking](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking),
+[Fable 5.1 migration](https://platform.claude.com/docs/en/models/fable-5-1/migration-guide).
+
+The default suite tests metadata, non-mutating context filtering and the pinned
+SDK's HTTP serialization against a local fake endpoint. To also test the installed
+native adapter:
+
+```bash
+PI_TEST_ANTHROPIC_API_MODULE=/absolute/path/to/pi-ai/dist/api/anthropic-messages.js \
+  bun test tests/extensions/fable-compaction.test.ts
+```
+
+The wire tests use synthetic signatures and a loopback fake server, with no real
+credentials or model calls. They reproduce a rejected unfiltered keep-tail request,
+then verify successful continuation, retained text/tool pairing, preservation of
+new thinking, and adaptive summarisation with existing OAuth betas retained.
+`tests/fixtures/fable-compaction-canary.ts` is a separate opt-in live fixture for an
+explicitly authorised native subagent. It only exposes two in-memory values,
+applies the same filter to a synthetic compaction boundary after a completed tool
+round, and records non-secret metadata;
+it is not loaded by the production provider or normal tests.
 
 ## Handoff and session labels
 
@@ -51,15 +104,15 @@ commands and failure behaviour.
 
 ## Code writer
 
-After `sync.sh` and `/reload`, configure the writer's ordered hierarchy explicitly and optionally prefer delegation for the session:
+After `sync.sh` and `/reload`, configure the writer's single model explicitly and optionally prefer delegation for the session:
 
 ```text
-/code-writer models anthropic-claude-code/claude-fable-5-1 openai-codex/gpt-6-astra openai-codex/gpt-5.6-luna
+/code-writer models anthropic-claude-code/claude-fable-5-1:medium
 /reload
 /code-writer on
 ```
 
-Each mutating command asks for a UI confirmation and fails closed without one. `models` writes `subagents.agentOverrides.code-writer` (model, `fallbackModels` in order, fresh context, `fast: false`, explicit extensions) and replaces the command-owned strict per-agent `modelScope` rule with every listed model, under Pi's settings lock, preserving the global allow-list, provider-preference maps and unrelated settings; it refuses rather than widening policy or writing a hierarchy that native project settings would override or neutralise. Native fallback covers retryable provider/quota failures before any tool activity only; after partial work the parent inspects the diff and issues an explicit continuation. `on` validates the current stored/effective configuration read-only (before and after the dialog) and is refused with routing unchanged when native would not launch the stored hierarchy under a strict writer scope; it is a prompt-level routing preference, not a sandbox. Inspected against native pi-subagents 0.66.0.
+Each mutating command asks for a UI confirmation and fails closed without one. `models` writes one model, optional thinking, fresh context, `fast: false` and explicit extensions to `subagents.agentOverrides.code-writer`, plus a matching strict per-agent scope. It preserves global policy and unrelated settings under Pi's settings lock. Native pi-subagents 0.68+ removed `fallbackModels`: multiple models are refused, and an explicit single-model reconfiguration removes that legacy writer key. Provider failures are reported, not automatically retried on another model. `on` validates the stored/effective configuration before and after confirmation; it is a routing preference, not a sandbox. See [`code-writer/README.md`](code-writer/README.md).
 
 ## Workflows
 

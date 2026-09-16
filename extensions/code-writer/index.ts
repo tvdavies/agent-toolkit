@@ -1,10 +1,10 @@
 /**
  * `code-writer`: a native pi-subagents code-writing role with a human-editable
- * ordered model hierarchy, plus a session-scoped delegation-preferred routing
+ * single selected model, plus a session-scoped delegation-preferred routing
  * mode and an opt-in user-level routing default that fresh session branches
  * inherit. Human slash commands confirmed through the trusted UI are the only
  * writers of configuration; there is no model-facing setter, launcher, or
- * runtime fork of native fallback.
+ * automatic fallback implementation.
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -25,13 +25,13 @@ export { ROUTING_DEFAULT_SETTING } from "./settings";
 export const ANTHROPIC_PROVIDER_EXTENSION_PATH = fileURLToPath(new URL("../anthropic-claude-code.ts", import.meta.url));
 export const CODE_WRITER_AGENT_FILE = fileURLToPath(new URL("../../agents/code-writer.md", import.meta.url));
 
-/** Documented example only (a single medium-thinking model); never written unless the human types it. Longer ordered hierarchies remain supported. */
+/** Documented example only; never written unless the human types it. Native 0.68+ supports one model. */
 export const EXAMPLE_HIERARCHY = "anthropic-claude-code/claude-fable-5-1:medium";
 
 export const FALLBACK_LIMITS = [
-	"Native fallback rotates to the next hierarchy model only for retryable provider failures (rate limit, quota, overload, unavailable model) before the child uses any tool.",
-	"No automatic fallback after tool activity, on cancellation or deadline, on ordinary task/test failure, or for unsupported setups. Partial work stays in the worktree: inspect and preserve the diff, then issue an explicit continuation on a remaining model.",
-	"A retained native resume keeps its original model; it is not cross-model continuation. Models on one provider often share a quota, so cross-provider backups are more useful than same-provider ones.",
+	"Native pi-subagents 0.68+ launches one model per agent. No automatic fallback, including on rate limits, quota errors or failures before tool activity.",
+	"Report failures and preserve any partial work. Inspect the diff and ask the user before an explicit continuation on another model; never replay completed changes.",
+	"A retained native resume keeps its original model; it is not cross-model continuation.",
 ];
 
 export interface CodeWriterDependencies {
@@ -75,12 +75,12 @@ function readProjectSettings(path: string | null): JsonObject | undefined {
 export function describeStored(stored: StoredWriterConfig): string[] {
 	const lines: string[] = [];
 	if (!stored.model) {
-		lines.push(`Stored hierarchy: none. Configure one with /code-writer models <provider/id[:thinking]> ... (example: ${EXAMPLE_HIERARCHY}).`);
+		lines.push(`Stored hierarchy: none. Configure one with /code-writer models <provider/id[:thinking]> (example: ${EXAMPLE_HIERARCHY}).`);
 	} else {
 		const primary = stored.thinking ? `${stored.model}:${stored.thinking}` : stored.model;
 		const fallbacks = stored.fallbackModels === false ? [] : (stored.fallbackModels ?? []);
 		lines.push(`Stored hierarchy (user settings): ${[primary, ...fallbacks].map((model, index) => `${index + 1}. ${model}`).join("  ")}`);
-		if (stored.fallbackModels === false) lines.push("Warning: fallbackModels is false, so no automatic fallback will happen.");
+		if (stored.fallbackModels !== undefined) lines.push("Warning: fallbackModels was removed in pi-subagents 0.68; rerun /code-writer models with exactly one model before /reload.");
 		if (stored.disabled) lines.push("Warning: the code-writer override is disabled.");
 		if (stored.extensions === undefined) lines.push("Child extensions: packaged default (explicit empty list; built-in providers only, no ambient extensions). An anthropic-claude-code model needs the provider extension: rerun /code-writer models.");
 		else if (stored.extensions === false) lines.push("Warning: extensions is false, which clears the explicit list and lets the writer load ambient extensions.");
@@ -332,7 +332,7 @@ export default function codeWriterExtension(pi: ExtensionAPI, deps: CodeWriterDe
 	}
 
 	pi.registerCommand("code-writer", {
-		description: "code-writer role: status | on | off | default on|off | models <provider/id[:thinking]> ... (confirmed in the UI)",
+		description: "code-writer role: status | on | off | default on|off | models <provider/id[:thinking]> (one model, confirmed in the UI)",
 		getArgumentCompletions: (prefix) => {
 			const items = ["status", "on", "off", "default on", "default off", "models"].filter((item) => item.startsWith(prefix)).map((item) => ({ value: item, label: item }));
 			return items.length > 0 ? items : null;
@@ -364,14 +364,14 @@ export default function codeWriterExtension(pi: ExtensionAPI, deps: CodeWriterDe
 					}
 					case "models": {
 						if (rest.length === 0) {
-							ctx.ui.notify(`Usage: /code-writer models <provider/id[:thinking]> ... (ordered; example: ${EXAMPLE_HIERARCHY})`, "warning");
+							ctx.ui.notify(`Usage: /code-writer models <provider/id[:thinking]> (exactly one model; example: ${EXAMPLE_HIERARCHY})`, "warning");
 							return;
 						}
 						await configure(parseHierarchy(splitHierarchyArguments(rest.join(" "))), ctx);
 						return;
 					}
 					default:
-						ctx.ui.notify("Usage: /code-writer [status|on|off|default on|off|models <provider/id[:thinking]> ...]", "warning");
+						ctx.ui.notify("Usage: /code-writer [status|on|off|default on|off|models <provider/id[:thinking]>]", "warning");
 				}
 			} catch (error) {
 				ctx.ui.notify(`code-writer: ${error instanceof Error ? error.message : String(error)}`, "error");

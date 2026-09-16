@@ -19,7 +19,6 @@ Reviewer configuration written by `--apply` (merged over preserved unrelated key
       "reviewer": {
         "model": "anthropic-claude-code/claude-fable-5-1",
         "thinking": "medium",
-        "fallbackModels": [],
         "defaultContext": "fresh",
         "fast": false,
         "extensions": ["/home/tvd/agent-skills/extensions/anthropic-claude-code.ts"],
@@ -38,6 +37,8 @@ Reviewer configuration written by `--apply` (merged over preserved unrelated key
   }
 }
 ```
+
+Native pi-subagents 0.68+ requires one model and rejects `fallbackModels` even when it is `[]` or `false`. The installer removes a legacy reviewer `fallbackModels` field on explicit apply; it does not migrate other roles.
 
 The extension path is the MAIN checkout on purpose (worktrees are disposable). `review-evidence`, `scout`, the global model scope and the parent model are not changed by anything here.
 

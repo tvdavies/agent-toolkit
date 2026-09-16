@@ -16,7 +16,6 @@ import {
 import { dirname, join } from "node:path";
 import {
 	CODE_WRITER_AGENT,
-	formatHierarchyModel,
 	hierarchyModels,
 	matchesScopePattern,
 	type ModelHierarchy,
@@ -84,7 +83,7 @@ function validateScopeRule(rule: JsonObject, file: string, field: string): void 
 	}
 }
 
-/** Override fields native `parseBuiltinOverrideEntry` (0.66.0) accepts as `string[] | false`. */
+/** Native list fields plus legacy fallbackModels, accepted only so models can remove it. */
 const WRITER_LIST_OR_FALSE_FIELDS = ["fallbackModels", "extensions", "defaultReads", "skills", "excludeTools", "subagentOnlyExtensions", "mutationTools"] as const;
 /** Override fields native accepts only as booleans. */
 const WRITER_BOOLEAN_FIELDS = ["fast", "disabled", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "allowNestedSubagents", "completionGuard"] as const;
@@ -295,6 +294,9 @@ export function projectConflicts(hierarchy: ModelHierarchy, projectSettings: Jso
  * global and other-agent policy is preserved and treated as immutable.
  */
 export function planSettingsUpdate(current: unknown, hierarchy: ModelHierarchy, options: PlanOptions): SettingsPlan {
+	if (hierarchy.fallbacks.length > 0) {
+		throw new Error("pi-subagents 0.68+ supports one model per agent; fallbackModels was removed. Configure exactly one model; nothing was written.");
+	}
 	assertSupportedSubagentSettings(current, "user settings.json");
 	if (options.projectSettings !== undefined) assertSupportedSubagentSettings(options.projectSettings, "project settings.json");
 	const warnings: string[] = [];
@@ -318,8 +320,8 @@ export function planSettingsUpdate(current: unknown, hierarchy: ModelHierarchy, 
 	override.model = hierarchy.primary.model;
 	if (hierarchy.primary.thinking) override.thinking = hierarchy.primary.thinking;
 	else delete override.thinking;
-	if (hierarchy.fallbacks.length > 0) override.fallbackModels = hierarchy.fallbacks.map(formatHierarchyModel);
-	else delete override.fallbackModels;
+	// Remove legacy configuration even when it was [] or false: native rejects the key's presence.
+	delete override.fallbackModels;
 	override.defaultContext = "fresh";
 	override.fast = false;
 	override.extensions = extensions;
@@ -542,11 +544,10 @@ export function assertActivatable(input: ActivationInput): ActivationCheck {
 	const user = readStoredWriterConfig(input.userSettings, "user");
 	if (!user.model) refuse("No code-writer hierarchy is configured; refusing to enable routing.");
 	if (user.disabled) refuse(`The stored code-writer override is disabled (user subagents.agentOverrides.${CODE_WRITER_AGENT}.disabled); re-enable it by hand or rerun /code-writer models.`);
-	const fallbacks = user.fallbackModels;
-	if (fallbacks === false) refuse(`The stored override sets fallbackModels to false, so the hierarchy has no fallback; rerun /code-writer models.`);
+	if (user.fallbackModels !== undefined) refuse(`The stored override uses removed field fallbackModels; rerun /code-writer models with exactly one model.`);
 	const hierarchy = (() => {
 		try {
-			return parseHierarchy([user.thinking ? `${user.model}:${user.thinking}` : user.model!, ...(fallbacks === false ? [] : fallbacks ?? [])]);
+			return parseHierarchy([user.thinking ? `${user.model}:${user.thinking}` : user.model!]);
 		} catch (error) {
 			return refuse(`The stored hierarchy is not usable as written: ${error instanceof Error ? error.message : String(error)} Rerun /code-writer models.`);
 		}

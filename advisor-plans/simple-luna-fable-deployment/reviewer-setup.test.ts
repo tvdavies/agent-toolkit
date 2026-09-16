@@ -76,11 +76,11 @@ describe("reviewer-only setup (one-off artefact)", () => {
 		expect(MAIN_ANTHROPIC_PROVIDER_EXTENSION).not.toContain(".pi-worktrees");
 		expect(REVIEWER_MODEL).toBe("anthropic-claude-code/claude-fable-5-1");
 		expect(reviewerOverride("/x.ts")).toEqual({
-			model: "anthropic-claude-code/claude-fable-5-1", thinking: "medium", fallbackModels: [], defaultContext: "fresh", fast: false, extensions: ["/x.ts"],
+			model: "anthropic-claude-code/claude-fable-5-1", thinking: "medium", defaultContext: "fresh", fast: false, extensions: ["/x.ts"],
 			tools: ["read", "grep", "find", "ls", "contact_supervisor"], inheritProjectContext: true, inheritGlobalContext: false, inheritSkills: false, allowNestedSubagents: false,
 		});
 		for (const forbidden of ["bash", "edit", "write", "subagent", "workflow_run"]) expect(REVIEWER_TOOLS).not.toContain(forbidden);
-		expect([...SUPPORTED_REVIEWER_KEYS].sort()).toEqual([...Object.keys(reviewerOverride("/x.ts")), "disabled"].sort());
+		expect([...SUPPORTED_REVIEWER_KEYS].sort()).toEqual([...Object.keys(reviewerOverride("/x.ts")), "disabled", "fallbackModels"].sort());
 	});
 
 	it("rewrites only the reviewer override and reviewer scope rule, preserving everything else", () => {
@@ -102,6 +102,18 @@ describe("reviewer-only setup (one-off artefact)", () => {
 		}
 		expect(plan.affectedKeys.every((key) => key.includes(".reviewer"))).toBe(true);
 		expect(plan.affectedKeys.some((key) => key.includes("code-writer"))).toBe(false);
+	});
+
+	it("removes legacy fallbackModels without changing the input or other roles", () => {
+		for (const fallbackModels of [false, [], ["openai-codex/gpt-5.6-luna"]]) {
+			const current = existingSettings();
+			at(current, "subagents", "agentOverrides", "reviewer").fallbackModels = fallbackModels;
+			const before = structuredClone(current);
+			const plan = planReviewerSettings(current, { anthropicProviderExtensionPath: extension });
+			expect(Object.hasOwn(at(plan.settings, "subagents", "agentOverrides", "reviewer"), "fallbackModels")).toBe(false);
+			expect(plan.affectedKeys).toContain("subagents.agentOverrides.reviewer.fallbackModels (removed)");
+			expect(current).toEqual(before);
+		}
 	});
 
 	it("creates only the two reviewer entries in an empty file", () => {
@@ -248,7 +260,7 @@ describe("reviewer-only setup (one-off artefact)", () => {
 		lines.length = 0;
 		expect(main(["--settings", explicit, "--cwd", join(workspace, "project"), "--apply"], (line) => lines.push(line), deps)).toBe(0);
 		output = lines.join("\n");
-		expect(output).toContain("Wrote 12 keys");
+		expect(output).toContain("Wrote 11 keys");
 		expect(output).toContain("Run /reload");
 		expect(at(JSON.parse(readFileSync(explicit, "utf8")) as JsonObject, "subagents", "agentOverrides").reviewer).toEqual(reviewerOverride(extension));
 		expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual(existingSettings());

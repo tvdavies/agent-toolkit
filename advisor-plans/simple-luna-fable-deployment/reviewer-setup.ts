@@ -32,7 +32,6 @@ export function reviewerOverride(anthropicProviderExtensionPath: string): JsonOb
 	return {
 		model: REVIEWER_MODEL,
 		thinking: "medium",
-		fallbackModels: [],
 		defaultContext: "fresh",
 		fast: false,
 		extensions: [anthropicProviderExtensionPath],
@@ -53,7 +52,7 @@ export const REVIEWER_SCOPE = { enforce: true, strict: true, allow: [REVIEWER_MO
  * could change the reviewer's capabilities or break native loading, so its
  * presence is a refusal, not a merge.
  */
-export const SUPPORTED_REVIEWER_KEYS = [...Object.keys(reviewerOverride("/unused")), "disabled"] as const;
+export const SUPPORTED_REVIEWER_KEYS = [...Object.keys(reviewerOverride("/unused")), "disabled", "fallbackModels"] as const;
 
 export interface ReviewerPlanOptions {
 	anthropicProviderExtensionPath?: string;
@@ -100,7 +99,8 @@ function checkExistingReviewerEntry(previous: JsonObject, extension: string): vo
 	}
 	if ("model" in previous && typeof previous.model !== "string") refuse(`${field}.model is not a string.`);
 	if ("thinking" in previous && typeof previous.thinking !== "string") refuse(`${field}.thinking is not a string.`);
-	if ("fallbackModels" in previous && !isStringList(previous.fallbackModels)) refuse(`${field}.fallbackModels is not an array of strings.`);
+	// Tolerate legacy values only to remove the field; 0.68+ rejects even [] and false.
+	if ("fallbackModels" in previous && previous.fallbackModels !== false && !isStringList(previous.fallbackModels)) refuse(`${field}.fallbackModels is not an array of strings or false.`);
 	if ("defaultContext" in previous && previous.defaultContext !== "fresh" && previous.defaultContext !== "fork") refuse(`${field}.defaultContext is not 'fresh' or 'fork'.`);
 	for (const key of ["fast", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "allowNestedSubagents"]) {
 		if (key in previous && typeof previous[key] !== "boolean") refuse(`${field}.${key} is not a boolean.`);
@@ -147,6 +147,7 @@ export function planReviewerSettings(current: unknown, options: ReviewerPlanOpti
 
 	const override: JsonObject = { ...previous, ...reviewerOverride(extension) };
 	delete override.disabled;
+	delete override.fallbackModels;
 	const settings: JsonObject = {
 		...current,
 		subagents: {
@@ -159,6 +160,7 @@ export function planReviewerSettings(current: unknown, options: ReviewerPlanOpti
 		settings,
 		affectedKeys: [
 			...Object.keys(reviewerOverride(extension)).map((key) => `subagents.agentOverrides.${REVIEWER_AGENT}.${key}`),
+			...("fallbackModels" in previous ? [`subagents.agentOverrides.${REVIEWER_AGENT}.fallbackModels (removed)`] : []),
 			`subagents.modelScope.agents.${REVIEWER_AGENT}`,
 		],
 	};

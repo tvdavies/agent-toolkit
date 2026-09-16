@@ -77,20 +77,20 @@ manual overrides and activation requirements.
 ### Code-writer delegation
 
 The package also exposes a native pi-subagents `code-writer` role (`agents/code-writer.md`)
-that edits code on its own configured model hierarchy while the parent keeps investigation,
-tests and review. After `sync.sh` and `/reload`, set the ordered hierarchy explicitly, reload,
+that edits code on its own selected model while the parent keeps investigation,
+tests and review. After `sync.sh` and `/reload`, set that model explicitly, reload,
 and optionally prefer delegation for the session:
 
 ```text
-/code-writer models anthropic-claude-code/claude-fable-5-1 openai-codex/gpt-6-astra openai-codex/gpt-5.6-luna
+/code-writer models anthropic-claude-code/claude-fable-5-1:medium
 /reload
 /code-writer on
 ```
 
 Nothing is enabled automatically; each command that changes configuration or routing asks
-for a UI confirmation. Native fallback applies to retryable provider/quota failures
-before any tool use; after partial work the parent inspects the diff and issues an explicit
-continuation. See [`extensions/code-writer/README.md`](extensions/code-writer/README.md).
+for a UI confirmation. Native pi-subagents 0.68+ supports one model per agent and no
+automatic fallback. Provider failures are reported; after partial work the parent preserves
+the diff and asks before continuing on another model. See [`extensions/code-writer/README.md`](extensions/code-writer/README.md).
 
 ## Extensions and workflows
 

@@ -75,8 +75,8 @@ function harness(home: string, options: Options = {}) {
 
 const EXPECTED_WRITE = {
 	subagents: {
-		agentOverrides: { "code-writer": { model: "anthropic-claude-code/claude-fable-5-1", fallbackModels: ["openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna:low"], defaultContext: "fresh", fast: false, extensions: ["/toolkit/extensions/anthropic-claude-code.ts"] } },
-		modelScope: { agents: { "code-writer": { enforce: true, strict: true, allow: ["anthropic-claude-code/claude-fable-5-1", "openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna"] } } },
+		agentOverrides: { "code-writer": { model: "anthropic-claude-code/claude-fable-5-1", defaultContext: "fresh", fast: false, extensions: ["/toolkit/extensions/anthropic-claude-code.ts"] } },
+		modelScope: { agents: { "code-writer": { enforce: true, strict: true, allow: ["anthropic-claude-code/claude-fable-5-1"] } } },
 	},
 };
 
@@ -126,17 +126,17 @@ describe("code-writer extension", () => {
 		expect(h.last()?.text).toContain(`Effective project settings: ${join(h.cwd, ".pi", "settings.json")} (absent)`);
 	});
 
-	it("writes the ordered hierarchy after UI confirmation, then routes only after a confirmed on", async () => {
+	it("writes one model after UI confirmation, then routes only after a confirmed on", async () => {
 		const h = harness(home);
 		h.start();
-		await h.run("models anthropic-claude-code/claude-fable-5-1 openai-codex/gpt-6-astra, openai-codex/gpt-5.6-luna:low");
+		await h.run("models anthropic-claude-code/claude-fable-5-1");
 		expect(h.dialogs).toHaveLength(1);
 		expect(h.dialogs[0]!.title).toContain("Write the code-writer model hierarchy?");
 		expect(h.dialogs[0]!.body).toContain(h.settingsPath);
-		expect(h.dialogs[0]!.body).toContain("1. anthropic-claude-code/claude-fable-5-1  2. openai-codex/gpt-6-astra  3. openai-codex/gpt-5.6-luna:low");
+		expect(h.dialogs[0]!.body).toContain("1. anthropic-claude-code/claude-fable-5-1");
 		expect(h.last()?.level).toBe("info");
 		expect(h.last()?.text).toContain("Run /reload");
-		expect(h.last()?.text).toContain("before the child uses any tool");
+		expect(h.last()?.text).toContain("No automatic fallback, including on rate limits");
 		expect(JSON.parse(readFileSync(h.settingsPath, "utf8"))).toEqual(EXPECTED_WRITE);
 		expect(h.prompt()).toBe("BASE");
 		await h.run("on");
@@ -151,8 +151,8 @@ describe("code-writer extension", () => {
 		expect(prompt).toContain("not a sandbox");
 		await h.run("status");
 		expect(h.last()?.text).toContain("Session routing: preferred");
-		expect(h.last()?.text).toContain("Per-agent scope (enforce, strict): anthropic-claude-code/claude-fable-5-1, openai-codex/gpt-6-astra, openai-codex/gpt-5.6-luna");
-		expect(h.last()?.text).toContain("No automatic fallback after tool activity");
+		expect(h.last()?.text).toContain("Per-agent scope (enforce, strict): anthropic-claude-code/claude-fable-5-1");
+		expect(h.last()?.text).toContain("No automatic fallback");
 		await h.run("off");
 		expect(h.dialogs).toHaveLength(3);
 		expect(h.prompt()).toBe("BASE");
@@ -200,7 +200,7 @@ describe("code-writer extension", () => {
 		rmSync(join(h.cwd, ".pi", "settings.json"));
 		await h.run("on");
 		expect(h.dialogs).toHaveLength(1);
-		expect(h.dialogs[0]!.body).toContain("Hierarchy in effect: 1. anthropic-claude-code/claude-fable-5-1  2. openai-codex/gpt-6-astra  3. openai-codex/gpt-5.6-luna:low");
+		expect(h.dialogs[0]!.body).toContain("Hierarchy in effect: 1. anthropic-claude-code/claude-fable-5-1");
 		expect(h.branch).toHaveLength(1);
 		expect(h.prompt()).toContain(ROUTING_MARKER);
 		// off stays available as a confirmed opt-out even when the configuration has since broken.
@@ -245,13 +245,13 @@ describe("code-writer extension", () => {
 		h.start();
 		await h.run("models anthropic-claude-code/claude-fable-5-1");
 		expect(JSON.parse(readFileSync(h.settingsPath, "utf8")).subagents.modelScope.agents["code-writer"].allow).toEqual(["anthropic-claude-code/claude-fable-5-1"]);
-		await h.run("models anthropic-claude-code/claude-fable-5-1 openai-codex/gpt-6-astra openai-codex/gpt-5.6-luna:low");
+		await h.run("models anthropic-claude-code/claude-fable-5-1");
 		expect(h.last()?.level).toBe("info");
 		expect(JSON.parse(readFileSync(h.settingsPath, "utf8"))).toEqual(EXPECTED_WRITE);
-		await h.run("models openai-codex/gpt-5.6-luna openai-codex/gpt-6-astra");
+		await h.run("models openai-codex/gpt-5.6-luna");
 		expect(JSON.parse(readFileSync(h.settingsPath, "utf8")).subagents).toEqual({
-			agentOverrides: { "code-writer": { model: "openai-codex/gpt-5.6-luna", fallbackModels: ["openai-codex/gpt-6-astra"], defaultContext: "fresh", fast: false, extensions: [] } },
-			modelScope: { agents: { "code-writer": { enforce: true, strict: true, allow: ["openai-codex/gpt-5.6-luna", "openai-codex/gpt-6-astra"] } } },
+			agentOverrides: { "code-writer": { model: "openai-codex/gpt-5.6-luna", defaultContext: "fresh", fast: false, extensions: [] } },
+			modelScope: { agents: { "code-writer": { enforce: true, strict: true, allow: ["openai-codex/gpt-5.6-luna"] } } },
 		});
 	});
 
@@ -292,7 +292,7 @@ describe("code-writer extension", () => {
 			},
 		});
 		h.start();
-		await h.run("models openai-codex/gpt-6-astra openai-codex/gpt-5.6-luna");
+		await h.run("models openai-codex/gpt-5.6-luna");
 		expect(h.dialogs).toHaveLength(1);
 		expect(h.last()?.level).toBe("error");
 		expect(h.last()?.text).toContain("widening the existing global subagents.modelScope");
@@ -305,13 +305,13 @@ describe("code-writer extension", () => {
 		const h = harness(home, { parentModel: { provider: "openai-codex", id: "gpt-5.6-sol" } });
 		writeFileSync(h.settingsPath, original);
 		h.start();
-		await h.run("models openai-codex/gpt-6-astra openai-codex/gpt-5.6-luna");
+		await h.run("models openai-codex/gpt-5.6-luna");
 		expect(h.last()?.level).toBe("error");
 		expect(h.last()?.text).toContain("widening the existing global subagents.modelScope");
 		expect(h.dialogs).toEqual([]);
 		expect(readFileSync(h.settingsPath, "utf8")).toBe(original);
 		// inherit resolves to the parent model (Sol), so Sol is accepted without widening.
-		await h.run("models openai-codex/gpt-6-astra openai-codex/gpt-5.6-sol");
+		await h.run("models openai-codex/gpt-5.6-sol");
 		expect(h.last()?.level).toBe("info");
 		expect(JSON.parse(readFileSync(h.settingsPath, "utf8")).subagents.modelScope.allow).toEqual(["openai-codex/gpt-6-astra", "inherit"]);
 		await h.run("models openai-codex/gpt-7-unknown");
@@ -360,23 +360,23 @@ describe("code-writer extension", () => {
 	it("refuses a replacing permissive project scope with instructions, and accepts an equivalent strict project rule", async () => {
 		const permissive = harness(home, { projectSettings: { subagents: { modelScope: { enforce: true, allow: ["*"] } } } });
 		permissive.start();
-		await permissive.run("models openai-codex/gpt-6-astra openai-codex/gpt-5.6-luna");
+		await permissive.run("models openai-codex/gpt-6-astra");
 		expect(permissive.last()?.level).toBe("error");
-		expect(permissive.last()?.text).toContain('"allow": ["openai-codex/gpt-6-astra","openai-codex/gpt-5.6-luna"]');
+		expect(permissive.last()?.text).toContain('"allow": ["openai-codex/gpt-6-astra"]');
 		expect(permissive.dialogs).toEqual([]);
 		expect(existsSync(permissive.settingsPath)).toBe(false);
 		expect(readFileSync(join(permissive.cwd, ".pi", "settings.json"), "utf8")).toBe(JSON.stringify({ subagents: { modelScope: { enforce: true, allow: ["*"] } } }));
 
 		const cwd = join(home, "equivalent");
-		const equivalent = harness(home, { cwd, projectSettings: { subagents: { modelScope: { enforce: true, strict: true, allow: ["*"], agents: { "code-writer": { allow: ["openai-codex/gpt-5.6-luna", "openai-codex/gpt-6-astra"] } } } } } });
+		const equivalent = harness(home, { cwd, projectSettings: { subagents: { modelScope: { enforce: true, strict: true, allow: ["*"], agents: { "code-writer": { allow: ["openai-codex/gpt-6-astra"] } } } } } });
 		equivalent.start();
-		await equivalent.run("models openai-codex/gpt-6-astra openai-codex/gpt-5.6-luna");
+		await equivalent.run("models openai-codex/gpt-6-astra");
 		expect(equivalent.last()?.level).toBe("warning");
 		expect(equivalent.last()?.text).toContain("Wrote code-writer hierarchy");
 		expect(equivalent.last()?.text).toContain("existing strict code-writer rule matches this hierarchy");
 		expect(existsSync(equivalent.settingsPath)).toBe(true);
 		await equivalent.run("status");
-		expect(equivalent.last()?.text).toContain("its code-writer rule (enforce, strict): openai-codex/gpt-5.6-luna, openai-codex/gpt-6-astra");
+		expect(equivalent.last()?.text).toContain("its code-writer rule (enforce, strict): openai-codex/gpt-6-astra");
 	});
 
 	it("uses the native project root (ancestor .pi, git-root policy) for configure and status, failing closed on unsupported policy", async () => {
@@ -432,7 +432,7 @@ describe("code-writer extension", () => {
 		expect(restored.prompt()).toBe("BASE");
 	});
 
-	it("documents a single medium Fable model as the example while longer hierarchies stay valid", async () => {
+	it("documents one medium Fable model and refuses longer hierarchies without a write or dialog", async () => {
 		expect(EXAMPLE_HIERARCHY).toBe("anthropic-claude-code/claude-fable-5-1:medium");
 		const example = parseHierarchy(EXAMPLE_HIERARCHY.split(" "));
 		expect(example.fallbacks).toEqual([]);
@@ -448,9 +448,12 @@ describe("code-writer extension", () => {
 			agentOverrides: { "code-writer": { model: "anthropic-claude-code/claude-fable-5-1", thinking: "medium", defaultContext: "fresh", fast: false, extensions: ["/toolkit/extensions/anthropic-claude-code.ts"] } },
 			modelScope: { agents: { "code-writer": { enforce: true, strict: true, allow: ["anthropic-claude-code/claude-fable-5-1"] } } },
 		});
-		// A single-model example does not narrow the general hierarchy feature.
+		const before = readFileSync(h.settingsPath, "utf8");
+		const dialogs = h.dialogs.length;
 		await h.run("models anthropic-claude-code/claude-fable-5-1 openai-codex/gpt-6-astra openai-codex/gpt-5.6-luna:low");
-		expect(JSON.parse(readFileSync(h.settingsPath, "utf8"))).toEqual(EXPECTED_WRITE);
+		expect(h.last()?.text).toContain("supports one model per agent");
+		expect(readFileSync(h.settingsPath, "utf8")).toBe(before);
+		expect(h.dialogs).toHaveLength(dialogs);
 	});
 
 	it("routes mechanical work, substantive writing and optional review to distinct roles without a blanket cheap route", () => {
@@ -468,6 +471,9 @@ describe("code-writer extension", () => {
 		expect(text).toContain("Do not pass a per-call `model`");
 		expect(text).toContain("fresh context, no per-call model pin");
 		expect(text).not.toMatch(/model: "/);
+		expect(text).toContain("there is no automatic quota fallback");
+		expect(text).toContain("reports provider/quota failures without rotating models, even before tool activity");
+		expect(text).toContain("ask the user before a new, explicit continuation");
 		// Review is optional and never replaces parent acceptance.
 		expect(text).toContain("not an obligatory stage for every patch");
 		expect(text).toContain("they do not replace it");
@@ -479,7 +485,7 @@ describe("code-writer extension", () => {
 		expect(text).toContain("Never silently fall back to editing code yourself");
 		// One writer per checkout, explicit partial-work escalation, no task replay, honest labelling, opt-out.
 		expect(text).toContain("One writer per checkout");
-		expect(text).toContain("issue a new, explicit continuation task");
+		expect(text).toContain("a new, explicit continuation task on another approved model");
 		expect(text).toContain("Do not replay completed changes");
 		expect(text).toContain("not a sandbox or an enforced complexity classifier");
 		expect(text).toContain("None of these roles has a shell or runs tests");
@@ -630,7 +636,7 @@ describe("code-writer extension", () => {
 			expect(h.dialogs[0]!.title).toBe("Turn the code-writer routing default on for new sessions?");
 			expect(h.dialogs[0]!.body).toContain(`${h.settingsPath} (${ROUTING_DEFAULT_SETTING}: true)`);
 			expect(h.dialogs[0]!.body).toContain("future parent sessions");
-			expect(h.dialogs[0]!.body).toContain("Hierarchy in effect: 1. anthropic-claude-code/claude-fable-5-1  2. openai-codex/gpt-6-astra  3. openai-codex/gpt-5.6-luna:low");
+			expect(h.dialogs[0]!.body).toContain("Hierarchy in effect: 1. anthropic-claude-code/claude-fable-5-1");
 			expect(h.last()?.level).toBe("info");
 			expect(h.last()?.text).toContain(`Wrote ${ROUTING_DEFAULT_SETTING}: true to ${h.settingsPath}`);
 			expect(h.last()?.text).toContain("Routing source: inherited from the stored user default");

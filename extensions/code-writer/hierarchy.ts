@@ -1,7 +1,7 @@
 /**
  * Pure parsing of the human-supplied ordered model hierarchy for the
- * `code-writer` role. The first entry becomes the native primary model and the
- * rest become `fallbackModels` in exactly the requested order.
+ * `code-writer` role. Legacy lists remain parseable for diagnostics and scope
+ * checks, but the settings planner rejects multiple entries on native 0.68+.
  */
 
 export const CODE_WRITER_AGENT = "code-writer";

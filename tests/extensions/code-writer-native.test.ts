@@ -1,6 +1,6 @@
 /**
  * Opt-in check against the installed native pi-subagents package's pure
- * candidate/scope/project-root functions. It launches no agents or models.
+ * discovery/scope/project-root functions. It launches no agents or models.
  * Enable with:
  *
  *   CODE_WRITER_NATIVE_ROOT=~/.pi/agent/npm/node_modules/pi-subagents bun test tests/extensions/code-writer-native.test.ts
@@ -14,20 +14,26 @@ import { assertSupportedSubagentSettings, findConfiguredProjectRoot, planSetting
 
 const configuredRoot = process.env.CODE_WRITER_NATIVE_ROOT?.replace(/^~(?=\/|$)/, homedir());
 const nativeRoot = configuredRoot && existsSync(join(configuredRoot, "package.json")) ? configuredRoot : undefined;
-const INSPECTED_VERSION = "0.66.0";
+const INSPECTED_VERSION = "0.68.0";
 
 describe.skipIf(!nativeRoot)("code-writer native pi-subagents contract (opt-in)", () => {
 	let scratch: string;
 	let previousExclusions: string | undefined;
+	let previousAgentDir: string | undefined;
 	beforeAll(() => {
 		scratch = mkdtempSync(join(tmpdir(), "code-writer-native-"));
 		// Keep the native exclusion cache out of the real home for the duration of this suite only.
 		previousExclusions = process.env.PI_MODEL_EXCLUSIONS_PATH;
 		process.env.PI_MODEL_EXCLUSIONS_PATH = join(scratch, "exclusions.json");
+		previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = join(scratch, "agent");
+		mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });
 	});
 	afterAll(() => {
 		if (previousExclusions === undefined) delete process.env.PI_MODEL_EXCLUSIONS_PATH;
 		else process.env.PI_MODEL_EXCLUSIONS_PATH = previousExclusions;
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		if (scratch) rmSync(scratch, { recursive: true, force: true });
 	});
 
@@ -37,22 +43,24 @@ describe.skipIf(!nativeRoot)("code-writer native pi-subagents contract (opt-in)"
 		if (pkg.version !== INSPECTED_VERSION) console.warn(`code-writer was inspected against pi-subagents ${INSPECTED_VERSION}; installed ${pkg.version}`);
 	});
 
-	it("feeds the serialised override into native buildModelCandidates in the requested order and inside both scopes", async () => {
-		const fallback = await import(join(nativeRoot!, "src/runs/shared/model-fallback.ts"));
+	it("loads the serialised single-model override natively and enforces both scopes", async () => {
+		const agents = await import(join(nativeRoot!, "src/agents/agents.ts"));
 		const scope = await import(join(nativeRoot!, "src/runs/shared/model-scope.ts"));
-		const hierarchy = parseHierarchy(["anthropic-claude-code/claude-fable-5-1", "openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna:low"]);
+		const hierarchy = parseHierarchy(["anthropic-claude-code/claude-fable-5-1:medium"]);
 		const globalAllow = ["inherit", "anthropic-claude-code/claude-fable-5-1", "openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna"];
 		const plan = planSettingsUpdate({ subagents: { modelScope: { enforce: true, strict: true, allow: globalAllow } } }, hierarchy, { anthropicProviderExtensionPath: "/toolkit/extensions/anthropic-claude-code.ts" });
 		const modelScope = scope.parseModelScopeConfig((plan.settings.subagents as any).modelScope, { filePath: "settings.json" });
 		const scopes = scope.resolveModelScopesForAgent(modelScope, "code-writer", { provider: "openai-codex", id: "gpt-6-astra" });
 		expect(scopes.map((rule: { origin: string }) => rule.origin)).toEqual(["modelScope", "modelScope.agents.code-writer"]);
-		const registry = ["anthropic-claude-code/claude-fable-5-1", "openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna", "openai-codex/gpt-5.6-sol"].map((fullId) => {
-			const [provider, id] = fullId.split("/") as [string, string];
-			return { provider, id, fullId };
-		});
-		const candidates = fallback.buildModelCandidates(plan.override.model as string, plan.override.fallbackModels as string[], registry, undefined, { scope: scopes, origin: "configured" });
-		expect(candidates).toEqual(["anthropic-claude-code/claude-fable-5-1", "openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna:low"]);
-		expect(() => fallback.buildModelCandidates(plan.override.model as string, ["openai-codex/gpt-5.6-sol"], registry, undefined, { scope: scopes, origin: "configured" })).toThrow("outside the configured subagent model scope");
+		expect(Object.hasOwn(plan.override, "fallbackModels")).toBe(false);
+		for (const rule of scopes) expect(scope.checkModelScope(plan.override.model, rule, "configured")).toBeUndefined();
+		expect(scope.checkModelScope("openai-codex/gpt-6-astra", scopes[1], "configured")?.severity).toBe("error");
+		const repo = join(scratch, "discovery");
+		mkdirSync(join(repo, ".pi", "agents"), { recursive: true });
+		writeFileSync(join(repo, ".pi", "agents", "code-writer.md"), "---\nname: code-writer\ndescription: Synthetic writer\n---\nSynthetic test role.\n");
+		writeFileSync(join(repo, ".pi", "settings.json"), JSON.stringify(plan.settings));
+		const discovered = agents.discoverAgents(repo, "project");
+		expect(discovered.agents.find((agent: { name: string }) => agent.name === "code-writer")).toMatchObject({ model: hierarchy.primary.model, thinking: "medium" });
 	});
 
 	it("resolves a global inherit pattern the same way native does", async () => {
@@ -73,9 +81,9 @@ describe.skipIf(!nativeRoot)("code-writer native pi-subagents contract (opt-in)"
 		expect(() => assertSupportedSubagentSettings({ subagents: { modelScope: collision } }, "settings.json")).toThrow("unique agent names after trimming");
 		expect(() => assertSupportedSubagentSettings({ subagents: { modelScope: { allow: ["*"], agents: { " code-writer": { allow: ["*"] } } } } }, "settings.json")).toThrow("untrimmed 'code-writer' key");
 		// The rule this feature writes parses natively to exactly the same allow-list.
-		const plan = planSettingsUpdate({}, parseHierarchy(["openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna"]), { anthropicProviderExtensionPath: "/toolkit/extensions/anthropic-claude-code.ts" });
+		const plan = planSettingsUpdate({}, parseHierarchy(["openai-codex/gpt-6-astra"]), { anthropicProviderExtensionPath: "/toolkit/extensions/anthropic-claude-code.ts" });
 		const parsed = scope.parseModelScopeConfig((plan.settings.subagents as any).modelScope, meta);
-		expect(parsed.agents["code-writer"]).toEqual({ enforce: true, strict: true, allow: ["openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna"] });
+		expect(parsed.agents["code-writer"]).toEqual({ enforce: true, strict: true, allow: ["openai-codex/gpt-6-astra"] });
 	});
 
 	it("matches native findConfiguredProjectRoot on ancestor and git-root fixtures", async () => {
@@ -96,10 +104,13 @@ describe.skipIf(!nativeRoot)("code-writer native pi-subagents contract (opt-in)"
 		expect(findConfiguredProjectRoot(join(scratch, "nowhere"))).toBe(agents.findConfiguredProjectRoot(join(scratch, "nowhere")));
 	});
 
-	it("documents that native fallback is limited to retryable failures before tool activity", async () => {
-		const fallback = await import(join(nativeRoot!, "src/runs/shared/model-fallback.ts"));
-		expect(fallback.isRetryableModelFailureAttempt({ error: "usage limit reached (429)", toolCount: 0, messages: [] })).toBe(true);
-		expect(fallback.isRetryableModelFailureAttempt({ error: "usage limit reached (429)", toolCount: 1, messages: [] })).toBe(false);
-		expect(fallback.isRetryableModelFailure("bun test failed (exit 1): 3 tests failed")).toBe(false);
+	it("native discovery rejects even false and empty legacy fallbackModels", async () => {
+		const agents = await import(join(nativeRoot!, "src/agents/agents.ts"));
+		for (const [index, fallbackModels] of [false, [], ["openai-codex/gpt-5.6-luna"]].entries()) {
+			const repo = join(scratch, `legacy-${index}`);
+			mkdirSync(join(repo, ".pi"), { recursive: true });
+			writeFileSync(join(repo, ".pi", "settings.json"), JSON.stringify({ subagents: { agentOverrides: { scout: { model: "openai-codex/gpt-5.6-luna", fallbackModels } } } }));
+			expect(() => agents.discoverAgents(repo, "project")).toThrow("uses removed field 'fallbackModels'");
+		}
 	});
 });
