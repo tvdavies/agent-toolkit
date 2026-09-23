@@ -63,7 +63,7 @@ describe("shared PR readiness protocol", () => {
 
     expect(protocol).toContain("Authoritative state");
     expect(protocol).toContain("Never resolve a thread before its fix is pushed");
-    expect(protocol).toContain("Bot author");
+    expect(protocol).toContain("whether the author is a bot or a human");
     expect(protocol).toContain("Ready-to-merge criteria");
     expect(protocol).toContain("The absence of failing checks or unresolved threads alone is never enough");
     expect(protocol).toContain("three no-progress cycles");

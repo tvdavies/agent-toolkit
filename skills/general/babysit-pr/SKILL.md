@@ -5,7 +5,7 @@ compatibility: Requires git, GitHub CLI, jq, network access, and a repository wi
 disable-model-invocation: true
 metadata:
   author: tvd
-  version: 1.1.2
+  version: 1.2.0
 ---
 
 # Babysit PR
@@ -21,6 +21,7 @@ Use this skill only after the user explicitly asks to babysit, watch, monitor, a
 - Re-fetch the remote PR head SHA immediately before every push. If it moved, integrate the new head safely and revalidate before pushing.
 - Keep one writer and the same worktree across monitoring cycles. Do not discard dirty work or create competing worktrees.
 - Resolve a review thread only after the corresponding pushed commit exists.
+- End every review thread, human or bot, with a reply and a resolve. Change code only when the feedback warrants it; a reply that explains why no change is needed is enough. Leave a thread open only for a `discuss` question that is waiting on the reviewer's answer.
 - Stop on unsafe ambiguity, unavailable push permission, repeated no-progress, or an operation that would require violating these rules.
 
 ## Invocation target — process first
@@ -106,15 +107,16 @@ Keep `WT` for the entire monitoring session. All installs, edits, conflict resol
 
 1. Fetch the shared blocker inventory and authoritative current-head state. Read every unresolved thread, top-level review comment, latest review, and failed-check log.
 2. Handle merge conflicts first, inside `WT`, using the repository's established base-update policy and the conflict publication cycle below. Revalidate the complete result. Stop rather than guess if conflict resolution changes product behaviour or cannot be completed safely.
-3. Classify feedback as `apply`, `discuss`, or `decline` under the shared protocol:
+3. Classify feedback as `apply`, `acknowledge`, `discuss`, or `decline` under the shared protocol:
    - Apply correct, clear feedback by default.
+   - Acknowledge valid or informational points that need no change, with the reason (or the follow-up ticket).
    - Ask the reviewer a focused question when a genuine tradeoff or ambiguity remains.
    - Decline only with verified code- or requirement-based reasoning.
 4. Diagnose failed checks from their logs. Fix code failures at their root. Rerun a job without code changes only when evidence shows a genuine infrastructure or test flake.
 5. Group related code changes, run relevant validation in `WT`, and inspect the full diff.
 6. Immediately before pushing, fetch the PR again, confirm it is still open, and compare `headRefOid` with the expected remote head. If another commit landed, update `WT`, reconsider affected feedback, and rerun validation.
 7. Commit logical changes and push normally to the actual PR head branch. Temporary local worktree branches use the explicit `HEAD:PR_HEAD_BRANCH` refspec. Never use force.
-8. After the pushed commit is visible on GitHub, prepare concise human-facing replies, post them with the shared reply script, and resolve threads according to the shared bot/human matrix.
+8. After the pushed commit is visible on GitHub, prepare concise human-facing replies, post them with the shared reply script, and resolve every `apply`, `acknowledge` and `decline` thread, human or bot. Keep only `discuss` threads open, and only while the question awaits the reviewer.
 9. Re-fetch blockers and authoritative state for the new head. Follow the shared protocol's automated review request policy: request missing current-head review when needed, without a separate billing approval, and do not duplicate a review already requested or running. Require a clean intended `git status` after each successful push.
 
 Do not ask the user to approve a routine remediation plan. Ask only when a decision is unsafe to make autonomously, such as contradictory product requirements, destructive data behaviour, or permission to perform a prohibited operation. Prohibited operations remain prohibited even if they would be convenient.
@@ -159,7 +161,7 @@ Stop successfully when the snapshot proves either:
 - `MERGED`: `mergedAt` is set or state is merged; or
 - `READY TO MERGE`: every applicable criterion in the shared protocol holds for this exact head.
 
-A PR that is green but still missing a required approval or requested review is not ready, not blocked, and not finished — it is waiting. Required reviews, pending re-reviews, and unanswered human threads are watched states: continue to Phase 5 so an approval, review, comment, or push wakes the agent, and give up only through the inactivity budget there.
+A PR that is green but still missing a required approval or requested review is not ready, not blocked, and not finished — it is waiting. Required reviews, pending re-reviews, and open `discuss` questions awaiting a reviewer are watched states: continue to Phase 5 so an approval, review, comment, or push wakes the agent, and give up only through the inactivity budget there.
 
 Babysitting never performs the merge.
 
@@ -199,7 +201,7 @@ Stop and report one of:
 - `READY TO MERGE` with the PR URL and exact head SHA
 - `MERGED` with the PR URL
 - `CLOSED UNMERGED`
-- `TIMED OUT` when the inactivity budget expired with the PR unchanged: report the budget that elapsed, the exact waiting state (for example "all checks green on HEAD_SHA, awaiting required human approval"), and the preserved worktree path so a later invocation can resume
+- `TIMED OUT` when the inactivity budget expired with the PR unchanged, after verifying that every handled thread is replied to and resolved: report the budget that elapsed, the exact waiting state (for example "all checks green on HEAD_SHA, awaiting required human approval"), and the preserved worktree path so a later invocation can resume
 - `BLOCKED` with the exact permission, authentication, unsafe decision, repeated failure, or no-progress reason
 - `INTERRUPTED` with the preserved worktree path and current state
 
@@ -241,4 +243,5 @@ The PR head belongs to a fork and authenticated push fails. Do not create a repl
 - **Remote head changed before push:** fetch the new head, integrate it in `WT`, re-read affected feedback, revalidate, and retry a normal push.
 - **Adoption returns the primary checkout:** create a managed temporary branch from the exact `headRefOid`; do not mutate the returned primary path.
 - **A check repeatedly fails after a verified fix:** inspect the newest logs and stop after the bounded no-progress limit if no new root cause emerges.
-- **Human discussion remains open:** leave a human `discuss` or `decline` thread unresolved and wait for a response; do not claim readiness.
+- **Threads left open after handling:** every handled thread needs a reply and a resolve, including human threads you applied, acknowledged or declined. Before reporting `READY TO MERGE`, `TIMED OUT` or any final state, re-query all threads and resolve any handled one still open.
+- **Open `discuss` question:** keep only that thread open, wait for the reviewer's answer, then act, reply and resolve. Report it as the pending question; do not claim readiness.

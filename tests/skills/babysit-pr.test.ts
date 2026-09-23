@@ -154,6 +154,7 @@ function runWaiter(args: string[]) {
     cwd: temp,
     encoding: "utf8",
     timeout: 10_000,
+    maxBuffer: 16 * 1024 * 1024,
     env: {
       ...process.env,
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
@@ -267,6 +268,24 @@ describe("babysit-pr skill", () => {
     expect(source).not.toContain("treat a routine babysit invocation as a budget increase");
     expect(source).toContain("Do not take another task's heavy-validation slot");
     expect(source).toContain("A green test/typecheck job does not prove a full application build");
+  });
+
+  it("ends every conversation with a reply and a resolve", () => {
+    const source = readFileSync(skillFile, "utf8");
+    const protocol = readFileSync(join(root, "skills/general/_shared/pr-readiness/PROTOCOL.md"), "utf8");
+
+    expect(source).toContain("End every review thread, human or bot, with a reply and a resolve");
+    expect(source).toContain("Change code only when the feedback warrants it");
+    expect(source).toContain("`apply`, `acknowledge`, `discuss`, or `decline`");
+    expect(source).toContain("resolve every `apply`, `acknowledge` and `decline` thread, human or bot");
+    expect(source).toContain("re-query all threads and resolve any handled one still open");
+    expect(source).not.toContain("leave a human `discuss` or `decline` thread unresolved");
+
+    expect(protocol).toContain("### Every conversation ends with a reply and a resolve");
+    expect(protocol).toContain("A reply does not require a code change");
+    expect(protocol).toContain("Use `--no-resolve` only for a `discuss` reply");
+    expect(protocol).toContain("every review thread is resolved, each with a reply that records the outcome");
+    expect(protocol).not.toContain("| decline | reply and resolve | reply with `--no-resolve` |");
   });
 
   it("requests necessary current-head reviews without billing approval or duplicate requests", () => {
@@ -384,6 +403,21 @@ describe("wait-for-pr-change.sh", () => {
     expect(event.oldHash).not.toBe(event.newHash);
     expect(event.snapshot.pr.headRefOid).toBe("def456");
     expect(JSON.parse(readFileSync(baseline, "utf8")).pr.headRefOid).toBe("def456");
+  });
+
+  it("reports a change whose snapshot exceeds the argument size limit", () => {
+    const baseline = join(temp, "baseline.json");
+    writeFileSync(baseline, `${snapshot()}\n`);
+    const threads = defaultThreadState();
+    // ~2 MB of review text: far above a single execve argument limit.
+    threads.data.repository.pullRequest.reviewThreads.nodes[0]!.comments.nodes[0]!.body = "x".repeat(2_000_000);
+    writeFileSync(threadState, `${JSON.stringify(threads)}\n`);
+
+    const result = runWaiter(["wait", "7", "--repo=acme/widgets", `--baseline=${baseline}`, "--interval=1", "--timeout=3"]);
+    expect(result.status, result.stderr).toBe(0);
+    const event = JSON.parse(result.stdout);
+    expect(event.event).toBe("changed");
+    expect(event.snapshot.reviewThreads.length).toBe(2);
   });
 
   it("detects settled conflict metadata while new-head checks are still pending", () => {

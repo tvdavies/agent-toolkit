@@ -108,6 +108,31 @@ fi
 owner="${repo%%/*}"
 name="${repo#*/}"
 
+# Large JSON goes through temp files and --slurpfile, never --argjson: PR
+# bodies and review threads can exceed the kernel's single-argument limit.
+json_file() {
+  local file
+  file=$(mktemp "${TMPDIR:-/tmp}/babysit-pr-json.XXXXXX") || return 1
+  printf '%s\n' "$1" > "$file" || { rm -f "$file"; return 1; }
+  printf '%s' "$file"
+}
+
+jq_with_files() {
+  # usage: jq_with_files NAME=JSON... -- JQ_ARGS...
+  local files=() args=() pair name file status=0
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    pair="$1"; shift
+    name="${pair%%=*}"
+    file=$(json_file "${pair#*=}") || { rm -f "${files[@]}"; return 1; }
+    files+=("$file")
+    args+=(--slurpfile "$name" "$file")
+  done
+  shift
+  jq "${args[@]}" "$@" || status=$?
+  rm -f "${files[@]}"
+  return "$status"
+}
+
 collect_threads() {
   local all='[]'
   local cursor=""
@@ -133,7 +158,7 @@ collect_threads() {
         }
       }') || return 1
     nodes=$(jq -c '.data.repository.pullRequest.reviewThreads.nodes // []' <<<"$response") || return 1
-    all=$(jq -cn --argjson old "$all" --argjson new "$nodes" '$old + $new') || return 1
+    all=$(jq_with_files old="$all" new="$nodes" -- -cn '$old[0] + $new[0]') || return 1
     has_next=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false' <<<"$response") || return 1
     [ "$has_next" = "true" ] || break
     cursor=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' <<<"$response") || return 1
@@ -158,7 +183,7 @@ collect_threads() {
           }
         }') || return 1
       comment_nodes=$(jq -c '.data.node.comments.nodes // []' <<<"$comment_response") || return 1
-      comments=$(jq -cn --argjson old "$comments" --argjson new "$comment_nodes" '$old + $new') || return 1
+      comments=$(jq_with_files old="$comments" new="$comment_nodes" -- -cn '$old[0] + $new[0]') || return 1
       comments_more=$(jq -r '.data.node.comments.pageInfo.hasNextPage // false' <<<"$comment_response") || return 1
       if [ "$comments_more" = "true" ]; then
         comment_cursor=$(jq -r '.data.node.comments.pageInfo.endCursor // empty' <<<"$comment_response") || return 1
@@ -167,8 +192,8 @@ collect_threads() {
         comment_cursor=""
       fi
     done
-    all=$(jq -c --arg id "$thread_id" --argjson comments "$comments" '
-      map(if .id == $id then .comments.nodes = $comments | .comments.pageInfo = {hasNextPage:false,endCursor:null} else . end)
+    all=$(jq_with_files comments="$comments" -- -c --arg id "$thread_id" '
+      map(if .id == $id then .comments.nodes = $comments[0] | .comments.pageInfo = {hasNextPage:false,endCursor:null} else . end)
     ' <<<"$all") || return 1
   done < <(jq -r '.[] | select(.comments.pageInfo.hasNextPage == true) | [.id, .comments.pageInfo.endCursor] | @tsv' <<<"$all")
 
@@ -218,7 +243,8 @@ collect_snapshot() {
   reviews=$(collect_submitted_reviews) || return 1
   threads=$(collect_threads) || return 1
 
-  jq -Scn --arg repo "$repo" --argjson pr "$pr_json" --argjson comments "$comments" --argjson reviews "$reviews" --argjson threads "$threads" '
+  jq_with_files prs="$pr_json" commentLists="$comments" reviewLists="$reviews" threadLists="$threads" -- -Scn --arg repo "$repo" '
+    $prs[0] as $pr | $commentLists[0] as $comments | $reviewLists[0] as $reviews | $threadLists[0] as $threads |
     def actor: if . == null then null else {login:(.login // null)} end;
     def canonical_checks:
       map(del(.startedAt, .completedAt) + {startedAt:(.startedAt // null), completedAt:(.completedAt // null)})
@@ -293,18 +319,18 @@ while :; do
     failures=0
     new_hash=$(hash_file "$current_file")
     if [ "$new_hash" != "$old_hash" ]; then
-      snapshot=$(cat "$current_file")
       temporary=$(mktemp "$baseline_dir/.babysit-pr-update.XXXXXX")
       cp "$current_file" "$temporary"
       mv "$temporary" "$baseline"
+      # --slurpfile, not --argjson: a large snapshot exceeds ARG_MAX.
       jq -cn \
         --arg event changed \
         --arg repository "$repo" \
         --argjson pr "$pr" \
         --arg oldHash "$old_hash" \
         --arg newHash "$new_hash" \
-        --argjson snapshot "$snapshot" \
-        '{event:$event,repository:$repository,pr:$pr,oldHash:$oldHash,newHash:$newHash,snapshot:$snapshot}'
+        --slurpfile snapshots "$baseline" \
+        '{event:$event,repository:$repository,pr:$pr,oldHash:$oldHash,newHash:$newHash,snapshot:$snapshots[0]}'
       exit 0
     fi
   else

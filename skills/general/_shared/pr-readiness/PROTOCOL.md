@@ -70,6 +70,7 @@ Read every unresolved thread and every failed-check log before deciding an actio
 Review feedback actions:
 
 - `apply`: default when the point is correct and the fix is clear
+- `acknowledge`: the point is valid or informational but needs no code change (already handled, intentional, or out of scope with a named follow-up); say why in the reply
 - `discuss`: a real question, ambiguity, or tradeoff requires reviewer input
 - `decline`: the suggestion conflicts with verified code, requirements, or scope; include a specific code-grounded reason
 
@@ -98,15 +99,23 @@ For every applied item:
 
 Never resolve a thread before its fix is pushed.
 
-| Action | Bot author | Human author |
+### Every conversation ends with a reply and a resolve
+
+Every review thread on the PR, human or bot, must end resolved, and never without a reply that says what happened. A reply does not require a code change: make one only when the feedback warrants it. An unanswered or unresolved thread is never an acceptable end state, and a green PR with open threads is not ready. Repositories commonly enforce this through required conversation resolution, so an open thread is a merge blocker, not a courtesy.
+
+| Action | Reply | Then |
 | --- | --- | --- |
-| apply | reply and resolve | reply and resolve |
-| discuss | reply and resolve | reply with `--no-resolve` |
-| decline | reply and resolve | reply with `--no-resolve` |
+| apply | what changed, with the pushed SHA | resolve |
+| acknowledge | why no change is needed (or the follow-up ticket) | resolve |
+| decline | the code- or requirement-based reason | resolve |
+| discuss | the concrete question | leave open **only** until the reviewer answers, then apply, acknowledge or decline, reply and resolve |
 
-Bots do not normally re-engage, so leaving their handled thread open creates a stale blocker. Humans own resolution when the response asks for discussion or declines their suggestion.
+- Resolve immediately after replying for `apply`, `acknowledge` and `decline`, whether the author is a bot or a human. The reply records the reasoning; the resolve clears the blocker. A reviewer who disagrees can reopen the thread or comment again, and that wakes the next cycle.
+- Use `--no-resolve` only for a `discuss` reply that asks the reviewer something the agent cannot decide safely. Track it as an open question: when the reviewer answers, act on the answer and resolve. If the inactivity budget ends first, report it as the pending question, never as "done".
+- When a later comment or push changes a previous answer, correct the reply in the thread before resolving it.
+- Before claiming `READY TO MERGE`, re-query every thread (not only the blocker inventory) and verify that none is unresolved and none lacks a reply. Resolve any handled thread left open by an earlier cycle, after replying if it has no reply.
 
-For applied feedback, use a concise reply such as `Done in SHORT_SHA.` For discuss or decline, state the question or reason directly.
+For applied feedback, use a concise reply such as `Done in SHORT_SHA.` For acknowledge, decline or discuss, state the reason or question directly.
 
 Top-level review comments have no resolvable thread. Apply or triage them, but do not post a redundant top-level PR comment unless the caller explicitly requires a public response or a human reviewer needs an answer that cannot be posted in-thread.
 
@@ -115,7 +124,7 @@ Top-level review comments have no resolvable thread. Apply or triage them, but d
 A PR is ready only when all applicable conditions hold for the current head:
 
 - it is non-draft unless the caller intentionally manages drafts
-- no unresolved actionable review threads remain
+- every review thread is resolved, each with a reply that records the outcome (see "Every conversation ends with a reply and a resolve")
 - no active `CHANGES_REQUESTED` review remains
 - required/relevant checks are green, not absent or pending
 - expected automated review has examined the current head
