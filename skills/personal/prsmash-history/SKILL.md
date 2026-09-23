@@ -12,6 +12,12 @@ Use this skill to answer questions about reviews performed by `prsmash`.
 
 ## Data Location
 
+Since 2026-09-23, scheduled prsmash runs happen on **sal**, not the desktop. If
+`hostname` is not `sal.tvdavies.com`, run the commands below over SSH, for
+example `ssh sal 'find ~/.prsmash/runs ...'`, or quote them for sal's fish
+shell with `ssh sal 'bash -c "..."'`. Runs before the cutover remain in the
+desktop's `~/.prsmash` until the 7-day retention pruner removes them.
+
 `prsmash` stores logs under:
 
 ```bash
