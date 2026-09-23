@@ -54,7 +54,7 @@ for (const native of [false, true]) {
       }
       expect(headers).toHaveLength(2);
       for (const requestHeaders of headers) {
-        expect(requestHeaders.get("user-agent")).toBe(config.headers["user-agent"]);
+        expect(requestHeaders.get("user-agent")).toBe(config.headers["user-agent"]!);
         expect(requestHeaders.get("user-agent")).not.toContain("2.1.261");
       }
     } finally {
