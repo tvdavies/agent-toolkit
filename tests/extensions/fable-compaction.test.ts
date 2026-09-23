@@ -5,10 +5,11 @@ import type { AssistantMessage, Context, Message, Model } from "@earendil-works/
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { streamAnthropic } from "@earendil-works/pi-ai/anthropic";
 import { Type } from "typebox";
-import { MODELS, ensureFableAdaptiveThinking, stripCompactedThinking } from "../../extensions/anthropic-claude-code";
+import { MODELS, ensureRequiredAdaptiveThinking, stripCompactedThinking } from "../../extensions/anthropic-claude-code";
 
 const nativeModule = process.env.PI_TEST_ANTHROPIC_API_MODULE;
 const fable = MODELS.find((model) => model.id === "claude-fable-5-1")!;
+const opus = MODELS.find((model) => model.id === "claude-opus-5-5")!;
 const redacted = { type: "thinking" as const, thinking: "[Reasoning redacted]", thinkingSignature: "redacted-old-signature", redacted: true };
 const retained: AssistantMessage = {
   role: "assistant", api: "anthropic-messages", provider: "anthropic-claude-code", model: fable.id,
@@ -42,6 +43,21 @@ test("Fable 5.1 stays adaptive without enabling unsupported per-message effort",
   expect(fable.contextWindow).toBe(272_000);
   expect(fable.contextWindow).toBe(MODELS.find((model) => model.id === "claude-fable-5")!.contextWindow);
   expect(MODELS.find((model) => model.id === "claude-fable-5")?.thinkingLevelMap?.off).toBeUndefined();
+});
+
+test("Opus 5.5 declares native effort levels and the existing cost-control window", () => {
+  expect(opus.name).toBe("Claude Opus 5.5 (Claude Code creds)");
+  expect(opus.reasoning).toBe(true);
+  expect(opus.compat).toEqual({ forceAdaptiveThinking: true, supportsTemperature: false });
+  expect(opus.thinkingLevelMap).toEqual({ off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" });
+  expect(opus.cost).toEqual({ input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 });
+  expect(opus.input).toEqual(["text", "image"]);
+  expect(opus.maxTokens).toBe(128_000);
+  expect(opus.contextWindow).toBe(272_000);
+  for (const id of [fable.id, "claude-opus-5"]) {
+    expect(opus.contextWindow).toBe(MODELS.find((model) => model.id === id)!.contextWindow);
+  }
+  expect(new Set(MODELS.map((model) => model.id)).size).toBe(MODELS.length);
 });
 
 test("uncompacted append-only history is passed through unchanged", () => {
@@ -88,19 +104,21 @@ test("latest compaction supersedes the earlier boundary", () => {
 });
 
 test("summary payload normalisation is scoped and non-mutating", () => {
-  for (const thinking of [undefined, { type: "disabled" }]) {
-    const payload = { model: fable.id, thinking, output_config: { effort: "low" }, max_tokens: 2048, messages: [{ role: "user", content: "Summary request" }] };
-    const before = JSON.stringify(payload);
-    expect(ensureFableAdaptiveThinking(payload)).toEqual({ ...payload, thinking: { type: "adaptive" } });
-    expect(JSON.stringify(payload)).toBe(before);
+  for (const model of [fable.id, opus.id]) {
+    for (const thinking of [undefined, { type: "disabled" }]) {
+      const payload = { model, thinking, output_config: { effort: "low" }, max_tokens: 2048, messages: [{ role: "user", content: "Summary request" }] };
+      const before = JSON.stringify(payload);
+      expect(ensureRequiredAdaptiveThinking(payload)).toEqual({ ...payload, thinking: { type: "adaptive" } });
+      expect(JSON.stringify(payload)).toBe(before);
+    }
+    const adaptive = { model, thinking: { type: "adaptive", display: "summarized" } };
+    expect(ensureRequiredAdaptiveThinking(adaptive)).toBe(adaptive);
   }
-  const adaptive = { model: fable.id, thinking: { type: "adaptive", display: "summarized" } };
-  expect(ensureFableAdaptiveThinking(adaptive)).toBe(adaptive);
   for (const model of ["claude-fable-5", "claude-opus-5", "other-model"]) {
     const payload = { model, thinking: { type: "disabled" } };
-    expect(ensureFableAdaptiveThinking(payload)).toBe(payload);
+    expect(ensureRequiredAdaptiveThinking(payload)).toBe(payload);
   }
-  expect(ensureFableAdaptiveThinking(null)).toBeNull();
+  expect(ensureRequiredAdaptiveThinking(null)).toBeNull();
 });
 
 type Stream = (model: Model<"anthropic-messages">, context: Context, options: {
@@ -124,7 +142,9 @@ function response(model: string): Response {
   return new Response(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
 }
 
-async function wireRegression(stream: Stream) {
+async function wireRegression(stream: Stream, definition = fable) {
+  const modelRetained = { ...retained, model: definition.id };
+  const entries = [{ type: "compaction", id: "compact", retainedTail: [modelRetained, toolResult] }];
   const requests: Array<{ headers: Headers; body: Record<string, unknown> }> = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const body = record(await request.json());
@@ -135,19 +155,19 @@ async function wireRegression(stream: Stream) {
     if (text.includes("Compacted summary") && (text.includes("original-prefix-signature") || text.includes("redacted-old-signature"))) {
       return Response.json({ type: "error", error: { type: "invalid_request_error", message: "thinking prefix binding mismatch" } }, { status: 400 });
     }
-    return response(fable.id);
+    return response(definition.id);
   } });
   try {
-    const model: Model<"anthropic-messages"> = { ...fable, api: "anthropic-messages", provider: "anthropic-claude-code", baseUrl: server.url.toString().replace(/\/$/, "") };
-    const context: Context = { systemPrompt: "Stable system", tools: [{ name: "read", description: "Read fixture", parameters: Type.Object({ path: Type.String() }) }], messages: [{ role: "user", content: "Compacted summary", timestamp: 12 }, retained, toolResult] };
-    const options = { apiKey: "fixture-only-key", thinkingEnabled: true, effort: "low" as const, maxRetries: 0, onPayload: ensureFableAdaptiveThinking };
+    const model: Model<"anthropic-messages"> = { ...definition, api: "anthropic-messages", provider: "anthropic-claude-code", baseUrl: server.url.toString().replace(/\/$/, "") };
+    const context: Context = { systemPrompt: "Stable system", tools: [{ name: "read", description: "Read fixture", parameters: Type.Object({ path: Type.String() }) }], messages: [{ role: "user", content: "Compacted summary", timestamp: 12 }, modelRetained, toolResult] };
+    const options = { apiKey: "fixture-only-key", thinkingEnabled: true, effort: "low" as const, maxRetries: 0, onPayload: ensureRequiredAdaptiveThinking };
     const before = JSON.stringify(context);
     expect((await stream(model, context, options).result()).stopReason).toBe("error"); // reproduces old bug
-    const filtered = { ...context, messages: stripCompactedThinking(context.messages, oldStyleEntries) };
+    const filtered = { ...context, messages: stripCompactedThinking(context.messages, entries) };
     const answer = await stream(model, filtered, options).result();
     expect(answer.stopReason).toBe("stop");
     const next: Context = { ...context, messages: [...context.messages, answer, { role: "user", content: "Continue", timestamp: Date.now() }] };
-    expect((await stream(model, { ...next, messages: stripCompactedThinking(next.messages, selfContainedEntries) }, options).result()).stopReason).toBe("stop");
+    expect((await stream(model, { ...next, messages: stripCompactedThinking(next.messages, entries) }, options).result()).stopReason).toBe("stop");
     expect(JSON.stringify(context)).toBe(before);
     const continuation = requests.at(-1)!;
     expect(JSON.stringify(continuation.body.messages)).not.toContain("original-prefix-signature");
@@ -164,13 +184,44 @@ async function wireRegression(stream: Stream) {
   } finally { server.stop(true); }
 }
 
-test("pinned SDK wire regression: compacted tool turns and adaptive summaries", async () => {
-  await wireRegression(streamAnthropic);
+test.skipIf(!nativeModule)("Opus 5.5 native picker levels map to request-level adaptive effort, including max", async () => {
+  if (!nativeModule || !isAbsolute(nativeModule)) throw new Error("PI_TEST_ANTHROPIC_API_MODULE must be an absolute local module path");
+  const moduleUrl = pathToFileURL(nativeModule);
+  const { getSupportedThinkingLevels } = await import(new URL("../models.js", moduleUrl).href);
+  const { streamSimple } = await import(moduleUrl.href);
+  const levels = ["low", "medium", "high", "xhigh", "max"];
+  const requests: Record<string, unknown>[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    requests.push(record(await request.json()));
+    return response(opus.id);
+  } });
+  try {
+    const model = { ...opus, api: "anthropic-messages", provider: "anthropic-claude-code", baseUrl: server.url.toString().replace(/\/$/, "") };
+    expect(getSupportedThinkingLevels(model)).toEqual(levels);
+    for (const level of levels) {
+      const answer = await streamSimple(model, { messages: [{ role: "user", content: "Synthetic fixture", timestamp: 0 }] }, {
+        apiKey: "fixture-only-key", reasoning: level, maxRetries: 0, maxTokens: 2048,
+        onPayload: ensureRequiredAdaptiveThinking,
+      }).result();
+      expect(answer.stopReason).toBe("stop");
+      const payload = requests.at(-1)!;
+      expect(payload.model).toBe(opus.id);
+      expect(record(payload.thinking).type).toBe("adaptive");
+      expect(record(payload.output_config).effort).toBe(level);
+      expect(JSON.stringify(payload.messages)).not.toContain('"output_config"');
+    }
+  } finally { server.stop(true); }
 });
 
-test.skipIf(!nativeModule)("installed native SDK wire regression", async () => {
-  if (!nativeModule || !isAbsolute(nativeModule)) throw new Error("PI_TEST_ANTHROPIC_API_MODULE must be an absolute local module path");
-  const api: unknown = await import(pathToFileURL(nativeModule).href);
-  if (typeof record(api).stream !== "function") throw new Error("Native Anthropic stream export unavailable");
-  await wireRegression(record(api).stream as Stream);
-});
+for (const definition of [fable, opus]) {
+  test(`${definition.id} pinned SDK wire regression: compacted tool turns and adaptive summaries`, async () => {
+    await wireRegression(streamAnthropic, definition);
+  });
+
+  test.skipIf(!nativeModule)(`${definition.id} installed native SDK wire regression`, async () => {
+    if (!nativeModule || !isAbsolute(nativeModule)) throw new Error("PI_TEST_ANTHROPIC_API_MODULE must be an absolute local module path");
+    const api: unknown = await import(pathToFileURL(nativeModule).href);
+    if (typeof record(api).stream !== "function") throw new Error("Native Anthropic stream export unavailable");
+    await wireRegression(record(api).stream as Stream, definition);
+  });
+}

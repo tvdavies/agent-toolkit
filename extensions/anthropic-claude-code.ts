@@ -25,7 +25,7 @@ type OAuthToken = {
   rateLimitTier?: string;
 };
 
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 type ProviderModel = {
   id: string;
@@ -37,7 +37,7 @@ type ProviderModel = {
   maxTokens: number;
   // Required for adaptive-thinking models (Opus 4.6+, Sonnet 4.6). Without this the
   // provider falls back to budget-based thinking and never sends an effort level.
-  compat?: { forceAdaptiveThinking?: boolean };
+  compat?: { forceAdaptiveThinking?: boolean; supportsTemperature?: boolean };
   // Maps pi thinking levels to provider effort values. xhigh is only surfaced in the
   // UI when this maps it to a defined value (verified against the Anthropic API).
   thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
@@ -45,6 +45,9 @@ type ProviderModel = {
 
 const PROVIDER_NAME = "anthropic-claude-code";
 const PROVIDER_API = "anthropic-messages" as Api;
+// Match Pi's native Anthropic client. CPA API-key requests do not get the
+// native OAuth user-agent and otherwise inherit the proxy's stale fallback.
+const CLAUDE_CODE_HEADERS = { "user-agent": "claude-cli/2.1.280 (external, sdk-cli)" };
 const CREDENTIALS_PATH = path.join(os.homedir(), ".claude", ".credentials.json");
 const REFRESH_URL = process.env.PI_CLAUDE_CODE_REFRESH_URL || "https://console.anthropic.com/v1/oauth/token";
 const PROVIDER_BASE_URL = process.env.PI_CLAUDE_CODE_BASE_URL || "https://api.anthropic.com";
@@ -154,6 +157,20 @@ export const MODELS: ProviderModel[] = [
     thinkingLevelMap: { xhigh: "xhigh" },
     input: ["text", "image"],
     cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    contextWindow: 272_000,
+    maxTokens: 128_000,
+  },
+  {
+    id: "claude-opus-5-5",
+    name: "Claude Opus 5.5 (Claude Code creds)",
+    reasoning: true,
+    // Use request-level effort, as for Fable 5.1: CPA rejects per-message effort.
+    compat: { forceAdaptiveThinking: true, supportsTemperature: false },
+    // Pi's native catalog: adaptive only, with native xhigh and max effort.
+    thinkingLevelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
+    input: ["text", "image"],
+    cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+    // Match Fable 5.1 / Opus 5's cost-control window instead of the full 1M.
     contextWindow: 272_000,
     maxTokens: 128_000,
   },
@@ -468,10 +485,15 @@ export function stripCompactedThinking<T extends AgentMessage>(messages: T[], br
   return changed ? filtered : messages;
 }
 
-/** Some summarisation callers omit reasoning; Fable 5.1 cannot disable it. */
-export function ensureFableAdaptiveThinking(payload: unknown): unknown {
+function requiresAdaptiveThinking(modelId: unknown): boolean {
+  return MODELS.some((model) => model.id === modelId
+    && model.compat?.forceAdaptiveThinking === true && model.thinkingLevelMap?.off === null);
+}
+
+/** Some summarisation callers omit reasoning; adaptive-only models cannot disable it. */
+export function ensureRequiredAdaptiveThinking(payload: unknown): unknown {
   const body = objectRecord(payload);
-  if (body?.model !== "claude-fable-5-1") return payload;
+  if (!body || !requiresAdaptiveThinking(body.model)) return payload;
   const thinking = objectRecord(body.thinking);
   if (body.thinking !== undefined && thinking?.type !== "disabled") return payload;
   return { ...body, thinking: { ...thinking, type: "adaptive" } };
@@ -589,6 +611,7 @@ async function registerClaudeCodeProvider(pi: ExtensionAPI) {
     baseUrl: PROVIDER_BASE_URL,
     api: PROVIDER_API,
     apiKey,
+    headers: CLAUDE_CODE_HEADERS,
     models: MODELS,
   });
 
@@ -724,13 +747,13 @@ export default async function (pi: ExtensionAPI) {
   });
 
   pi.on("context", (event, ctx) => {
-    if (!isClaudeCodeProvider(ctx) || ctx.model?.id !== "claude-fable-5-1") return;
+    if (!isClaudeCodeProvider(ctx) || !requiresAdaptiveThinking(ctx.model?.id)) return;
     const messages = stripCompactedThinking(event.messages, ctx.sessionManager.getBranch());
     if (messages !== event.messages) return { messages };
   });
 
   pi.on("before_provider_request", async (event, ctx) => {
     if (!isClaudeCodeProvider(ctx)) return;
-    return rewriteSystemInPayload(ensureFableAdaptiveThinking(event.payload));
+    return rewriteSystemInPayload(ensureRequiredAdaptiveThinking(event.payload));
   });
 }
