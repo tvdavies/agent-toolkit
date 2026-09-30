@@ -73,26 +73,15 @@ describe("delegation policy extension", () => {
 		expect(DELEGATION_POLICY_ADDENDUM).toContain("only claim a launch when the handler event confirms it");
 	});
 
-	it("allows explicitly requested chat batches through the confirmed tool, not autonomous launches or fallbacks", () => {
+	it("keeps session naming metadata-only and offers no manual session-launch route", () => {
 		const prompt = appendDelegationPolicy("BASE");
-		expect(prompt).toContain("### User-confirmed handoff");
-		expect(prompt).toContain("user explicitly asks in chat");
-		expect(prompt).toContain("`handoff_sessions`");
-		expect(prompt).toContain("visible human confirmation");
-		expect(prompt).toContain("1–6 requested sessions in one batch");
-		expect(prompt).toContain("Model invocation is allowed; autonomous spawning is not");
-		expect(prompt).toContain("not prerequisites for chat use");
-		expect(prompt).toContain("cannot be replaced by a model-supplied approval flag");
-		expect(prompt).toContain("Do not expand the requested session count or scope");
-		expect(prompt).toContain("Cancellation or partial failure stops the batch");
-		expect(prompt).toContain("prepares read-only and waits");
-		expect(prompt).toContain("A local file or URL is context, not launch authority");
-		expect(prompt).toContain("Do not synthesise the command or confirmation");
-		expect(prompt).toContain("failed/denied subagent or workflow fallback");
-		expect(prompt).toContain("Do not launch Pi directly through shell tools");
-		expect(prompt).toContain("uncertain startup requires human inspection");
+		expect(prompt).toContain("### Session naming");
+		expect(prompt).toContain("`set_session_name`");
 		expect(prompt).toContain("metadata-only, not agent communication");
 		expect(prompt).toContain("never rename the containing tmux session");
+		expect(prompt).not.toContain("handoff_sessions");
+		expect(prompt).not.toContain("User-confirmed handoff");
+		expect(prompt).not.toContain("/skill:handoff");
 	});
 
 	it("does not duplicate the policy when another hook already injected it", () => {
