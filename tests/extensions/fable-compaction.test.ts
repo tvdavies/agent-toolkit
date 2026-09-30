@@ -10,6 +10,7 @@ import { MODELS, ensureRequiredAdaptiveThinking, stripCompactedThinking } from "
 const nativeModule = process.env.PI_TEST_ANTHROPIC_API_MODULE;
 const fable = MODELS.find((model) => model.id === "claude-fable-5-1")!;
 const opus = MODELS.find((model) => model.id === "claude-opus-5-5")!;
+const sonnet = MODELS.find((model) => model.id === "claude-sonnet-5-5")!;
 const redacted = { type: "thinking" as const, thinking: "[Reasoning redacted]", thinkingSignature: "redacted-old-signature", redacted: true };
 const retained: AssistantMessage = {
   role: "assistant", api: "anthropic-messages", provider: "anthropic-claude-code", model: fable.id,
@@ -60,6 +61,17 @@ test("Opus 5.5 declares native effort levels and the existing cost-control windo
   expect(new Set(MODELS.map((model) => model.id)).size).toBe(MODELS.length);
 });
 
+test("Sonnet 5.5 matches the native catalog without unsupported CPA per-message effort", () => {
+  expect(sonnet.name).toBe("Claude Sonnet 5.5 (Claude Code creds)");
+  expect(sonnet.reasoning).toBe(true);
+  expect(sonnet.compat).toEqual({ forceAdaptiveThinking: true, supportsTemperature: false });
+  expect(sonnet.thinkingLevelMap).toEqual({ off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" });
+  expect(sonnet.cost).toEqual({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 });
+  expect(sonnet.input).toEqual(["text", "image"]);
+  expect(sonnet.contextWindow).toBe(1_000_000);
+  expect(sonnet.maxTokens).toBe(128_000);
+});
+
 test("uncompacted append-only history is passed through unchanged", () => {
   const messages: Message[] = [retained, toolResult];
   expect(stripCompactedThinking(messages, [])).toBe(messages);
@@ -104,7 +116,7 @@ test("latest compaction supersedes the earlier boundary", () => {
 });
 
 test("summary payload normalisation is scoped and non-mutating", () => {
-  for (const model of [fable.id, opus.id]) {
+  for (const model of [fable.id, opus.id, sonnet.id]) {
     for (const thinking of [undefined, { type: "disabled" }]) {
       const payload = { model, thinking, output_config: { effort: "low" }, max_tokens: 2048, messages: [{ role: "user", content: "Summary request" }] };
       const before = JSON.stringify(payload);
@@ -213,7 +225,7 @@ test.skipIf(!nativeModule)("Opus 5.5 native picker levels map to request-level a
   } finally { server.stop(true); }
 });
 
-for (const definition of [fable, opus]) {
+for (const definition of [fable, opus, sonnet]) {
   test(`${definition.id} pinned SDK wire regression: compacted tool turns and adaptive summaries`, async () => {
     await wireRegression(streamAnthropic, definition);
   });

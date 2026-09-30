@@ -42,3 +42,6 @@ mkdir -p "$(dirname "$STATE_FILE")"
 node -e 'const fs=require("fs"); const source=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); fs.writeFileSync(process.argv[2], JSON.stringify({version:1, packages:source.packages}, null, 2)+"\n")' "$MANIFEST" "$STATE_FILE"
 
 if [ "$NO_UPDATE" = false ]; then pi update --extensions; fi
+
+# Apply after installs/updates, which can restore the upstream manifest.
+node "$REPO_DIR/scripts/lib/repair-pi-xai-peers.mjs"

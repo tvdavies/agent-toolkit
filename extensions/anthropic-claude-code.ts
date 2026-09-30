@@ -35,7 +35,7 @@ type ProviderModel = {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow: number;
   maxTokens: number;
-  // Required for adaptive-thinking models (Opus 4.6+, Sonnet 4.6). Without this the
+  // Required for adaptive-thinking models (Opus 4.6+, Sonnet 4.6+). Without this the
   // provider falls back to budget-based thinking and never sends an effort level.
   compat?: { forceAdaptiveThinking?: boolean; supportsTemperature?: boolean };
   // Maps pi thinking levels to provider effort values. xhigh is only surfaced in the
@@ -111,6 +111,18 @@ export const MODELS: ProviderModel[] = [
     cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
     contextWindow: 1_000_000,
     maxTokens: 64_000,
+  },
+  {
+    id: "claude-sonnet-5-5",
+    name: "Claude Sonnet 5.5 (Claude Code creds)",
+    reasoning: true,
+    // Match Pi's native catalog, but keep request-level effort for CPA.
+    compat: { forceAdaptiveThinking: true, supportsTemperature: false },
+    thinkingLevelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
+    input: ["text", "image"],
+    cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
   },
   {
     id: "claude-opus-4-6",

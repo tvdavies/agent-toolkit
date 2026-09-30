@@ -31,6 +31,7 @@ function runSync(...args: string[]) {
     env: {
       ...process.env,
       HOME: home,
+      PI_CODING_AGENT_DIR: path.join(home, ".pi", "agent"),
       AGENT_TOOLS_DIR: repo,
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       SYNC_COMMAND_LOG: commandLog,
@@ -92,6 +93,20 @@ describe("scripts/sync.sh", () => {
     expect(result.exitCode, result.stderr.toString()).toBe(0);
     expect((await readSkillState()).groups).toEqual(["general", "personal", "lleverage"]);
     expect(await loggedCommands()).toContain("pi update --extensions");
+  });
+
+  it("repairs pi-xai after package reconciliation, including updates", async () => {
+    const manifestPath = path.join(home, ".pi", "agent", "npm", "node_modules", "pi-xai", "package.json");
+    await mkdir(path.dirname(manifestPath), { recursive: true });
+    const broken = JSON.stringify({ name: "pi-xai", dependencies: { typebox: "^1.3.6" } });
+    // Simulate an update restoring the upstream manifest, after any earlier repair.
+    await writeFile(path.join(fakeBin, "pi"), `#!/usr/bin/env bash\nprintf 'pi %s\\n' "$*" >> "$SYNC_COMMAND_LOG"\nif [ "$1" = update ]; then printf '%s' '${broken}' > '${manifestPath}'; fi\n`);
+    for (const args of [[], ["--update-pi-packages"]]) {
+      await writeFile(manifestPath, broken);
+      const result = runSync("--groups=general", ...args);
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(JSON.parse(await readFile(manifestPath, "utf8"))).toEqual({ name: "pi-xai", peerDependencies: { typebox: "*" } });
+    }
   });
 
   it("preserves a selective managed group set when a later hook-style run omits --groups", async () => {

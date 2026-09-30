@@ -31,6 +31,14 @@ On first install, all of `general`, `personal`, and `lleverage` are installed by
 
 After installation, run `/reload` in active Pi sessions.
 
+Sync also repairs the installed `pi-xai` npm manifest's host-provided dependencies
+(`typebox` and Pi packages) to use `peerDependencies: "*"`. This works around the
+packaging warning in pi-xai 0.18.0 without changing its code or deleting modules.
+The repair is reapplied after sync's package installs/updates and is a no-op when
+pi-xai is absent or already fixed upstream. After a standalone Pi package update,
+rerun sync or just `node scripts/lib/repair-pi-xai-peers.mjs`. The helper respects
+`PI_CODING_AGENT_DIR` (default `~/.pi/agent`).
+
 ## Skills
 
 Skills are organised into:
