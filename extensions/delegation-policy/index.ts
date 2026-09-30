@@ -17,10 +17,6 @@ A Dispatch stage worker may use the same Docket lifecycle operations only for it
 
 Dispatch's hooks own assignment and agent waking. Do not assign agents manually or invoke \`dispatch-wake\`, adapters, engine launch endpoints, or agent CLIs yourself. Do not change hooks or use Dispatch as a workaround for a denied or failed delegation route. Creation in \`todo\` and read-only board inspection do not launch agents; only claim a launch when the handler event confirms it.
 
-### Session naming
-
-The \`session-name\` skill may use \`set_session_name\` to label its own Pi session and its verified, unshared tmux window. This is metadata-only, not agent communication. Preserve assigned identities; never rename the containing tmux session, sibling windows or live session files, and never send keystrokes to an agent to rename it.
-
 ### Other agent launches
 
 Outside this Dispatch/Docket exception, never use \`interactive_shell\`, \`bash\`, or another general shell tool to launch, invoke, communicate with, or delegate to an AI agent harness, including Pi, Claude Code, Codex, Cursor, Gemini, or Aider. This prohibition covers CLIs, wrappers, modules, APIs, and interactive, hands-free, dispatch, monitor, or background processes. Use \`interactive_shell\` only for non-agent interactive processes. If an approved route is unavailable or fails, report the blocker and work inline or ask the user as permitted by the owning workflow; do not silently switch execution routes.`;

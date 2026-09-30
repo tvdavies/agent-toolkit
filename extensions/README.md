@@ -9,7 +9,6 @@ Custom Pi extensions bundled by the Agent Toolkit package. The package exports o
 - `code-writer/` — packaged native `code-writer` subagent role (`agents/code-writer.md`) with the human `/code-writer` command for a single selected model and a session-scoped delegation-preferred routing mode. See [`code-writer/README.md`](code-writer/README.md).
 - `delegation-policy/` — requires agent delegation through approved Pi tools rather than shell-launched agent harnesses.
 - `openai-fast-cpa.ts` and `openai-fast.json` — OpenAI Fast mode (`service_tier: priority`) through CLI Proxy API. It applies to GPT-5.4 and newer models, excluding mini, nano and codex-spark, so new models need no edit. `PI_OPENAI_FAST_PROVIDERS` adds other proxy-routed providers (comma-separated; `openai-codex` is always included), and `PI_OPENAI_FAST_EXCLUDE_MODELS` opts specific model ids out.
-- `session-name/` — stable Pi/own-window session naming through `set_session_name` and `/session-label`.
 - `send-user-message.ts` — lightweight user progress notes.
 - `workflows/` — saved and generated multi-agent workflows, isolated child repositories, sandboxing, and the workflow child safety floor.
 - `worktrees.ts` — deterministic worktree tooling and personal worktree commands.
@@ -78,16 +77,6 @@ explicitly authorised native subagent. It only exposes two in-memory values,
 applies the same filter to a synthetic compaction boundary after a completed tool
 round, and records non-secret metadata;
 it is not loaded by the production provider or normal tests.
-
-## Session labels
-
-The `session-name` skill can use `set_session_name` when a sustained task
-becomes clear. It preserves assigned identities such as Ally, protects manual
-names, makes repeat labels no-ops and rate-limits topic changes. Only a verified,
-unshared single-pane window is eligible; it never renames the containing tmux
-session (`ll`, for example). A user-confirmed `/session-label` can override naming
-state. See [`session-name/README.md`](session-name/README.md) for the boundary,
-commands and failure behaviour.
 
 ## Code writer
 

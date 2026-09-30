@@ -73,12 +73,10 @@ describe("delegation policy extension", () => {
 		expect(DELEGATION_POLICY_ADDENDUM).toContain("only claim a launch when the handler event confirms it");
 	});
 
-	it("keeps session naming metadata-only and offers no manual session-launch route", () => {
+	it("offers no session naming or manual session-launch route", () => {
 		const prompt = appendDelegationPolicy("BASE");
-		expect(prompt).toContain("### Session naming");
-		expect(prompt).toContain("`set_session_name`");
-		expect(prompt).toContain("metadata-only, not agent communication");
-		expect(prompt).toContain("never rename the containing tmux session");
+		expect(prompt).not.toContain("### Session naming");
+		expect(prompt).not.toContain("set_session_name");
 		expect(prompt).not.toContain("handoff_sessions");
 		expect(prompt).not.toContain("User-confirmed handoff");
 		expect(prompt).not.toContain("/skill:handoff");
