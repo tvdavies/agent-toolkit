@@ -53,33 +53,13 @@ The installer refuses to overwrite unmanaged directories or externally owned sym
 
 Pi discovers `~/.agents/skills` automatically. If `~/.pi/agent/settings.json` explicitly lists `~/.claude/skills`, the installer prints a migration warning but never edits the settings file.
 
-### Explicit handoffs and stable names
+### Stable session names
 
-Two separate skills support manual workstream sessions. You can ask in normal chat:
-“Create three new sessions: Ally for Agent Node, Wally for Workflow 2.0, and Billy
-for the other bugs. Use their handoff documents.” The model discovers `handoff`
-and uses `handoff_sessions`, with one human confirmation for the whole batch.
-
-The one-session slash commands are optional alternatives:
-
-```text
-/skill:handoff ./handoffs/ally.md --name Ally
-/skill:handoff https://plans.example.com/p/123
-/skill:handoff --instructions "Inspect the retry bug, then wait"
-```
-
-`handoff` permits model invocation only for an explicit user request, not autonomous
-spawning. The tool accepts 1–6 sessions, each with an optional local file, URL or
-brief, and opens detached tmux windows after approval. All entries are checked
-before launch; partial failures stop the batch without recreating earlier windows.
-Children prepare read-only and wait for the user to start implementation. The
-no-argument slash command still opens an editor for a brief.
-
-`session-name` is independently available to the agent when a stable task or
+`session-name` is available to the agent when a stable task or
 assigned identity becomes clear. Names such as `Ally - Agent Node` keep their
 identity across topic changes, avoid progress-driven renaming, and affect only
 the Pi display name and its own safe-to-rename window—not the shared tmux session.
-See the [extension documentation](extensions/session-handoff/README.md) for commands,
+See the [extension documentation](extensions/session-name/README.md) for commands,
 manual overrides and activation requirements.
 
 ### Code-writer delegation

@@ -1,6 +1,6 @@
 ---
 name: session-name
-description: Give the current Pi session and its own tmux window a concise, stable label when the user or their handoff assigns an identity such as Ally, an unnamed task becomes clear, or the user changes to a genuinely different workstream. Preserve assigned names; do not rename for routine progress, tests, retries, waiting or completion.
+description: Give the current Pi session and its own tmux window a concise, stable label when the user or their brief assigns an identity such as Ally, an unnamed task becomes clear, or the user changes to a genuinely different workstream. Preserve assigned names; do not rename for routine progress, tests, retries, waiting or completion.
 compatibility: Pi with the Agent Toolkit set_session_name tool. Tmux naming is optional and restricted to the process's own verified single-pane, unlinked window.
 metadata:
   author: tvd
@@ -15,7 +15,7 @@ launches, resumes, sends prompts to or terminates any session.
 
 ## When to use it
 
-- The user, or the handoff the user selected, clearly assigns this session a name:
+- The user, or the brief the user selected, clearly assigns this session a name:
   “You are Ally; own Agent Node.” Set `identity: "Ally"`, `topic: "Agent Node"`.
 - An unnamed session has a clear sustained purpose: set a 2–5 word topic such as
   “Workflow retry fix”. Wait if the task is still ambiguous.

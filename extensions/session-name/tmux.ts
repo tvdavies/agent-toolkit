@@ -1,7 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, realpath } from "node:fs/promises";
-import { constants } from "node:fs";
-import { delimiter, isAbsolute, join } from "node:path";
+import { realpath } from "node:fs/promises";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
@@ -38,16 +36,6 @@ export async function ownPane(terminal: Terminal, execute: Run): Promise<Pane> {
     throw new Error("Cannot prove ownership of this tmux pane; no tmux changes made.");
   }
   return { pane, window, session, panes: Number(panes), linked: linked === "1" };
-}
-
-export async function executable(name: string, searchPath = process.env.PATH ?? ""): Promise<string> {
-  for (const directory of searchPath.split(delimiter)) {
-    // Do not execute a project-local lookalike from an empty/relative PATH entry.
-    if (!isAbsolute(directory)) continue;
-    const candidate = join(directory, name);
-    try { await access(candidate, constants.X_OK); return candidate; } catch { /* next */ }
-  }
-  throw new Error(`${name} was not found on the absolute executable PATH.`);
 }
 
 /** Small argv tokenizer: quoting only, never expansion, evaluation or shell execution. */
