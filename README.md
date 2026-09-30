@@ -53,15 +53,6 @@ The installer refuses to overwrite unmanaged directories or externally owned sym
 
 Pi discovers `~/.agents/skills` automatically. If `~/.pi/agent/settings.json` explicitly lists `~/.claude/skills`, the installer prints a migration warning but never edits the settings file.
 
-### Stable session names
-
-`session-name` is available to the agent when a stable task or
-assigned identity becomes clear. Names such as `Ally - Agent Node` keep their
-identity across topic changes, avoid progress-driven renaming, and affect only
-the Pi display name and its own safe-to-rename window—not the shared tmux session.
-See the [extension documentation](extensions/session-name/README.md) for commands,
-manual overrides and activation requirements.
-
 ### Code-writer delegation
 
 The package also exposes a native pi-subagents `code-writer` role (`agents/code-writer.md`)
