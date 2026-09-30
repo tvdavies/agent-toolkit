@@ -8,7 +8,7 @@ Custom Pi extensions bundled by the Agent Toolkit package. The package exports o
 - `btw.ts` — quick side-question handling.
 - `code-writer/` — packaged native `code-writer` subagent role (`agents/code-writer.md`) with the human `/code-writer` command for a single selected model and a session-scoped delegation-preferred routing mode. See [`code-writer/README.md`](code-writer/README.md).
 - `delegation-policy/` — requires agent delegation through approved Pi tools rather than shell-launched agent harnesses.
-- `openai-fast-cpa.ts` and `openai-fast.json` — the local OpenAI fast provider/model configuration.
+- `openai-fast-cpa.ts` and `openai-fast.json` — OpenAI Fast mode (`service_tier: priority`) through CLI Proxy API. It applies to GPT-5.4 and newer models, excluding mini, nano and codex-spark, so new models need no edit. `PI_OPENAI_FAST_PROVIDERS` adds other proxy-routed providers (comma-separated; `openai-codex` is always included), and `PI_OPENAI_FAST_EXCLUDE_MODELS` opts specific model ids out.
 - `scheduler.ts` — in-session delayed prompts and `/schedule`.
 - `session-handoff/` — chat-requested `handoff_sessions` batches with human confirmation, optional `/skill:handoff`/`/handoff` commands, and independent stable Pi/own-window naming through `set_session_name` and `/session-label`.
 - `send-user-message.ts` — lightweight user progress notes.

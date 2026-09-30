@@ -11,15 +11,37 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
  * "priority", so injecting it here reaches the ChatGPT Codex backend intact.
  */
 
-const PROVIDER_ID = "openai-codex";
+const DEFAULT_PROVIDER_IDS = ["openai-codex"];
 const FAST_SERVICE_TIER = "priority";
-const SUPPORTED_MODELS = new Set([
-  "gpt-5.4",
-  "gpt-5.5",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-]);
+
+// Fast mode applies to GPT models from 5.4 onwards, so new releases such as
+// gpt-6.1-sol qualify without editing this file. Small variants (mini, nano,
+// codex-spark) stay excluded, as they were from the original allowlist.
+const MIN_FAST_VERSION: [number, number] = [5, 4];
+const GPT_VERSION = /^gpt-(\d+)(?:\.(\d+))?(?:-|$)/;
+const EXCLUDED_VARIANT = /-(mini|nano|codex-spark)(?:-|$)/;
+
+function csv(value: string | undefined): string[] {
+  return (value ?? "").split(",").map((part) => part.trim()).filter(Boolean);
+}
+
+/** Providers routed through CLI Proxy API. Extend with PI_OPENAI_FAST_PROVIDERS. */
+export function fastProviderIds(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  return new Set([...DEFAULT_PROVIDER_IDS, ...csv(env.PI_OPENAI_FAST_PROVIDERS)]);
+}
+
+/** Whether a model id supports priority processing. PI_OPENAI_FAST_EXCLUDE_MODELS opts ids out. */
+export function isFastModel(modelId: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const id = modelId.toLowerCase();
+  if (csv(env.PI_OPENAI_FAST_EXCLUDE_MODELS).some((excluded) => excluded.toLowerCase() === id)) return false;
+  const match = GPT_VERSION.exec(id);
+  if (!match || EXCLUDED_VARIANT.test(id)) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2] ?? 0);
+  const [minMajor, minMinor] = MIN_FAST_VERSION;
+  return major > minMajor || (major === minMajor && minor >= minMinor);
+}
+
 const DEBUG_PAYLOAD_PATH = process.env.PI_OPENAI_FAST_CPA_DEBUG_PATH;
 
 // Session override: "auto" follows the default (enabled), "on"/"off" force it.
@@ -34,7 +56,7 @@ function isEnabled(): boolean {
 
 function isEligible(ctx: ExtensionContext): boolean {
   const model = ctx.model;
-  return Boolean(model && model.provider === PROVIDER_ID && SUPPORTED_MODELS.has(model.id));
+  return Boolean(model && fastProviderIds().has(model.provider) && isFastModel(model.id));
 }
 
 async function maybeDumpPayload(payload: unknown): Promise<void> {
@@ -74,14 +96,14 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("fast", {
-    description: "Toggle OpenAI Fast mode (service_tier=priority via CPA) for GPT-5.4/5.5/5.6 models",
+    description: "Toggle OpenAI Fast mode (service_tier=priority via CPA) for GPT-5.4 and newer models",
     handler: async (_args, ctx) => {
       override = isEnabled() ? "off" : "on";
       updateStatus(ctx);
       const state = isEnabled() ? "on" : "off";
       const scope = isEligible(ctx)
         ? `active for ${ctx.model?.provider}/${ctx.model?.id}`
-        : `inactive for current model (needs ${PROVIDER_ID} + supported GPT model)`;
+        : `inactive for current model (needs ${[...fastProviderIds()].join("/")} + GPT-5.4 or newer)`;
       ctx.ui.notify(`OpenAI Fast mode: ${state}; ${scope}`, "info");
     },
   });
