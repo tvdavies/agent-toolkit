@@ -106,22 +106,15 @@ describe("start-ticket skill", () => {
     expect(skill).toContain("Changes Required");
   });
 
-  it("contains the same bounded Dispatch implement-stage integration", () => {
+  it("runs a single standalone path without Dispatch or Docket integration", () => {
     const skill = readFileSync(skillPath, "utf8");
 
-    for (const required of [
-      "## Dispatch integration",
-      "DISPATCH_TASK_ID",
-      "A Docket plan is optional",
-      "exactly one `project:<key>` label",
-      "Never create or adopt another worktree",
-      "requirements-to-code/tests/evidence coverage",
-      "move exactly once to `review`",
-      "move exactly once to `done`",
-      "scope_decision",
-    ]) {
-      expect(skill).toContain(required);
-    }
+    expect(skill).toContain("Require exactly one ticket identifier");
+    expect(skill).toContain("git worktree add -b BRANCH ABSOLUTE_WORKTREE_PATH origin/main");
+    expect(skill).toContain("requirements-to-code/tests/evidence coverage");
+    expect(skill).not.toMatch(/dispatch|docket/i);
+    expect(skill).not.toContain("_shared/docket-stage");
+    expect(skill).not.toContain("scope_decision");
   });
 
   it("normalises and returns an exact direct Linear lookup", () => {

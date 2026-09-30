@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # plans.myslop.app agent-API CLI. Owns token resolution and error translation
 # so callers never pre-verify anything: run the command you need and surface
-# its error. `snapshot` output is the canonical review state hashed by both the
-# planner's seeded plan_feedback wait and the Dispatch reconciler probe.
+# its error. `snapshot` prints a canonical, stably ordered review state that a
+# caller can compare or hash to detect review changes without volatile fields.
 set -euo pipefail
 
 BASE_URL=${MYSLOP_PLANS_URL:-https://plans.myslop.app}
@@ -28,7 +28,7 @@ Usage: plan.sh COMMAND [ARGS]
   request-changes PLAN --version N [--note NOTE]
                                          Request a revision (also: reject)
   markdown PLAN [--version N]            Stored markdown, no token required
-  snapshot PLAN                          Canonical review snapshot for wait fingerprints
+  snapshot PLAN                          Canonical review state for change detection
 
 PLAN is a https://plans.myslop.app/p/<id> URL or bare plan id.
 Review commands require plans:review and explicit caller authorization.

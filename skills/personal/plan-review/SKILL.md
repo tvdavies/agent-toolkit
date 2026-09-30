@@ -5,8 +5,7 @@ compatibility: Requires bash, curl, jq, and network access to plans.myslop.app.
 ---
 
 <!-- Canonical copy. Derived from https://plans.myslop.app/skill.md with the
-     raw curl/token mechanics replaced by scripts/plan.sh. Dispatch vendors an
-     adapted copy separately; toolkit sync does not update that copy. -->
+     raw curl/token mechanics replaced by scripts/plan.sh. -->
 
 # plan-review
 
@@ -56,7 +55,7 @@ bash "$SKILL_DIR/scripts/plan.sh" <command> …
 | `plan.sh approve PLAN --version N [--note TEXT]` | Convenience command for `approved` |
 | `plan.sh request-changes PLAN --version N [--note TEXT]` | Convenience command for `changes_requested`; `plan.sh reject` is an alias, not deletion |
 | `plan.sh markdown PLAN [--version N]` | Stored markdown, tokenless — usable by any agent with the link |
-| `plan.sh snapshot PLAN` | Canonical review snapshot (Dispatch wait fingerprints) |
+| `plan.sh snapshot PLAN` | Canonical, stably ordered review state (plan, reviews, comments) for change detection |
 
 `PLAN` is the plan URL (`https://plans.myslop.app/p/<id>`) or bare id.
 
@@ -108,7 +107,7 @@ currently supports authoring, not individually granted review authority.
 API responses and `snapshot` retain each review's `author: {type, id, name}`.
 `type` is `user` or `agent`; agent IDs are stable key IDs. Reviews from a key
 never replace its owner's human review. Unknown/absent author metadata is not
-proof of a human decision. When a caller or Dispatch stage requires human
+proof of a human decision. When a caller requires human
 approval, require an explicit current-version `user` approval as well as
 aggregate `approved`; an agent-only approval does not satisfy that gate.
 Changing a stage's required reviewer needs separate caller authorization.
@@ -153,9 +152,3 @@ Check once when asked to check. Wait only on explicit caller request/policy,
 prefer event-driven waits, and use a bounded interval/deadline if polling is
 necessary (30–60 s between checks). Stop on approval, changes requested, the
 deadline, or failure; do not remain alive merely because the service is open.
-
-Under Dispatch (`DISPATCH_TASK_ID` set), `plan-ticket` remains the driver. It
-owns required publication, verified current-version approval and the handoff.
-Never poll: `plan-ticket` records one seeded `plan_feedback` wait and exits;
-the reconciler wakes the lane on review-state change. Do not weaken that
-stage's required approval/wait semantics with the interactive draft default.

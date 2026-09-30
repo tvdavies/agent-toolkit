@@ -22,7 +22,7 @@ belong to `babysit-pr` when the user invokes it separately.
 
 ## Non-negotiable rules
 
-- Outside Dispatch, require exactly one ticket identifier matching
+- Require exactly one ticket identifier matching
   `^[A-Z][A-Z0-9]*-[0-9]+$`. Normalise it to uppercase. Reject flags, URLs,
   partial matches, and multiple tickets.
 - Use one writer. Do not let multiple agents edit the same checkout or branch.
@@ -38,44 +38,6 @@ belong to `babysit-pr` when the user invokes it separately.
 - Do not stop with intended changes uncommitted, unpushed, or lacking a pull
   request unless there is a concrete blocker.
 
-## Dispatch integration
-
-When `DISPATCH_TASK_ID` is set and the named task is in `implement`, that Docket
-wake is the explicit invocation. Apply these integration rules while keeping all
-implementation, validation, self-review, push, and no-merge rules below:
-
-1. Resolve `SKILL_DIR`. When
-   `$SKILL_DIR/../_shared/docket-stage/PROTOCOL.md` exists, read and follow it.
-2. Read the complete Docket task, activity, comments, attachments,
-   relationships, references, optional approved plan, and authoritative source
-   ticket before acting. A Docket plan is optional when the combined context is
-   sufficiently bounded and verifiable.
-3. If the task references a Linear ticket, retain this skill's exact identifier
-   lookup, media retrieval, assignment, and In Progress transition. A genuinely
-   non-Linear or non-repository Docket task may use its authoritative Docket
-   context instead of inventing a Linear identifier.
-4. Classify the deliverable as repository-backed or non-repository. Before
-   repository edits, resolve and verify exactly one `project:<key>` label whose
-   key exists in Dispatch configuration. A non-repository task needs no project
-   label.
-5. Dispatch already provisioned or reused the authoritative task worktree as
-   the current process directory. Verify the cwd, branch, worktree registration,
-   task `worktree` reference, status, and relationship to any existing PR.
-   Never create or adopt another worktree. Preserve intended dirty or ahead work
-   on retries and understand it before editing.
-6. For repository completion, create or update one non-draft ready-for-review
-   PR, add or reuse its canonical Docket `pr` reference, and record the branch,
-   worktree, exact head SHA, requirements-to-code/tests/evidence coverage,
-   validation commands/results, implementation self-review, risks, and PR URL.
-   Then move exactly once to `review`.
-7. For a non-repository task, skip repository worktree creation and PR phases.
-   Implement against only the explicitly named target, verify the requested
-   observable result, record durable evidence, and move exactly once to `done`.
-   Do not invent a repository or PR.
-8. Material scope ambiguity becomes a `scope_decision` wait. Record external
-   blockers durably with the exact command, evidence, and safe current state.
-   Never merge, force-push, or push to `main`.
-
 ## Harness portability
 
 Use capabilities rather than assuming a particular agent product.
@@ -86,11 +48,9 @@ Use capabilities rather than assuming a particular agent product.
   it.
 - Otherwise, prefer available `worktree_list` and `worktree_new` tools.
 - If those tools do not exist, use standard `git worktree` commands.
-- For repository-backed work, record the absolute worktree path as `WT`. Every
+- Record the absolute worktree path as `WT`. Every
   subsequent repository command and file operation must target `WT`. Do not
   assume a `cd` persists between tool calls.
-- In Dispatch, the integration section supersedes worktree creation: reuse the
-  already-provisioned current worktree.
 
 Delegation is optional:
 
@@ -105,13 +65,11 @@ Delegation is optional:
 
 ## Phase 1: Load and start the ticket
 
-Outside Dispatch, resolve exactly one ticket identifier before proceeding. In
-Dispatch, use an exact referenced Linear identifier when present; otherwise use
-the authoritative Docket context as described above.
+Resolve exactly one ticket identifier before proceeding.
 
 1. Resolve this skill's directory from the loaded `SKILL.md` path and call it
    `SKILL_DIR`.
-2. For a Linear-backed task, fetch the ticket with the bundled exact-identifier
+2. Fetch the ticket with the bundled exact-identifier
    helper:
 
    ```bash
@@ -169,18 +127,14 @@ If no change is warranted:
 - Report the evidence, explain why the existing behaviour satisfies the ticket
   or why the issue cannot be reproduced, and identify any product decision
   still needed.
-- Leave a Linear ticket In Progress unless the user explicitly asks for another
-  state. In Dispatch, record the evidence and use the Docket integration's
-  appropriate terminal or decision path.
+- Leave the Linear ticket In Progress unless the user explicitly asks for
+  another state.
 
-If requirements are materially ambiguous, ask one focused question or set the
-Dispatch `scope_decision` wait before implementation. Otherwise write a concise
+If requirements are materially ambiguous, ask one focused question before
+implementation. Otherwise write a concise
 implementation plan and continue automatically.
 
 ## Phase 3: Create or reuse the ticket worktree
-
-Skip worktree creation in Dispatch and verify/reuse its current task worktree.
-Otherwise:
 
 1. Determine the repository root and inspect all existing worktrees before
    creating one:
@@ -230,10 +184,9 @@ Otherwise:
    verifying they are correct for this case.
 4. Add or update tests for meaningful success, failure, and regression paths.
    Avoid tests that only assert implementation details.
-5. For repository-backed work, keep every read, edit, and command anchored to
-   `WT` by using an explicit working-directory option, absolute paths, or
-   `cd "$WT" && ...` in each shell call. For non-repository Dispatch work,
-   anchor operations to only the explicitly named target.
+5. Keep every read, edit, and command anchored to `WT` by using an explicit
+   working-directory option, absolute paths, or `cd "$WT" && ...` in each shell
+   call.
 6. Re-check scope against the ticket before validation.
 
 ## Phase 5: Validate and implementation self-review
@@ -285,21 +238,17 @@ If a PR already exists for the ticket branch, update it and mark it ready when
 necessary instead of opening a duplicate. Do not inspect remote checks or review
 feedback after the ready-for-review PR and current head are verified.
 
-Apply the Dispatch integration's Docket reference, evidence, and stage transition
-only after this phase succeeds.
-
 ## Completion report
 
 Return:
 
-- ticket identifier and title, or authoritative Docket task for a non-Linear
-  Dispatch invocation
+- ticket identifier and title
 - worktree path and branch
 - concise implementation summary and requirements coverage
 - exact validation commands and outcomes
 - implementation self-review outcome
-- pull request URL and exact head SHA, when repository-backed
-- explicit final state: `PR READY FOR REVIEW`, verified non-repository `DONE`, or
-  `BLOCKED` with the exact blocker
+- pull request URL and exact head SHA
+- explicit final state: `PR READY FOR REVIEW` or `BLOCKED` with the exact
+  blocker
 
 Never report `READY TO MERGE` from this skill.

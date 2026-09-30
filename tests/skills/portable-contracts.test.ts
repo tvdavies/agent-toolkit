@@ -19,10 +19,7 @@ describe("portable skill contracts (static guards, not model behaviour claims)",
       expect(text).toMatch(/No default polling/i);
       expect(text).not.toContain("On `approved`, proceed with the work");
       expect(text).not.toContain("poll `status` every 30–60 s while waiting");
-      expect(text).toContain("plan-ticket");
-      expect(text).toContain("seeded");
-      expect(text).toContain("plan_feedback");
-      expect(text).toMatch(/current-\s*version approval/);
+      expect(text).not.toMatch(/Dispatch|Docket|DISPATCH_TASK_ID|plan-ticket|plan_feedback/);
     }
   });
 
