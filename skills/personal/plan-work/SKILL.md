@@ -4,9 +4,6 @@ description: Investigate a bounded task and draft an implementation plan in the 
 compatibility: Local drafting needs repository read access and an output channel. Optional plan-service publication needs the installed plan-review skill, bash, curl, jq, and network access.
 ---
 
-<!-- Toolkit source. Dispatch vendors an adapted copy separately; local sync
-     does not update Dispatch. Review vendoring as a separate change. -->
-
 # Plan Work
 
 Turn one bounded piece of work into an implementation-ready plan. Planning is
@@ -32,15 +29,6 @@ For authorized plan-service actions, load the installed `plan-review` skill by
 name. Its `plan.sh` script owns every service call and token resolution. Never
 hand-roll curl calls or token checks. If the skill is unavailable, return the
 local plan and report that publication is blocked. Do not guess an install path.
-
-## Dispatch integration
-
-When `DISPATCH_TASK_ID` is set, the `plan-ticket` stage skill is the driver: it
-owns task loading, project resolution, Docket references and comments, the
-seeded `plan_feedback` wait, and the approval handoff. Inside a Dispatch wake,
-use this skill only for its investigation methodology and document shape —
-never poll the service and never stop to wait for review; `plan-ticket`
-records one wait and exits.
 
 ## 1. Scope one target
 
@@ -174,15 +162,12 @@ URL, never a promise to upload. Without publication authorization, stop here.
 
 ## 5. Wait only as directed
 
-- **Interactive or autonomous, non-Dispatch (default):** stop after delivering
+- **Interactive or autonomous (default):** stop after delivering
   the artefact or URL. No default polling. Check once when asked to check.
 - **Explicit wait request/policy:** use an available event-driven wait, or a
   caller-bounded polling interval and deadline (30–60 s between checks is
   reasonable). Stop at approval, requested changes, deadline, or a capability
   failure. No unbounded wait loop.
-- **Dispatch wake:** `plan-ticket` retains its required publication, current-
-  version approval, and seeded `plan_feedback` wait semantics. Never replace
-  that stage contract with the interactive draft default or poll here.
 
 ## 6. Iterate
 

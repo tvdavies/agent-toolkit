@@ -44,7 +44,7 @@ rerun sync or just `node scripts/lib/repair-pi-xai-peers.mjs`. The helper respec
 Skills are organised into:
 
 - `skills/general/` — portable engineering and communication skills;
-- `skills/personal/` — Tom, Myslop, Dispatch, Slack, and local tooling; and
+- `skills/personal/` — Tom, Myslop, Slack, and local tooling; and
 - `skills/lleverage/` — Lleverage repositories, services, teams, and infrastructure.
 
 The internal skill reconciler creates individual links in `~/.agents/skills`. By default `~/.claude/skills` links to that standard directory. If `~/.claude/skills` is a real directory, it is preserved and receives the same managed individual links.
@@ -91,10 +91,8 @@ Run the same command after adding or removing a skill, adding an extension or ru
 
 A no-argument run preserves this checkout's previously managed skill-group selection. Pass `--groups` only when intentionally replacing that complete selection. If the relevant managed state is malformed, sync stops with an error instead of silently choosing another group set.
 
-Local sync is not Dispatch vendoring. Dispatch's copied/adapted skills do not
-change when toolkit links are refreshed; review that cross-repository update
-separately, preserving stage-specific approval and wait contracts. The portable
-contracts use the same skills for every model; no Astra-only profile is needed.
+The portable contracts use the same skills for every model; no Astra-only
+profile is needed.
 
 Existing skill contents are live through their managed links, and extension contents are live through the installed local package path. Active Pi sessions still need `/reload` to rebuild their resource inventory. New or removed resources need `sync.sh` first so their links and package state exist.
 
