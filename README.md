@@ -71,6 +71,17 @@ for a UI confirmation. Native pi-subagents 0.68+ supports one model per agent an
 automatic fallback. Provider failures are reported; after partial work the parent preserves
 the diff and asks before continuing on another model. See [`extensions/code-writer/README.md`](extensions/code-writer/README.md).
 
+### Report writer
+
+`agents/report-writer.md` is a packaged subagent pinned to Claude Opus 5.5
+(`anthropic-claude-code/claude-opus-5-5`, loaded through `extensions/anthropic-claude-code.ts`).
+It is used by the `reports` skill (`skills/general/reports`), which defines an unbranded house
+style: a stylesheet with vendored OFL fonts, a dependency-free build script with SVG charts
+and Graphviz diagrams, and a headless-Chrome render check. Any model can gather report data.
+The writer turns the brief into the document; the skill then checks it and uploads it to
+files.myslop.app with a share-card image, so every report is handed over as a link that
+unfurls properly in Slack.
+
 ## Extensions and workflows
 
 The Pi package exports `extensions/` and, for native pi-subagents, the `agents/` directory. See [`extensions/README.md`](extensions/README.md) for the active inventory and workflow security model.

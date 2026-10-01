@@ -1,0 +1,146 @@
+---
+title: Search API latency: why p90 doubled after the index migration
+standfirst: Query latency regressed on 12 August when traffic moved to the new index cluster. The cause is a cold cache on the replica tier, not the index format. Two configuration changes recover most of the loss this week.
+eyebrow: Search platform · Performance assessment
+date: 2026-08-28
+author: Example Author
+audience: Search and platform engineering
+data: 1 Jul – 27 Aug 2026, production traces
+status: Final
+classification: Internal
+ref: TR-014
+---
+
+<section class="summary">
+  <h2 class="unnumbered">Summary</h2>
+  <p class="bottom-line">The migration itself is sound. Latency doubled because replicas start cold and the warm-up job targets the old cluster. Point warm-up at the new cluster and raise the cache size, and p90 should return to about 210 ms.</p>
+  <ol>
+    <li><strong>p90 latency rose from 205 ms to 430 ms</strong> on 12 August and has stayed there. p50 moved much less (88 → 104 ms), so the regression is in the tail.</li>
+    <li><strong>83% of slow queries hit a replica that restarted in the previous hour.</strong> Warm replicas on the new cluster are as fast as the old ones.</li>
+    <li><strong>The nightly warm-up job still targets the old cluster.</strong> It has run successfully every night, against hosts that no longer serve traffic.</li>
+  </ol>
+</section>
+
+<div class="stats">
+  <div class="stat bad"><span class="stat-value">430<small>ms</small></span><span class="stat-label">p90 latency since 12 Aug (was 205 ms)</span></div>
+  <div class="stat"><span class="stat-value">104<small>ms</small></span><span class="stat-label">p50 latency, up 18%</span></div>
+  <div class="stat accent"><span class="stat-value">83%</span><span class="stat-label">of slow queries served by a cold replica</span></div>
+  <div class="stat good"><span class="stat-value">~210<small>ms</small></span><span class="stat-label">expected p90 after the two fixes</span></div>
+</div>
+
+<section>
+  <h2>Scope and method</h2>
+  <p>We used production request traces for all search queries between 1 July and 27 August 2026, about 41 million requests. Replica restarts come from the orchestrator event log.</p>
+  <table>
+    <caption>Data sources</caption>
+    <thead><tr><th>Source</th><th>Window</th><th class="num">Rows</th><th>Used for</th></tr></thead>
+    <tbody>
+      <tr><td>Request traces</td><td>1 Jul – 27 Aug</td><td class="num">41,208,114</td><td>Latency percentiles, routing</td></tr>
+      <tr><td>Orchestrator events</td><td>1 Jul – 27 Aug</td><td class="num">1,906</td><td>Replica restarts</td></tr>
+      <tr><td>Warm-up job logs</td><td>1 Aug – 27 Aug</td><td class="num">27</td><td>Job targets and duration</td></tr>
+    </tbody>
+  </table>
+  <div class="callout note">
+    <span class="callout-title">Limitations</span>
+    <p>Traces are sampled at 10% for queries under 50 ms. Percentiles above p50 are unaffected.</p>
+  </div>
+</section>
+
+<section>
+  <h2>What changed on 12 August</h2>
+  <p>Latency was flat through July. It stepped up on the day of the cutover and has not recovered.</p>
+  <figure class="figure">
+    <figcaption>p90 latency doubled at the cutover and stayed high<span class="sub">Daily p50 and p90 latency in milliseconds, all search queries</span></figcaption>
+    <script type="application/json" data-chart>
+    {"type":"line","unit":"ms","x":["1 Jul","8 Jul","15 Jul","22 Jul","29 Jul","5 Aug","12 Aug","19 Aug","26 Aug"],
+     "series":[{"name":"p90","values":[201,206,199,210,204,205,412,431,428]},{"name":"p50","values":[86,88,87,89,88,88,101,104,104],"color":"muted"}],
+     "markers":[{"x":"12 Aug","label":"Cutover"}],"reference":{"value":250,"label":"SLO 250 ms"}}
+    </script>
+    <p class="figure-note">Source: request traces. Weekly samples shown; daily values follow the same pattern.</p>
+  </figure>
+
+  <h3>Request path</h3>
+  <p>Queries reach a replica through the router. The warm-up job should prime replica caches before they receive traffic.</p>
+  <div class="flow">
+    <div class="node"><span class="node-label">Edge</span><b>API gateway</b>Auth, rate limits</div>
+    <div class="node"><span class="node-label">Routing</span><b>Query router</b>Picks a replica by load</div>
+    <div class="node bad"><span class="node-label">New cluster</span><b>Replica tier</b>Cold after restart</div>
+    <div class="node muted"><span class="node-label">Batch</span><b>Warm-up job</b>Still targets old cluster</div>
+  </div>
+</section>
+
+<section>
+  <h2>Where the time goes</h2>
+  <h3>Cold replicas explain the tail</h3>
+  <p>Splitting slow queries by how long their replica had been up shows the cause clearly.</p>
+  <figure class="figure">
+    <figcaption>Most slow queries were served by a recently restarted replica<span class="sub">Share of queries over 300 ms, by replica uptime at query time (n = 1.9M)</span></figcaption>
+    <script type="application/json" data-chart>
+    {"type":"bar","unit":"%","decimals":0,"highlight":["Under 1 hour"],
+     "data":[{"label":"Under 1 hour","value":83},{"label":"1–6 hours","value":11},{"label":"6–24 hours","value":4},{"label":"Over 24 hours","value":2}]}
+    </script>
+  </figure>
+
+  <figure class="figure">
+    <figcaption>Warm replicas on the new cluster match the old cluster<span class="sub">Latency distribution by cluster and cache state, milliseconds</span></figcaption>
+    <script type="application/json" data-chart>
+    {"type":"range","unit":"ms","names":{"low":"p10","mid":"p50","high":"p90","max":"p99"},"reference":{"value":250,"label":"SLO"},
+     "data":[{"label":"Old cluster","low":41,"mid":88,"high":205,"max":390},{"label":"New, warm","low":40,"mid":86,"high":201,"max":372},{"label":"New, cold","low":66,"mid":190,"high":640,"max":1180,"color":"bad"}]}
+    </script>
+  </figure>
+
+  <h3>Outcome mix</h3>
+  <figure class="figure">
+    <figcaption>Cache misses are concentrated in the first hour after a restart<span class="sub">Cache outcome by replica uptime, share of lookups</span></figcaption>
+    <script type="application/json" data-chart>
+    {"type":"stacked","percent":true,"categories":["Under 1 hour","1–6 hours","Over 6 hours"],
+     "series":[{"name":"Hit","values":[310,820,940],"color":"c1"},{"name":"Miss, disk","values":[520,160,55],"color":"warn"},{"name":"Miss, remote","values":[170,20,5],"color":"bad"}]}
+    </script>
+  </figure>
+
+  <table>
+    <caption>Restarts by cause, August</caption>
+    <thead><tr><th>Cause</th><th class="num">Restarts</th><th class="num">Share</th><th>Note</th></tr></thead>
+    <tbody>
+      <tr><td>Node autoscaling</td><td class="num">612</td><td class="num">64% <span class="cell-bar" style="--v:64%"></span></td><td>Expected; scale-in at night</td></tr>
+      <tr><td>Deploys</td><td class="num">241</td><td class="num">25% <span class="cell-bar" style="--v:25%"></span></td><td>Daily rollout</td></tr>
+      <tr><td>OOM kills</td><td class="num">104</td><td class="num">11% <span class="cell-bar bad" style="--v:11%"></span></td><td class="bad">New since cutover</td></tr>
+      <tr class="total"><td>Total</td><td class="num">957</td><td class="num">100%</td><td></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Options considered</h2>
+  <div class="compare">
+    <div class="option"><h4>Roll back</h4><p>Restores latency immediately but loses the index format gains and blocks the next migration.</p></div>
+    <div class="option chosen"><h4>Fix warm-up and cache size</h4><p>Two configuration changes. Keeps the migration. Recommended.</p></div>
+    <div class="option"><h4>Pin traffic away from new replicas</h4><p>Masks the problem and halves effective capacity during deploys.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>Recommendations</h2>
+  <ol class="recs">
+    <li><span class="rec-title">Point the warm-up job at the new cluster</span><span class="rec-meta"><span class="badge p0">P0</span><span class="badge">Search platform</span><span class="badge">Effort: S</span></span><p>Update the job's target list and run it on replica start, not only nightly.</p></li>
+    <li><span class="rec-title">Raise the replica cache from 4 GB to 8 GB</span><span class="rec-meta"><span class="badge p1">P1</span><span class="badge">Infra</span><span class="badge">Effort: S</span></span><p>The new index is 1.7× larger; the cache was not resized with it.</p></li>
+    <li><span class="rec-title">Alert on p90 above the SLO for 30 minutes</span><span class="rec-meta"><span class="badge p2">P2</span><span class="badge">Search platform</span><span class="badge">Effort: S</span></span><p>The regression ran for 16 days before anyone looked.</p></li>
+  </ol>
+  <h3>Rollout</h3>
+  <ol class="timeline">
+    <li><time>29 Aug</time><div><b>Warm-up job retargeted</b>Deploy behind the existing job flag.</div></li>
+    <li><time>2 Sep</time><div><b>Cache resized</b>Rolling restart, one zone at a time.</div></li>
+    <li><time>9 Sep</time><div><b>Review</b>Confirm p90 under 250 ms for seven days.</div></li>
+  </ol>
+</section>
+
+<section class="appendix">
+  <h2 data-n="A">Evidence index</h2>
+  <table class="compact">
+    <thead><tr><th>Finding</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr><td>Warm-up target</td><td><code>jobs/warmup/config.yaml:12</code> lists <code>search-old-*</code></td></tr>
+      <tr><td>Cache size</td><td><code>deploy/replica.yaml:48</code> <code>cache_bytes: 4Gi</code></td></tr>
+    </tbody>
+  </table>
+</section>
