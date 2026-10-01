@@ -17,13 +17,14 @@ pnpm dev --filter <service>
 
 Run each service as its own `interactive_shell` background session unless the user explicitly asks for an attached/foreground session.
 
-Prefer `mode: "hands-free"` with `background: true` for long-running dev services:
+Prefer `mode: "dispatch"` with `background: true` and `autoExitOnQuiet: false` for long-running dev services:
 
 ```ts
 interactive_shell({
   command: "pnpm dev --filter app",
-  mode: "hands-free",
+  mode: "dispatch",
   background: true,
+  handsFree: { autoExitOnQuiet: false },
   name: "dev-app",
   reason: "Local dev service: app"
 })
@@ -38,7 +39,7 @@ Store/report the returned `sessionId` in your response so future turns can inspe
 Start only the Next.js app:
 
 ```ts
-interactive_shell({ command: "pnpm dev --filter app", mode: "hands-free", background: true, name: "dev-app", reason: "Local dev service: app" })
+interactive_shell({ command: "pnpm dev --filter app", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-app", reason: "Local dev service: app" })
 ```
 
 ### Workflow/canvas execution testing
@@ -46,58 +47,54 @@ interactive_shell({ command: "pnpm dev --filter app", mode: "hands-free", backgr
 Usually needed for workflow canvas work and node execution:
 
 ```ts
-interactive_shell({ command: "pnpm dev --filter app", mode: "hands-free", background: true, name: "dev-app", reason: "Local dev service: app" })
-interactive_shell({ command: "pnpm dev --filter workflow-service", mode: "hands-free", background: true, name: "dev-workflow-service", reason: "Local dev service: workflow-service" })
+interactive_shell({ command: "pnpm dev --filter app", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-app", reason: "Local dev service: app" })
+interactive_shell({ command: "pnpm dev --filter workflow-service", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-workflow-service", reason: "Local dev service: workflow-service" })
 ```
 
 Add data tables if the feature touches graph data tables:
 
 ```ts
-interactive_shell({ command: "pnpm dev --filter graph-data-tables-service", mode: "hands-free", background: true, name: "dev-graph-data-tables-service", reason: "Local dev service: graph-data-tables-service" })
+interactive_shell({ command: "pnpm dev --filter graph-data-tables-service", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-graph-data-tables-service", reason: "Local dev service: graph-data-tables-service" })
 ```
 
 ### Knowledge-base testing
 
 ```ts
-interactive_shell({ command: "pnpm dev --filter app", mode: "hands-free", background: true, name: "dev-app", reason: "Local dev service: app" })
-interactive_shell({ command: "pnpm dev --filter workflow-service", mode: "hands-free", background: true, name: "dev-workflow-service", reason: "Local dev service: workflow-service" })
-interactive_shell({ command: "pnpm dev --filter knowledge-service", mode: "hands-free", background: true, name: "dev-knowledge-service", reason: "Local dev service: knowledge-service" })
+interactive_shell({ command: "pnpm dev --filter app", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-app", reason: "Local dev service: app" })
+interactive_shell({ command: "pnpm dev --filter workflow-service", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-workflow-service", reason: "Local dev service: workflow-service" })
+interactive_shell({ command: "pnpm dev --filter knowledge-service", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-knowledge-service", reason: "Local dev service: knowledge-service" })
 ```
 
 ### Integration testing
 
 ```ts
-interactive_shell({ command: "pnpm dev --filter app", mode: "hands-free", background: true, name: "dev-app", reason: "Local dev service: app" })
-interactive_shell({ command: "pnpm dev --filter workflow-service", mode: "hands-free", background: true, name: "dev-workflow-service", reason: "Local dev service: workflow-service" })
-interactive_shell({ command: "pnpm dev --filter integration-service", mode: "hands-free", background: true, name: "dev-integration-service", reason: "Local dev service: integration-service" })
-interactive_shell({ command: "pnpm dev --filter integration-trigger-service", mode: "hands-free", background: true, name: "dev-integration-trigger-service", reason: "Local dev service: integration-trigger-service" })
-interactive_shell({ command: "pnpm dev --filter integration-action-service", mode: "hands-free", background: true, name: "dev-integration-action-service", reason: "Local dev service: integration-action-service" })
-interactive_shell({ command: "pnpm dev --filter integration-trigger-deployment-service", mode: "hands-free", background: true, name: "dev-integration-trigger-deployment-service", reason: "Local dev service: integration-trigger-deployment-service" })
+interactive_shell({ command: "pnpm dev --filter app", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-app", reason: "Local dev service: app" })
+interactive_shell({ command: "pnpm dev --filter workflow-service", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-workflow-service", reason: "Local dev service: workflow-service" })
+interactive_shell({ command: "pnpm dev --filter integration-service", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-integration-service", reason: "Local dev service: integration-service" })
+interactive_shell({ command: "pnpm dev --filter integration-trigger-service", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-integration-trigger-service", reason: "Local dev service: integration-trigger-service" })
+interactive_shell({ command: "pnpm dev --filter integration-action-service", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-integration-action-service", reason: "Local dev service: integration-action-service" })
+interactive_shell({ command: "pnpm dev --filter integration-trigger-deployment-service", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-integration-trigger-deployment-service", reason: "Local dev service: integration-trigger-deployment-service" })
 ```
 
 ### Agent work / local agent testing
 
-This is the most common service set for local agent work. Always ensure Docker services are running first:
+This is the most common service set for local agent work. Do not start Docker services unless the user explicitly asks for them.
 
-```bash
-docker compose up -d
-```
-
-Then start:
+Start:
 
 ```ts
-interactive_shell({ command: "pnpm dev --filter app", mode: "hands-free", background: true, name: "dev-app", reason: "Local dev service: app" })
-interactive_shell({ command: "pnpm dev --filter workflow-service", mode: "hands-free", background: true, name: "dev-workflow-service", reason: "Local dev service: workflow-service" })
-interactive_shell({ command: "pnpm dev --filter session-service", mode: "hands-free", background: true, name: "dev-session-service", reason: "Local dev service: session-service" })
-interactive_shell({ command: "pnpm dev --filter data-service", mode: "hands-free", background: true, name: "dev-data-service", reason: "Local dev service: data-service" })
-interactive_shell({ command: "pnpm dev --filter agent-sandbox-service", mode: "hands-free", background: true, name: "dev-agent-sandbox-service", reason: "Local dev service: agent-sandbox-service" })
+interactive_shell({ command: "pnpm dev --filter app", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-app", reason: "Local dev service: app" })
+interactive_shell({ command: "pnpm dev --filter workflow-service", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-workflow-service", reason: "Local dev service: workflow-service" })
+interactive_shell({ command: "pnpm dev --filter session-service", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-session-service", reason: "Local dev service: session-service" })
+interactive_shell({ command: "pnpm dev --filter data-service", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-data-service", reason: "Local dev service: data-service" })
+interactive_shell({ command: "pnpm dev --filter agent-sandbox-service", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-agent-sandbox-service", reason: "Local dev service: agent-sandbox-service" })
 ```
 
 ### Data-service testing
 
 ```ts
-interactive_shell({ command: "pnpm dev --filter app", mode: "hands-free", background: true, name: "dev-app", reason: "Local dev service: app" })
-interactive_shell({ command: "pnpm dev --filter data-service", mode: "hands-free", background: true, name: "dev-data-service", reason: "Local dev service: data-service" })
+interactive_shell({ command: "pnpm dev --filter app", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-app", reason: "Local dev service: app" })
+interactive_shell({ command: "pnpm dev --filter data-service", mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-data-service", reason: "Local dev service: data-service" })
 ```
 
 ### Custom service
@@ -107,8 +104,9 @@ If the user names a service, use the exact filter:
 ```ts
 interactive_shell({
   command: "pnpm dev --filter <service>",
-  mode: "hands-free",
+  mode: "dispatch",
   background: true,
+  handsFree: { autoExitOnQuiet: false },
   name: "dev-<service>",
   reason: "Local dev service: <service>"
 })
@@ -163,9 +161,9 @@ Common failure signs: missing environment variables, port already in use, databa
 
 ## Local infrastructure
 
-Before starting service bundles, make sure Docker services are running.
+Do not start Docker Compose automatically. If local services fail because dependencies are unavailable, ask the user before starting Docker services.
 
-**Important:** Docker Compose must be run from the canonical Lleverage monorepo checkout, not from a Pi worktree or arbitrary current directory. Resolve it from `LLEVERAGE_REPO`, or use the conventional checkout under the current user's home:
+If the user explicitly confirms Docker should be started, Docker Compose must be run from the canonical Lleverage monorepo checkout, not from a Pi worktree or arbitrary current directory. Resolve it from `LLEVERAGE_REPO`, or use the conventional checkout under the current user's home:
 
 ```bash
 LLEVERAGE_REPO="${LLEVERAGE_REPO:-$HOME/dev/lleverage-ai/lleverage}"
@@ -177,7 +175,7 @@ When using a shell tool, set its working directory to the resolved `LLEVERAGE_RE
 Use normal `bash` for this one-shot infrastructure command unless the user asks to keep infra logs attached. If they want logs, use:
 
 ```ts
-interactive_shell({ command: "docker compose logs -f", cwd: LLEVERAGE_REPO, mode: "hands-free", background: true, name: "dev-infra-logs", reason: "Local Docker Compose logs" })
+interactive_shell({ command: "docker compose logs -f", cwd: LLEVERAGE_REPO, mode: "dispatch", background: true, handsFree: { autoExitOnQuiet: false }, name: "dev-infra-logs", reason: "Local Docker Compose logs" })
 ```
 
 ## User communication
