@@ -23,6 +23,12 @@ are different: depth of analysis alone is not severity evidence.
 verification check completed successfully for the reviewed head/scope. A review
 stream may pass its assessment and return findings. Missing/failed/null output,
 unavailable required ticket context, and pending/stale required CI are not passes.
+When the caller explicitly requests `--independent-checks`, remote CI and
+CodeRabbit are separate merge gates, not required code-review coverage. Record
+their actual status, but do not wait for their completion or withhold the code
+verdict solely because they are pending, failing, stale or unavailable. Verified
+critical defects discovered in their output still count as findings. This mode
+does not remove any other required assessment or independent challenge.
 A not-applicable skip must have a reason and be optional. `INCOMPLETE` is not a
 GitHub helper verdict; do not coerce it to a nonblocking comment that dismisses
 an earlier blocking review. A confirmed critical may still be reported/posted as

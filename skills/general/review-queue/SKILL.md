@@ -12,6 +12,12 @@ metadata:
 
 Shows open PRs waiting for review, with re-review detection.
 
+CodeRabbit's review state and unresolved threads do not delay inclusion. An
+explicit initial review request can be picked up before CodeRabbit reviews or
+while it requests changes. Other reviewers' blocking requests retain their
+existing queue behaviour. Implicit re-review still requires the non-CodeRabbit
+threads to be resolved and a newer commit or reply.
+
 ### Usage
 
 ```bash

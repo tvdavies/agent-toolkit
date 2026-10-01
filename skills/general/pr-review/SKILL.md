@@ -17,6 +17,13 @@ merge, install tools globally, or modify a shared checkout.
 - `--pr NUMBER`: review that PR, not an inferred one.
 - `--base BRANCH`: override the comparison base.
 - `--since COMMIT_SHA`: incremental re-review against that reviewed ancestor.
+- `--independent-checks`: review and publish independently of remote CI and
+  CodeRabbit. These remain separate merge gates. Take one current status snapshot,
+  report pending/failed/unavailable checks honestly, and proceed with the code
+  assessment without polling or waiting for CodeRabbit to review or clear threads.
+  Remote CI status is supplementary evidence in this mode, not required review
+  coverage. Do not approve over a verified critical defect found in CI or a bot
+  thread; assess the evidence. Other required review dimensions still apply.
 - `--headless`: non-interactive execution only. It does not imply `--post`.
 - `--post`: explicit authorization to publish this review to the target PR.
   An explicit caller publishing policy can also authorize publication. Record
@@ -137,6 +144,15 @@ Never reproduce secrets; cite credential type and file:line only.
 
 ## 2. Verification matrix
 
+With `--independent-checks`, keep required code-review coverage separate from
+remote merge checks. Missing, pending, failed or stale CI alone does not make
+this code assessment `INCOMPLETE` and does not withhold publication. Do not run
+an entire missing CI suite locally merely to wait for or replace the merge gate.
+Use completed relevant checks when available and run targeted verification for
+specific uncovered risks. A demonstrable defect in CI remains a finding; a
+failed or unavailable required code-review assessment still means `INCOMPLETE`.
+Apply the following default matrix to callers without `--independent-checks`.
+
 Read-only **source review** is not a claim that all tests are read-only. Scripts
 can install packages, update snapshots, write caches, call services or delete
 data. Inspect command definitions, environment, fixtures and hooks first.
@@ -229,7 +245,10 @@ Use [severity-verdict.md](references/severity-verdict.md), the contract also
 mirrored and regression-tested in saved `review-pr`. Only CRITICAL blocks with
 `REQUEST_CHANGES`; SHOULD_FIX yields nonblocking `CHANGES_SUGGESTED`.
 Incomplete REQUIRED coverage without a confirmed critical yields `INCOMPLETE`,
-not an approval. A critical still yields `REQUEST_CHANGES`, with the gaps visible.
+not an approval. Under `--independent-checks`, remote CI and CodeRabbit are
+separate merge gates, so their outstanding status does not constitute incomplete
+required code-review coverage. A critical still yields `REQUEST_CHANGES`, with
+the gaps visible.
 
 Return: target/base/head and scope, verdict, concise summary, actionable findings,
 coverage matrix with reasons/evidence, and files actually reviewed. Don't claim
@@ -242,8 +261,12 @@ Publish only on `--post` or explicit caller publishing policy. Read
 [github-output.md](references/github-output.md), preserve its required headings,
 and write output in the already allocated `REVIEW_TMPDIR`. The helper has no
 `INCOMPLETE` posting mode: return the partial report and explain publication was
-withheld. Do not coerce it to APPROVE or CHANGES_SUGGESTED (which can dismiss a
-prior blocking review). A confirmed CRITICAL can be posted as REQUEST_CHANGES
+withheld. Under `--independent-checks`, choose the code-review verdict from the
+completed assessment and include a visible line for current CI and CodeRabbit
+status; do not wait to publish it. This can be a real code-review approval while
+CI is pending or failing, because the merge gate is enforced separately. Do not
+coerce missing required code-review coverage to APPROVE or CHANGES_SUGGESTED
+(which can dismiss a prior blocking review). A confirmed CRITICAL can be posted as REQUEST_CHANGES
 with incomplete coverage disclosed when publication is authorized.
 
 ```bash

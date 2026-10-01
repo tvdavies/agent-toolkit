@@ -11,7 +11,13 @@ again here. The helper preserves an explicit `PR_REVIEW_TMPDIR` and otherwise
 creates a unique private directory. Resolve `SKILL_DIR` from this installed
 skill, not the repository cwd.
 
-Use the appropriate template based on the verdict.
+Use the appropriate template based on the verdict. With `--independent-checks`,
+choose the verdict from completed code-review coverage and publish without
+waiting for remote CI or CodeRabbit. Add a visible status line, for example:
+`Code review complete. CI: pending on <head>. CodeRabbit: not yet reviewed.
+Required checks still govern merge.` Use actual captured statuses, including
+failures; never claim they passed or that the PR is mergeable. A confirmed critical
+finding in their output still blocks the code-review verdict.
 
 ### APPROVE Template
 
