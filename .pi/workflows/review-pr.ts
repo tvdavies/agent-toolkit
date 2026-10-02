@@ -46,6 +46,14 @@ const assessmentProperties = {
   status: { type: "string", enum: ["passed", "failed", "unavailable", "skipped"] },
   reason: { type: "string" },
 };
+// Evidence that only someone else can supply (runtime or database results,
+// deployment configuration, criteria another ticket owns) is a caveat with an
+// owner, not a gap in this review: it never makes coverage incomplete.
+const caveatSchema = {
+  type: "object", additionalProperties: false,
+  required: ["item", "owner"],
+  properties: { item: { type: "string" }, owner: { type: "string" } },
+};
 const reviewSchema = {
   type: "object", additionalProperties: false,
   required: ["dimension", "status", "reason", "filesReviewed", "findings"],
@@ -53,6 +61,7 @@ const reviewSchema = {
     dimension: { type: "string" }, ...assessmentProperties,
     filesReviewed: { type: "array", items: { type: "string" } },
     findings: { type: "array", items: findingSchema },
+    caveats: { type: "array", items: caveatSchema },
   },
 };
 const contextSchema = {
@@ -130,7 +139,8 @@ const reviewedDimensions = await pipeline(
     }
     const result = await agent(
       `Review ONE dimension: ${dimension.key}. ${dimension.focus}\n${inspectInstructions}\nShared context: ${sharedBrief}
-Return dimension="${dimension.key}", assessment status and reason, files actually reviewed and findings. passed means assessment completed, even if bugs were found; failed/unavailable/skipped requires a reason. Inspect all relevant changed paths; say what was not covered. Use unavailable if required evidence is missing. No findings is valid only after completing the assessment.
+Return dimension="${dimension.key}", assessment status and reason, files actually reviewed and findings. passed means assessment completed, even if bugs were found; failed/unavailable/skipped requires a reason. Inspect all relevant changed paths; say what was not covered. Use unavailable only when this review could not inspect what it needed (objects, files, the ticket). No findings is valid only after completing the assessment.
+Evidence outside the code (database or runtime results, deployment/CronJob configuration, criteria the ticket or PR discussion assigns to another card or owner) is a caveat, not missing coverage: still return passed when the code assessment completed, and list it in caveats with the owner who can supply it. First check the prior discussion: evidence or an ownership decision already posted there is not a caveat. A genuine defect stays a finding.
 Only flag defects this PR creates or worsens. Verify surrounding guards, fallbacks and reachability. CRITICAL: demonstrable merge-blocking defect, confidence >=90. SHOULD_FIX: important but nonblocking issue, confidence >=80. SUGGESTION: optional improvement, max 3. Do not inflate severity or manufacture issues. Respect prior resolved discussions unless new code reintroduces a defect; an unanswered reply is not agreement.`,
       { label: "review-" + dimension.key, phase: "Review", schema: reviewSchema, agentType: "reviewer", effort: "high", network: true, githubAuth: true },
     );
@@ -139,7 +149,8 @@ Only flag defects this PR creates or worsens. Verify surrounding guards, fallbac
     if (!result || result.dimension !== dimension.key || !Array.isArray(result.findings) || !Array.isArray(result.filesReviewed) || !["passed", "failed", "unavailable", "skipped"].includes(result.status) || (result.status === "passed" && result.filesReviewed.length === 0)) {
       return { dimension, status: "failed", required: true, reason: "Missing or malformed reviewer result", filesReviewed: [], findings: [] };
     }
-    return { dimension, status: result.status, required: true, reason: result.reason, filesReviewed: result.filesReviewed, findings: result.findings };
+    const caveats = Array.isArray(result.caveats) ? result.caveats.filter((c) => c && typeof c.item === "string" && c.item.trim() && typeof c.owner === "string" && c.owner.trim()) : [];
+    return { dimension, status: result.status, required: true, reason: result.reason, filesReviewed: result.filesReviewed, findings: result.findings, caveats };
   },
   async (reviewed) => {
     const verdicts = await parallel(reviewed.findings.map((finding, i) => async () => {
@@ -180,7 +191,9 @@ let suggestions = 0;
 const confirmedFindings = deduped.filter((finding) => finding.severity !== "SUGGESTION" || ++suggestions <= 3);
 const verdict = reviewVerdict(confirmedFindings, coverageComplete);
 const coverageText = coverage.map((item) => `- ${item.dimension}: ${item.status} (${item.required ? "required" : "optional"}) — ${item.reason || "assessment completed"}`).join("\n");
+const caveats = reviewedDimensions.filter(Boolean).flatMap((item) => (item.caveats || []).map((c) => ({ ...c, dimension: item.dimension.key })));
+const caveatsText = caveats.length ? `\n\n## Caveats (not blocking)\n${caveats.map((c) => `- **${c.owner}:** ${c.item} (${c.dimension})`).join("\n")}` : "";
 const findingsText = confirmedFindings.map((finding) => `### ${finding.severity}: ${finding.title}\n\n${finding.file}:${finding.lines}\n\n${finding.what}\n\nWhy: ${finding.why}\n\nFix: ${finding.fix}\n\nVerification: ${finding.verifierReasoning}`).join("\n\n");
-const report = `# Review of PR #${prNumber}: ${ctx.title}\n\n**Verdict: ${verdict}**\n\nReviewed ${ctx.baseOid}...${ctx.headOid}. Required coverage ${coverageComplete ? "complete" : "INCOMPLETE; no full-coverage approval"}. Report only; nothing published.\n\n## Coverage\n${coverageText}\n\n${findingsText || "No confirmed findings in completed assessments."}\n\n## Files reviewed\n${[...new Set(coverage.flatMap((item) => item.filesReviewed))].map((file) => "- " + file).join("\n") || "(none)"}`;
+const report = `# Review of PR #${prNumber}: ${ctx.title}\n\n**Verdict: ${verdict}**\n\nReviewed ${ctx.baseOid}...${ctx.headOid}. Required coverage ${coverageComplete ? "complete" : "INCOMPLETE; no full-coverage approval"}. Report only; nothing published.\n\n## Coverage\n${coverageText}\n\n${findingsText || "No confirmed findings in completed assessments."}${caveatsText}\n\n## Files reviewed\n${[...new Set(coverage.flatMap((item) => item.filesReviewed))].map((file) => "- " + file).join("\n") || "(none)"}`;
 log(`Done: ${verdict}; ${confirmedFindings.length} confirmed finding(s); report only.`);
-return { confirmedFindings, coverage, coverageComplete, verdict, reviewedHead: ctx.headOid, report };
+return { confirmedFindings, coverage, coverageComplete, caveats, verdict, reviewedHead: ctx.headOid, report };

@@ -67,7 +67,11 @@ else
 fi
 GH
 chmod +x "$TMP/bin/gh"
-printf 'Review body\n' > "$TMP/body.md"
+# Non-approval postings must name who acts next; give the default body one.
+write_default_body() {
+  printf 'Review body\n\n### To move this forward\n\n- **@beth:** address the finding below.\n' > "$TMP/body.md"
+}
+write_default_body
 
 result="$TMP/result.json"
 call_log="$TMP/gh-calls.log"
@@ -350,7 +354,7 @@ fi
 # A matching heading passes the guard.
 run_case APPROVE alice 11 6 "${policy[@]}"
 assert_approved
-printf 'Review body\n' > "$TMP/body.md"
+write_default_body
 
 # --edit-last cannot carry a review-event verdict.
 for verdict in APPROVE APPROVE_WITH_SUGGESTIONS REQUEST_CHANGES; do
@@ -391,6 +395,14 @@ run_with_json CHANGES_SUGGESTED "$(pr_json alice 11 6)" GH_REVIEWS_JSON="$stale_
   || fail "comment posting with a stale blocking review failed"
 rg -q '^dismiss$' "$call_log" || fail "stale blocking review was not dismissed"
 rg -q 'Dismissed stale blocking review 987' "$stdout_file" || fail "dismissal was not reported"
+
+# An approval held for human sign-off also clears our resolved block, so the
+# stale CHANGES_REQUESTED is not left as the only verdict (lleverage#7250).
+run_case APPROVE beth 700 301 "${policy[@]}" GH_REVIEWS_JSON="$stale_reviews" \
+  || fail "manual approval with a stale blocking review failed"
+rg -q '^dismiss$' "$call_log" || fail "manual approval left our stale block in place"
+jq -e '.manualApprovalRequired == true and .event == "COMMENT"' "$result" >/dev/null \
+  || fail "manual approval result changed"
 
 # A later approval from us supersedes the old block: nothing to dismiss.
 superseded=$(jq -nc '[{id: 987, user: {login: "tvdavies"}, state: "CHANGES_REQUESTED"},
@@ -437,7 +449,7 @@ jq -e --arg head "$reviewed_head" '.commit_id == $head and (.comments | length) 
 # publishes one COMMENTED review pinned to the reviewed head. It never approves,
 # never requests changes, never dismisses an earlier block and is not touched by
 # the human-approval policy.
-printf '## ⚪ Review Incomplete\n\nVerified: delta assessment.\n\n### Still needed\n- CronJob evidence\n' > "$TMP/body.md"
+printf '## ⚪ Review Incomplete\n\nVerified: delta assessment.\n\n### To move this forward\n- **Reviewer (prsmash):** rerun; the CI log fetch failed.\n' > "$TMP/body.md"
 
 stale_block=$(jq -nc '[{id: 987, user: {login: "tvdavies"}, state: "CHANGES_REQUESTED"}]')
 run_case INCOMPLETE beth 5000 5000 "${policy[@]}" GH_REVIEWS_JSON="$stale_block" \
@@ -463,7 +475,7 @@ if rg -q 'Awaiting human approval' "$review_payload"; then
 fi
 
 # The body must say it is incomplete; a bare body could read as a pass.
-printf 'Review body\n' > "$TMP/body.md"
+write_default_body
 if run_case INCOMPLETE alice 11 6; then
   fail "INCOMPLETE accepted a body without an incomplete heading"
 fi
@@ -473,7 +485,7 @@ rg -q 'needs a body whose first heading says the review is incomplete' "$stderr_
 
 # An incomplete report cannot be coerced into an approval, a block, or the
 # non-blocking comment path that dismisses an earlier block.
-printf '## ⚪ Review Incomplete\n\nStill needed: evidence.\n' > "$TMP/body.md"
+printf '## ⚪ Review Incomplete\n\nStill needed: evidence.\n\n### To move this forward\n- **@beth:** attach the run.\n' > "$TMP/body.md"
 for verdict in APPROVE APPROVE_WITH_SUGGESTIONS CHANGES_SUGGESTED REQUEST_CHANGES; do
   if run_case "$verdict" alice 11 6 GH_REVIEWS_JSON="$stale_block"; then
     fail "incomplete body was posted as $verdict"
@@ -506,7 +518,7 @@ if run_case INCOMPLETE alice 11 6 GH_RECHECK_HEAD=4fe402e15f8fe7403b4edd8d6975b8
   fail "INCOMPLETE posted after the head moved"
 fi
 [[ ! -e "$result" && ! -e "$call_log" ]] || fail "stale INCOMPLETE posted"
-printf 'Review body\n' > "$TMP/body.md"
+write_default_body
 
 # Stale modern flag-only caller, not just the legacy environment path.
 rm -f "$call_log" "$result"
@@ -518,5 +530,33 @@ if env -u PRSMASH_REVIEW_EXPECTED_HEAD PATH="$TMP/bin:$PATH" \
   fail "stale flag-only caller accepted"
 fi
 [[ ! -e "$call_log" && ! -e "$result" ]] || fail "stale flag-only caller posted"
+
+# --- Next-step guard ---
+#
+# Anything short of an approval must say who acts next. Bodies that list
+# concerns without an owner action are refused (lleverage#7250, #7325).
+for verdict in CHANGES_SUGGESTED REQUEST_CHANGES; do
+  for body in 'Review body\n\n### Still needed\n- CronJob evidence\n' \
+      'Review body\n\n### To move this forward\n\n- address the finding\n' \
+      'Review body\n\n### To move this forward\n\n### Findings\n- **@beth:** fix it\n'; do
+    printf "$body" > "$TMP/body.md"
+    if run_case "$verdict" beth 11 6 "${policy[@]}"; then
+      fail "$verdict posted without an owner action: $body"
+    fi
+    rg -q "To move this forward" "$stderr_file" || fail "missing next-step diagnostic"
+    [[ ! -e "$call_log" && ! -e "$result" ]] || fail "$verdict without next step posted"
+  done
+done
+printf '## ⚪ Review Incomplete\n\nNothing verified.\n' > "$TMP/body.md"
+if run_case INCOMPLETE beth 11 6; then
+  fail "INCOMPLETE posted without an owner action"
+fi
+# Reviewer-owned and named-person actions both count; approvals need none.
+printf '## 🟡 Changes Suggested\n\nMergeable as is.\n\n## To move this forward\n\n* **Reviewer (Tom):** decide on the nit.\n' > "$TMP/body.md"
+run_case CHANGES_SUGGESTED beth 11 6 "${policy[@]}" || fail "valid reviewer-owned action refused"
+printf '## ✅ Approved\n\nLooks good.\n' > "$TMP/body.md"
+run_case APPROVE alice 11 6 "${policy[@]}" || fail "approval required an action section"
+assert_approved
+write_default_body
 
 echo "post-review result tests passed"

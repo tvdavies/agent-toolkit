@@ -60,4 +60,16 @@ describe("PR review artefacts and posting", () => {
       expect(stdout).toContain("post-review result tests passed");
     } finally { rmSync(home, { recursive: true, force: true }); }
   }, 65_000);
+
+  test("prior-discussion fetch keeps author evidence reachable (mocked gh)", async () => {
+    const home = mkdtempSync(path.join(os.tmpdir(), "pr-conversation-fixtures-"));
+    try {
+      const { stdout } = await exec("bash", [path.join(skill, "tests/fetch-conversation.test.sh")], {
+        cwd: root,
+        env: { PATH: process.env.PATH, HOME: home, TMPDIR: home, LC_ALL: "C" },
+        timeout: 60_000,
+      });
+      expect(stdout).toContain("fetch-conversation tests passed");
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  }, 65_000);
 });

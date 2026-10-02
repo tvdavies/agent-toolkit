@@ -18,6 +18,12 @@ while it requests changes. Other reviewers' blocking requests retain their
 existing queue behaviour. Implicit re-review still requires the non-CodeRabbit
 threads to be resolved and a newer commit or reply.
 
+A reply counts whether it is a thread reply or a PR comment from a person
+(bots excluded); the latest such comment is exposed as `lastActivityAt`. A PR
+whose only review from you was non-blocking (COMMENTED, e.g. "changes
+suggested") re-enters as `suggestions-answered` once the author pushes or
+replies, without its threads having to be resolved first.
+
 ### Usage
 
 ```bash
