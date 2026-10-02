@@ -129,6 +129,7 @@ assert_approved() {
     and .head == "3fe402e15f8fe7403b4edd8d6975b807c369068e"
     and .posting == "github-review"
     and .event == "APPROVE"
+    and (.verdict == "APPROVE" or .verdict == "APPROVE_WITH_SUGGESTIONS")
     and .manualApprovalRequired == false
   ' "$result" >/dev/null || fail "expected an automatic approval result"
   [[ "$(<"$call_log")" == review ]] || fail "expected a GitHub review posting"
@@ -429,6 +430,83 @@ env PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" \
   || fail "quoted inline artefact path failed"
 jq -e --arg head "$reviewed_head" '.commit_id == $head and (.comments | length) == 1 and .comments[0].path == "src/file.ts"' "$review_payload" >/dev/null \
   || fail "inline review lost its comment or reviewed head"
+
+# --- INCOMPLETE verdict ---
+#
+# Required coverage is missing and nothing critical was confirmed. The helper
+# publishes one COMMENTED review pinned to the reviewed head. It never approves,
+# never requests changes, never dismisses an earlier block and is not touched by
+# the human-approval policy.
+printf '## ⚪ Review Incomplete\n\nVerified: delta assessment.\n\n### Still needed\n- CronJob evidence\n' > "$TMP/body.md"
+
+stale_block=$(jq -nc '[{id: 987, user: {login: "tvdavies"}, state: "CHANGES_REQUESTED"}]')
+run_case INCOMPLETE beth 5000 5000 "${policy[@]}" GH_REVIEWS_JSON="$stale_block" \
+  || fail "INCOMPLETE posting failed"
+[[ "$(<"$call_log")" == review ]] \
+  || fail "INCOMPLETE must post exactly one review (no issue comment, no dismissal): $(<"$call_log")"
+jq -e --arg head "$reviewed_head" '
+    .event == "COMMENT"
+    and .commit_id == $head
+    and (.body | test("Review Incomplete"))
+    and (.comments | length) == 0
+  ' "$review_payload" >/dev/null \
+  || fail "INCOMPLETE was not a COMMENT review pinned to the reviewed head"
+jq -e '
+    .posting == "github-review"
+    and .event == "COMMENT"
+    and .verdict == "INCOMPLETE"
+    and .manualApprovalRequired == false
+    and .head == "3fe402e15f8fe7403b4edd8d6975b807c369068e"
+  ' "$result" >/dev/null || fail "INCOMPLETE result file is wrong"
+if rg -q 'Awaiting human approval' "$review_payload"; then
+  fail "INCOMPLETE picked up the manual-approval banner"
+fi
+
+# The body must say it is incomplete; a bare body could read as a pass.
+printf 'Review body\n' > "$TMP/body.md"
+if run_case INCOMPLETE alice 11 6; then
+  fail "INCOMPLETE accepted a body without an incomplete heading"
+fi
+rg -q 'needs a body whose first heading says the review is incomplete' "$stderr_file" \
+  || fail "missing INCOMPLETE heading diagnostic"
+[[ ! -e "$call_log" && ! -e "$result" ]] || fail "INCOMPLETE without heading posted"
+
+# An incomplete report cannot be coerced into an approval, a block, or the
+# non-blocking comment path that dismisses an earlier block.
+printf '## ⚪ Review Incomplete\n\nStill needed: evidence.\n' > "$TMP/body.md"
+for verdict in APPROVE APPROVE_WITH_SUGGESTIONS CHANGES_SUGGESTED REQUEST_CHANGES; do
+  if run_case "$verdict" alice 11 6 GH_REVIEWS_JSON="$stale_block"; then
+    fail "incomplete body was posted as $verdict"
+  fi
+  [[ ! -e "$call_log" && ! -e "$result" ]] || fail "incomplete body posted as $verdict"
+done
+
+# INCOMPLETE is always a fresh review, never an edit of an older comment.
+rm -f "$call_log" "$result"
+if env PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" \
+    GH_CALL_LOG="$call_log" PRSMASH_REVIEW_RESULT_FILE="$result" \
+    "$SCRIPT" --body "$TMP/body.md" --verdict INCOMPLETE --edit-last --pr 5938 \
+    >"$stdout_file" 2>"$stderr_file"; then
+  fail "--edit-last with INCOMPLETE was accepted"
+fi
+[[ ! -e "$call_log" && ! -e "$result" ]] || fail "--edit-last INCOMPLETE posted"
+
+# Dry run shows the mapping and changes nothing.
+rm -f "$call_log" "$result"
+env PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" \
+    GH_CALL_LOG="$call_log" PRSMASH_REVIEW_RESULT_FILE="$result" \
+    "$SCRIPT" --body "$TMP/body.md" --verdict INCOMPLETE --pr 5938 --dry-run \
+    >"$stdout_file" 2>"$stderr_file" || fail "INCOMPLETE dry run failed"
+rg -q '^Verdict: INCOMPLETE$' "$stdout_file" && rg -q '^Event: COMMENT$' "$stdout_file" \
+  || fail "INCOMPLETE dry run did not report its verdict and event"
+[[ ! -e "$call_log" && ! -e "$result" ]] || fail "INCOMPLETE dry run posted"
+
+# A head that moved after analysis is refused for INCOMPLETE too.
+if run_case INCOMPLETE alice 11 6 GH_RECHECK_HEAD=4fe402e15f8fe7403b4edd8d6975b807c369068e; then
+  fail "INCOMPLETE posted after the head moved"
+fi
+[[ ! -e "$result" && ! -e "$call_log" ]] || fail "stale INCOMPLETE posted"
+printf 'Review body\n' > "$TMP/body.md"
 
 # Stale modern flag-only caller, not just the legacy environment path.
 rm -f "$call_log" "$result"

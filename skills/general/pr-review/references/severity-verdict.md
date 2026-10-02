@@ -8,7 +8,7 @@ mirrored verbatim, and toolkit tests reject drift. Change both together.
 | Surviving findings / coverage | Verdict | Blocks via review event? |
 | --- | --- | --- |
 | Any verified CRITICAL | REQUEST_CHANGES | Yes; disclose any coverage gaps |
-| No CRITICAL, incomplete REQUIRED coverage | INCOMPLETE | No approval; report only |
+| No CRITICAL, incomplete REQUIRED coverage | INCOMPLETE | No; COMMENT review on the reviewed head, never an approval |
 | Any SHOULD_FIX, complete required coverage | CHANGES_SUGGESTED | No; COMMENT |
 | Only SUGGESTION, complete required coverage | APPROVE_WITH_SUGGESTIONS | No; APPROVE |
 | No findings, complete required coverage | APPROVE | No; APPROVE |
@@ -29,10 +29,13 @@ their actual status, but do not wait for their completion or withhold the code
 verdict solely because they are pending, failing, stale or unavailable. Verified
 critical defects discovered in their output still count as findings. This mode
 does not remove any other required assessment or independent challenge.
-A not-applicable skip must have a reason and be optional. `INCOMPLETE` is not a
-GitHub helper verdict; do not coerce it to a nonblocking comment that dismisses
-an earlier blocking review. A confirmed critical may still be reported/posted as
-REQUEST_CHANGES with gaps disclosed, when the caller authorized publication.
+A not-applicable skip must have a reason and be optional. When publication is
+authorized, `INCOMPLETE` is posted with `--verdict INCOMPLETE`: a COMMENTED
+review pinned to the reviewed head that never approves, never requests changes
+and never dismisses an earlier blocking review. Do not coerce it to
+CHANGES_SUGGESTED, whose nonblocking comment dismisses an earlier block. A
+confirmed critical may still be reported/posted as REQUEST_CHANGES with gaps
+disclosed, when the caller authorized publication.
 
 ```js
 function reviewVerdict(findings, coverageComplete) {

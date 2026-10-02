@@ -1,6 +1,6 @@
 # GitHub PR Comment Format
 
-This document defines publication formatting for an explicitly authorized PR review (`--post` or explicit caller publishing policy). Headless mode is not authority. Use [severity-verdict.md](severity-verdict.md) for severity and required-coverage gates. INCOMPLETE is report-only, not a helper verdict; never coerce it into an approval or a comment that dismisses a prior block.
+This document defines publication formatting for an explicitly authorized PR review (`--post` or explicit caller publishing policy). Headless mode is not authority. Use [severity-verdict.md](severity-verdict.md) for severity and required-coverage gates. INCOMPLETE is published with `--verdict INCOMPLETE` as a COMMENTED review on the reviewed head; never coerce it into an approval, a request for changes, or a non-blocking comment that dismisses a prior block.
 
 ## Report Templates
 
@@ -107,6 +107,42 @@ Full output with all severity sections.
 ---
 ```
 
+### INCOMPLETE Template
+
+Required coverage is missing and nothing critical is confirmed. The helper posts
+this as a COMMENTED review pinned to the reviewed head. It neither approves nor
+requests changes, and it leaves any earlier blocking review in place. The first
+heading must say the review is incomplete; the helper refuses the posting
+otherwise. Keep the gaps visible, not collapsed.
+
+```markdown
+## ⚪ Review Incomplete (not approved)
+
+**{COMMIT_COUNT}** commits | **{FILE_COUNT}** files changed | reviewed `{HEAD_SHORT}`
+
+{SUMMARY — 1-2 sentences: what this round established, and that it is not an approval. If an earlier blocking review from us still stands, say so and say whether its finding is now resolved.}
+
+| Verification | Result |
+|---|---|
+| {CHECK} | {passed / failed / unavailable / skipped, with evidence} |
+
+### Still needed
+
+- {EXACT_GAP — the evidence, check or decision missing, and who can supply it}
+
+{RESOLVED_SECTION — only if earlier findings were verified fixed}
+
+{SHOULD_FIX_SECTION — only if real should-fix findings exist}
+
+{SUGGESTION_SECTION — only if suggestion findings exist, max 3}
+
+---
+```
+
+Do not invent findings to fill the template. With no real findings, the review
+states what was verified and what is still needed, nothing more. A confirmed
+CRITICAL is never INCOMPLETE: post REQUEST_CHANGES with the gaps disclosed.
+
 ## Verdict Badges
 
 Use these exact strings based on the verdict:
@@ -115,6 +151,7 @@ Use these exact strings based on the verdict:
 - APPROVE_WITH_SUGGESTIONS: `**🔵 Approved with Suggestions**`
 - CHANGES_SUGGESTED: `**🟠 Changes Suggested (non-blocking)**`
 - REQUEST_CHANGES: `**🔴 Changes Requested**`
+- INCOMPLETE: `**⚪ Review Incomplete (not approved)**`
 
 ## Ticket Compliance Section
 
@@ -332,7 +369,7 @@ Same format as severity sections in the full review, grouped by severity:
 ### Incremental Verdict Rules
 
 The verdict is based on **Still Open + New** findings combined (resolved findings are excluded):
-- INCOMPLETE: Required coverage is missing and no critical is confirmed; do not publish through the helper
+- INCOMPLETE: Required coverage is missing and no critical is confirmed; publish with `--verdict INCOMPLETE` (COMMENTED review, no dismissal)
 - APPROVE: No findings remaining, with complete required coverage
 - APPROVE_WITH_SUGGESTIONS: Only suggestions remaining
 - CHANGES_SUGGESTED: At least one should-fix finding still open or newly introduced, but no criticals — non-blocking, exactly as in a full review
@@ -408,6 +445,7 @@ Fields:
 | CHANGES_SUGGESTED | COMMENT |
 | APPROVE_WITH_SUGGESTIONS | APPROVE |
 | APPROVE | APPROVE |
+| INCOMPLETE | COMMENT (review pinned to the reviewed head; never dismisses an earlier block) |
 
 CHANGES_SUGGESTED maps to COMMENT deliberately: should-fix findings inform the author and the human approver without setting a blocking review state. Inline comments are still posted for each SHOULD_FIX finding so they get resolvable threads.
 

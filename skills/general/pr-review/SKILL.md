@@ -3,7 +3,7 @@ name: pr-review
 description: Review a PR or local change for correctness, security, architecture, conventions, test coverage and requirements, with explicit verification coverage. Use for "review this PR", "code review", "review my changes", or "check before merge". Returns a report; publishes only with explicit authorization.
 metadata:
   author: tvd
-  version: 2.0.0
+  version: 2.1.0
 ---
 
 # PR review
@@ -259,11 +259,18 @@ review approval, required CI and merge authorization are separate facts.
 
 Publish only on `--post` or explicit caller publishing policy. Read
 [github-output.md](references/github-output.md), preserve its required headings,
-and write output in the already allocated `REVIEW_TMPDIR`. The helper has no
-`INCOMPLETE` posting mode: return the partial report and explain publication was
-withheld. Under `--independent-checks`, choose the code-review verdict from the
-completed assessment and include a visible line for current CI and CodeRabbit
-status; do not wait to publish it. This can be a real code-review approval while
+and write output in the already allocated `REVIEW_TMPDIR`. Publish an
+`INCOMPLETE` verdict too, with `--verdict INCOMPLETE` and the Review Incomplete
+template. The helper posts it as a COMMENTED review pinned to the reviewed head:
+it never approves, never requests changes and never dismisses an earlier
+blocking review, so a prior block stays for a human or a later complete review
+to clear. State what was verified, which earlier findings are resolved, any
+real non-critical findings, and exactly which coverage, evidence or decision is
+still missing. Do not withhold an authorized INCOMPLETE review: an unpublished
+result hides the gaps from the author and leaves automated callers nothing
+recorded against that head. Under `--independent-checks`, choose the
+code-review verdict from the completed assessment and include a visible line
+for current CI and CodeRabbit status; do not wait to publish it. This can be a real code-review approval while
 CI is pending or failing, because the merge gate is enforced separately. Do not
 coerce missing required code-review coverage to APPROVE or CHANGES_SUGGESTED
 (which can dismiss a prior blocking review). A confirmed CRITICAL can be posted as REQUEST_CHANGES

@@ -9,9 +9,12 @@
 # Arguments:
 #   --body FILE       Path to markdown file for the body comment (required)
 #   --verdict VERDICT Review verdict: APPROVE | APPROVE_WITH_SUGGESTIONS |
-#                     CHANGES_SUGGESTED | REQUEST_CHANGES (required unless
-#                     --edit-last). This script alone maps the verdict to the
-#                     GitHub review event; callers never choose the event.
+#                     CHANGES_SUGGESTED | REQUEST_CHANGES | INCOMPLETE
+#                     (required unless --edit-last). This script alone maps
+#                     the verdict to the GitHub review event; callers never
+#                     choose the event. INCOMPLETE posts a COMMENTED review
+#                     pinned to the reviewed head and never approves, requests
+#                     changes or dismisses an earlier blocking review.
 #   --inline FILE     Path to JSON file with inline comments (optional)
 #   --pr NUMBER       Target a specific PR number (otherwise auto-detected from current branch)
 #   --expected-head SHA Full reviewed commit SHA (required, including dry-run/edit-last).
@@ -69,7 +72,7 @@ while [[ $# -gt 0 ]]; do
         --inline)   INLINE_FILE="$2"; shift 2 ;;
         --verdict)  VERDICT="$2"; shift 2 ;;
         --event)
-            echo "Error: --event was removed. Pass --verdict (APPROVE | APPROVE_WITH_SUGGESTIONS | CHANGES_SUGGESTED | REQUEST_CHANGES); this script owns the GitHub review event." >&2
+            echo "Error: --event was removed. Pass --verdict (APPROVE | APPROVE_WITH_SUGGESTIONS | CHANGES_SUGGESTED | REQUEST_CHANGES | INCOMPLETE); this script owns the GitHub review event." >&2
             exit 1 ;;
         --pr)       PR_NUMBER_ARG="$2"; shift 2 ;;
         --expected-head) EXPECTED_HEAD="${2:?--expected-head requires a SHA}"; shift 2 ;;
@@ -100,6 +103,14 @@ fi
 #   APPROVE_WITH_SUGGESTIONS -> APPROVE          (real GitHub approval)
 #   CHANGES_SUGGESTED        -> COMMENT          (non-blocking issue comment)
 #   REQUEST_CHANGES          -> REQUEST_CHANGES  (blocking review)
+#   INCOMPLETE               -> COMMENT          (COMMENTED review on the
+#                                                 reviewed head; no dismissal)
+#
+# INCOMPLETE means required coverage is missing and nothing critical was
+# confirmed. It is published so the author sees what was verified and what is
+# still needed, and so automation has a record against this head. It must never
+# read as an approval or a new block, and it must never dismiss an earlier
+# blocking review: whether that block still stands is a human decision.
 
 if [[ "$EDIT_LAST" == true && -z "$VERDICT" ]]; then
     EVENT="COMMENT"
@@ -108,13 +119,21 @@ else
         APPROVE|APPROVE_WITH_SUGGESTIONS) EVENT="APPROVE" ;;
         CHANGES_SUGGESTED)                EVENT="COMMENT" ;;
         REQUEST_CHANGES)                  EVENT="REQUEST_CHANGES" ;;
+        INCOMPLETE)                       EVENT="COMMENT" ;;
         "")
-            echo "Error: --verdict is required (APPROVE | APPROVE_WITH_SUGGESTIONS | CHANGES_SUGGESTED | REQUEST_CHANGES)." >&2
+            echo "Error: --verdict is required (APPROVE | APPROVE_WITH_SUGGESTIONS | CHANGES_SUGGESTED | REQUEST_CHANGES | INCOMPLETE)." >&2
             exit 1 ;;
         *)
-            echo "Error: Unknown verdict '$VERDICT'. Valid: APPROVE | APPROVE_WITH_SUGGESTIONS | CHANGES_SUGGESTED | REQUEST_CHANGES." >&2
+            echo "Error: Unknown verdict '$VERDICT'. Valid: APPROVE | APPROVE_WITH_SUGGESTIONS | CHANGES_SUGGESTED | REQUEST_CHANGES | INCOMPLETE." >&2
             exit 1 ;;
     esac
+fi
+
+# An INCOMPLETE review is a fresh record against the reviewed head, never an
+# edit of an older comment that may describe a different head.
+if [[ "$EDIT_LAST" == true && "$VERDICT" == "INCOMPLETE" ]]; then
+    echo "Error: --edit-last cannot carry an INCOMPLETE verdict; post a fresh review pinned to the reviewed head." >&2
+    exit 1
 fi
 
 # --edit-last only edits an existing comment body — it can never submit a
@@ -201,10 +220,12 @@ write_prsmash_result() {
         --arg head "$COMMIT_SHA" \
         --arg posting "$posting" \
         --arg event "$submitted_event" \
+        --arg verdict "$VERDICT" \
         --argjson manualApprovalRequired "$MANUAL_APPROVAL_REQUIRED" \
         --arg postedAt "$(date -Is)" \
         '{repo: $repo, pr: $pr, head: $head, posting: $posting, event: $event,
-          manualApprovalRequired: $manualApprovalRequired, postedAt: $postedAt}' \
+          verdict: $verdict, manualApprovalRequired: $manualApprovalRequired,
+          postedAt: $postedAt}' \
         > "$tmp"; then
         mv "$tmp" "$target"
     else
@@ -218,6 +239,8 @@ write_prsmash_result() {
 # For APPROVE and REQUEST_CHANGES, always submit a proper GitHub review so the
 # approval/request-changes state is set atomically. The body markdown becomes
 # the review body. Inline comments (if any) are included in the same review.
+# INCOMPLETE takes the same path with event COMMENT: one review pinned to the
+# reviewed commit, with no dismissal of an earlier block.
 #
 # For COMMENT events, post a plain issue comment (more prominent in the timeline)
 # and then submit inline comments as a separate review if present.
@@ -240,7 +263,9 @@ if [[ -n "$VERDICT" ]]; then
     BODY_HEADING_LC=$(printf '%s' "$BODY_HEADING" | tr '[:upper:]' '[:lower:]')
     BODY_VERDICT=""
     if [[ -n "$BODY_HEADING_LC" ]]; then
-        if [[ "$BODY_HEADING_LC" == *"changes requested"* ]]; then
+        if [[ "$BODY_HEADING_LC" == *"incomplete"* ]]; then
+            BODY_VERDICT="INCOMPLETE"
+        elif [[ "$BODY_HEADING_LC" == *"changes requested"* ]]; then
             BODY_VERDICT="REQUEST_CHANGES"
         elif [[ "$BODY_HEADING_LC" == *"changes suggested"* ]]; then
             BODY_VERDICT="CHANGES_SUGGESTED"
@@ -252,6 +277,12 @@ if [[ -n "$VERDICT" ]]; then
     fi
     if [[ -n "$BODY_VERDICT" && "$BODY_VERDICT" != "$VERDICT" ]]; then
         echo "Error: --verdict ${VERDICT} contradicts the body's verdict heading (${BODY_HEADING} reads as ${BODY_VERDICT}). Fix the body or the flag; refusing to post." >&2
+        exit 1
+    fi
+    # A COMMENTED review is easy to misread as a pass. An INCOMPLETE posting
+    # must say so in its first heading.
+    if [[ "$VERDICT" == "INCOMPLETE" && "$BODY_VERDICT" != "INCOMPLETE" ]]; then
+        echo "Error: --verdict INCOMPLETE needs a body whose first heading says the review is incomplete (got: ${BODY_HEADING:-no heading}); refusing to post." >&2
         exit 1
     fi
 fi
@@ -320,8 +351,11 @@ if [[ "$MANUAL_APPROVAL_REQUIRED" == true ]]; then
     EFFECTIVE_BODY_FILE="$TEMP_BODY_FILE"
 fi
 
+# INCOMPLETE is submitted as a review (event COMMENT) rather than an issue
+# comment, so GitHub pins it to the reviewed commit and it never takes the
+# issue-comment path that dismisses our earlier blocking review.
 IS_REVIEW_EVENT=false
-if [[ "$EVENT" == "APPROVE" || "$EVENT" == "REQUEST_CHANGES" ]]; then
+if [[ "$EVENT" == "APPROVE" || "$EVENT" == "REQUEST_CHANGES" || "$VERDICT" == "INCOMPLETE" ]]; then
     IS_REVIEW_EVENT=true
 fi
 
@@ -450,7 +484,8 @@ fi
 # --- Step 3: Post ---
 
 if [[ "$IS_REVIEW_EVENT" == true ]]; then
-    # APPROVE / REQUEST_CHANGES: submit as a single GitHub review (body + inline + event)
+    # APPROVE / REQUEST_CHANGES / INCOMPLETE: submit as a single GitHub review
+    # (body + inline + event)
     REVIEW_PAYLOAD=$(jq -n \
         --arg event "$EVENT" \
         --arg commit "$COMMIT_SHA" \
@@ -466,6 +501,7 @@ if [[ "$IS_REVIEW_EVENT" == true ]]; then
     if [[ "$DRY_RUN" == true ]]; then
         echo ""
         echo "=== DRY RUN: Review ==="
+        echo "Verdict: $VERDICT"
         echo "Event: $EVENT"
         echo "Commit: ${COMMIT_SHA:0:8}"
         echo "Body size: ${#BODY_CONTENT} chars"
