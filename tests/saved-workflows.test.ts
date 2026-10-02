@@ -120,6 +120,21 @@ describe("saved review-pr contract (mocked child capabilities, no models)", () =
     }
   });
 
+  test("externally owned evidence is an owned caveat, not incomplete coverage (lleverage#7250)", async () => {
+    const calls: Call[] = [];
+    const result = await run("review-pr", 1, reviewer({
+      "review-ticket": { dimension: "ticket", status: "passed", reason: "All in-scope criteria met", filesReviewed: ["src/file.ts"], findings: [],
+        caveats: [{ item: "Daily cleanup CronJob lives on the infrastructure card", owner: "@author" }, { item: "", owner: "nobody" }] },
+    }), calls);
+    expect(result.verdict).toBe("APPROVE");
+    expect(result.coverageComplete).toBe(true);
+    expect(result.caveats).toEqual([{ item: "Daily cleanup CronJob lives on the infrastructure card", owner: "@author", dimension: "ticket" }]);
+    expect(result.report).toContain("## Caveats (not blocking)\n- **@author:** Daily cleanup CronJob");
+    const prompt = calls.find((call) => call.opts.label === "review-ticket")!.prompt;
+    expect(prompt).toContain("is a caveat, not missing coverage");
+    expect(prompt).toContain("evidence or an ownership decision already posted there is not a caveat");
+  });
+
   test("referenced inaccessible ticket differs from no-ticket optional skip", async () => {
     for (const id of ["", "TASK-1"]) {
       const ctx = context();

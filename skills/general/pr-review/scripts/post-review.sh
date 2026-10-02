@@ -287,6 +287,31 @@ if [[ -n "$VERDICT" ]]; then
     fi
 fi
 
+# --- Next-step guard ---
+#
+# Anything short of an approval leaves the PR waiting on someone. Such a
+# posting must say who and what, or it is noise the author has to decode
+# (lleverage#7250's "Review Incomplete" and #7325's "Changes Suggested" both
+# listed concerns without saying what would settle them). Require a
+# "To move this forward" section with at least one bullet that starts with a
+# bold owner, e.g. "- **@author:** rebase onto main" or
+# "- **Reviewer:** confirm the CronJob ticket". Approvals need none: the
+# verdict is the next step.
+body_owner_actions() {
+    awk '
+        /^#+[[:space:]]+To move this forward[[:space:]]*$/ { in_section = 1; next }
+        in_section && /^#/ { in_section = 0 }
+        in_section && /^[-*][[:space:]]+\*\*[^*]+:\*\*[[:space:]]*[^[:space:]]/ { n++ }
+        END { print n + 0 }
+    ' <<<"$1"
+}
+if [[ "$VERDICT" == "CHANGES_SUGGESTED" || "$VERDICT" == "REQUEST_CHANGES" || "$VERDICT" == "INCOMPLETE" ]]; then
+    if [[ $(body_owner_actions "$BODY_CONTENT") -eq 0 ]]; then
+        echo "Error: a ${VERDICT} posting needs a '### To move this forward' section with at least one '- **owner:** action' bullet (e.g. '- **@author:** ...'); refusing to post." >&2
+        exit 1
+    fi
+fi
+
 MANUAL_APPROVAL_REQUIRED=false
 MANUAL_APPROVAL_REASON=""
 MANUAL_APPROVAL_REASON_CODE=""
@@ -586,8 +611,16 @@ else
 
     # A COMMENT posting means this review concluded nothing blocks the merge.
     # A previous CHANGES_REQUESTED review from us would keep blocking regardless,
-    # so dismiss it — otherwise the PR deadlocks on a stale verdict.
-    if [[ "$MANUAL_APPROVAL_REQUIRED" != true ]]; then
+    # so dismiss it — otherwise the PR deadlocks on a stale verdict. This
+    # includes an approval held for human sign-off: the human still has to
+    # approve, but our resolved block must not stay as the only verdict
+    # (lleverage#7250 sat on CHANGES_REQUESTED after its blocker was fixed).
+    if [[ "$MANUAL_APPROVAL_REQUIRED" == true ]]; then
+        DISMISS_MESSAGE="Superseded: re-review found no merge-blocking issues; awaiting human approval (see latest comment)."
+    else
+        DISMISS_MESSAGE="Superseded: re-review found no merge-blocking issues (see latest non-blocking comment)."
+    fi
+    if true; then
         MY_LOGIN=$(gh api user --jq .login 2>/dev/null || true)
         if [[ -n "$MY_LOGIN" ]]; then
             # `jq -s` aggregates the concatenated page arrays from --paginate.
@@ -607,7 +640,7 @@ else
                 assert_current_head
                 if gh api "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" \
                     --method PUT \
-                    -f message="Superseded: re-review found no merge-blocking issues (see latest non-blocking comment)." \
+                    -f message="$DISMISS_MESSAGE" \
                     -f event="DISMISS" >/dev/null 2>&1; then
                     echo "Dismissed stale blocking review ${review_id}."
                 else

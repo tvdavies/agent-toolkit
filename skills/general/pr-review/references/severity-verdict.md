@@ -8,7 +8,7 @@ mirrored verbatim, and toolkit tests reject drift. Change both together.
 | Surviving findings / coverage | Verdict | Blocks via review event? |
 | --- | --- | --- |
 | Any verified CRITICAL | REQUEST_CHANGES | Yes; disclose any coverage gaps |
-| No CRITICAL, incomplete REQUIRED coverage | INCOMPLETE | No; COMMENT review on the reviewed head, never an approval |
+| No CRITICAL, the review itself could not be completed | INCOMPLETE | No; COMMENT review on the reviewed head, never an approval |
 | Any SHOULD_FIX, complete required coverage | CHANGES_SUGGESTED | No; COMMENT |
 | Only SUGGESTION, complete required coverage | APPROVE_WITH_SUGGESTIONS | No; APPROVE |
 | No findings, complete required coverage | APPROVE | No; APPROVE |
@@ -23,6 +23,26 @@ are different: depth of analysis alone is not severity evidence.
 verification check completed successfully for the reviewed head/scope. A review
 stream may pass its assessment and return findings. Missing/failed/null output,
 unavailable required ticket context, and pending/stale required CI are not passes.
+
+Required coverage is what this review has to do itself: read the diff and the
+ticket, run each dimension, adjudicate findings, and check the verification it
+owns. Separate three things that earlier rounds blurred together:
+
+- **Review failure** (a stream failed, objects or ticket unreadable, a check
+  this review owns could not run): coverage is incomplete, so `INCOMPLETE`.
+- **External evidence** (database or runtime results, deployment or CronJob
+  configuration, a criterion the ticket or PR discussion assigns to another
+  card or owner): not required coverage. List it as a caveat with its owner.
+  If its absence hides a real defect, raise that defect as a finding with a
+  severity instead.
+- **Evidence already supplied**: results, logs or decisions posted in the PR
+  discussion count. Read the full comment before calling anything missing.
+
+On a re-review, evidence gathered for an earlier exact head stays valid when
+the intervening delta does not touch the code it covered. A gap listed by an
+earlier round is not inherited automatically: re-check it against the current
+discussion and delta. When every earlier blocking finding is verified resolved
+and nothing new is found, the verdict is an approval, not `INCOMPLETE`.
 When the caller explicitly requests `--independent-checks`, remote CI and
 CodeRabbit are separate merge gates, not required code-review coverage. Record
 their actual status, but do not wait for their completion or withhold the code

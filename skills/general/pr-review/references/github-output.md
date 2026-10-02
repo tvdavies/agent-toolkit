@@ -2,6 +2,34 @@
 
 This document defines publication formatting for an explicitly authorized PR review (`--post` or explicit caller publishing policy). Headless mode is not authority. Use [severity-verdict.md](severity-verdict.md) for severity and required-coverage gates. INCOMPLETE is published with `--verdict INCOMPLETE` as a COMMENTED review on the reviewed head; never coerce it into an approval, a request for changes, or a non-blocking comment that dismisses a prior block.
 
+## Every posting answers "what now?"
+
+Read the posting as the author will: the first two lines must tell them whether
+they can merge, and if not, who has to do what. Every template therefore opens
+with the verdict heading and a one-line verdict sentence, and every verdict
+short of an approval has a `### To move this forward` section directly after
+it. Each bullet starts with a bold owner and one concrete action:
+
+```markdown
+### To move this forward
+
+- **@{AUTHOR}:** {exact change, evidence or decision, with file or check names}
+- **Reviewer ({NAME_OR_prsmash}):** {what the reviewer does next, e.g. re-review once pushed}
+```
+
+`post-review.sh` refuses a CHANGES_SUGGESTED, REQUEST_CHANGES or INCOMPLETE
+posting without at least one `- **owner:** action` bullet in that section.
+
+- Name a person or role who can act. "Someone should check" is not an owner.
+- Do not ask for evidence the PR discussion already contains. Read the full
+  text that `fetch-conversation.sh --full-dir` saved before listing anything as
+  missing; if the evidence is there, say you used it.
+- Externally owned work (a CronJob on an infrastructure card, a migration run by
+  ops, a follow-up ticket the author named) is a caveat line, not an action for
+  this PR, unless the ticket says this PR must ship it.
+- Keep long context below the actions, in `<details>`. Coverage tables go at the
+  bottom, collapsed, unless a gap is the reason the PR cannot merge.
+
 ## Report Templates
 
 Write the complete markdown to `$REVIEW_TMPDIR/pr-review.md` before posting.
@@ -26,9 +54,11 @@ For clean PRs with no findings or only minor positives. Keep it short.
 ```markdown
 ## ✅ Approved
 
-**{COMMIT_COUNT}** commits | **{FILE_COUNT}** files changed | **{ADDITIONS}** additions | **{DELETIONS}** deletions
-
 {SUMMARY — one short sentence stating why the PR is fine. Wrap any extra context in a `<details><summary>More context</summary>...</details>` block.}
+
+{CAVEATS — only if any: "Not covered by this review: {item} ({owner})." One line each.}
+
+**{COMMIT_COUNT}** commits | **{FILE_COUNT}** files changed | **{ADDITIONS}** additions | **{DELETIONS}** deletions
 
 ---
 ```
@@ -46,9 +76,9 @@ Same condensed format but with a visible suggestions section (max 3 items, not c
 ```markdown
 ## 🔵 Approved with Suggestions
 
-**{COMMIT_COUNT}** commits | **{FILE_COUNT}** files changed | **{ADDITIONS}** additions | **{DELETIONS}** deletions
+{SUMMARY — one sentence: approved, and the suggestions are optional. Wrap any longer rationale in a `<details><summary>More context</summary>...</details>` block.}
 
-{SUMMARY — 1-2 punchy sentences. Wrap any longer rationale in a `<details><summary>More context</summary>...</details>` block.}
+**{COMMIT_COUNT}** commits | **{FILE_COUNT}** files changed | **{ADDITIONS}** additions | **{DELETIONS}** deletions
 
 ---
 
@@ -70,9 +100,14 @@ Should-fix findings but no criticals. Posted as a non-blocking comment — say s
 ```markdown
 ## 🟠 Changes Suggested (non-blocking)
 
-**{COMMIT_COUNT}** commits | **{FILE_COUNT}** files changed | **{ADDITIONS}** additions | **{DELETIONS}** deletions
+{VERDICT_LINE — one sentence: nothing here blocks the merge; name the one thing most worth fixing.}
 
-{SUMMARY — 1-2 punchy sentences. State that nothing blocks the merge; these are worth fixing but a human approver can weigh them.}
+### To move this forward
+
+- **@{AUTHOR}:** {fix the should-fix items below, or reply on each thread why not}
+- **{HUMAN_APPROVER_OR_Reviewer}:** {approve once the author has responded; no further automated review is needed unless code changes}
+
+**{COMMIT_COUNT}** commits | **{FILE_COUNT}** files changed | **{ADDITIONS}** additions | **{DELETIONS}** deletions
 
 ---
 
@@ -90,9 +125,14 @@ Full output with all severity sections.
 ```markdown
 ## 🔴 Changes Requested
 
-**{COMMIT_COUNT}** commits | **{FILE_COUNT}** files changed | **{ADDITIONS}** additions | **{DELETIONS}** deletions
+{VERDICT_LINE — one sentence stating the blocking defect. Wrap any longer rationale in a `<details><summary>More context</summary>...</details>` block.}
 
-{SUMMARY — 1-2 punchy sentences stating the headline reason for the verdict. Wrap any longer rationale in a `<details><summary>More context</summary>...</details>` block.}
+### To move this forward
+
+- **@{AUTHOR}:** {fix each critical below; name the files and the regression test expected}
+- **Reviewer ({NAME_OR_prsmash}):** {re-review automatically on the next push}
+
+**{COMMIT_COUNT}** commits | **{FILE_COUNT}** files changed | **{ADDITIONS}** additions | **{DELETIONS}** deletions
 
 ---
 
@@ -109,26 +149,27 @@ Full output with all severity sections.
 
 ### INCOMPLETE Template
 
-Required coverage is missing and nothing critical is confirmed. The helper posts
-this as a COMMENTED review pinned to the reviewed head. It neither approves nor
-requests changes, and it leaves any earlier blocking review in place. The first
-heading must say the review is incomplete; the helper refuses the posting
-otherwise. Keep the gaps visible, not collapsed.
+The review itself could not finish: a reviewer stream failed, the diff or the
+referenced ticket could not be read, or a required check this review owns could
+not run. Evidence that only the author or another owner can supply is not a
+reason to post this; see the coverage rules in
+[severity-verdict.md](severity-verdict.md). The helper posts this as a COMMENTED
+review pinned to the reviewed head. It neither approves nor requests changes,
+and it leaves any earlier blocking review in place. The first heading must say
+the review is incomplete; the helper refuses the posting otherwise.
 
 ```markdown
 ## ⚪ Review Incomplete (not approved)
 
-**{COMMIT_COUNT}** commits | **{FILE_COUNT}** files changed | reviewed `{HEAD_SHORT}`
+{VERDICT_LINE — one sentence: which part of the review could not be completed and why. If an earlier blocking review from us still stands, say whether its finding is now resolved.}
 
-{SUMMARY — 1-2 sentences: what this round established, and that it is not an approval. If an earlier blocking review from us still stands, say so and say whether its finding is now resolved.}
+### To move this forward
+
+- **{OWNER}:** {the one action that unblocks the review: re-run after an outage, grant ticket access, ...}
 
 | Verification | Result |
 |---|---|
 | {CHECK} | {passed / failed / unavailable / skipped, with evidence} |
-
-### Still needed
-
-- {EXACT_GAP — the evidence, check or decision missing, and who can supply it}
 
 {RESOLVED_SECTION — only if earlier findings were verified fixed}
 
@@ -269,9 +310,11 @@ When posting an incremental re-review (`--since`), use this template instead of 
 ```markdown
 ## {VERDICT_BADGE} Incremental Review
 
-Since `{COMMIT_SHA}` — **{NEW_COMMIT_COUNT}** new commits | **{FILE_COUNT}** files changed
+{VERDICT_LINE — one sentence: the verdict and why, e.g. "All 3 earlier blockers are fixed; approved." Wrap any longer rationale in a `<details><summary>More context</summary>...</details>` block.}
 
-{SUMMARY — 1-2 punchy sentences covering the delta. Wrap any longer rationale in a `<details><summary>More context</summary>...</details>` block.}
+{TO_MOVE_THIS_FORWARD — required unless the verdict is an approval; see "Every posting answers 'what now?'"}
+
+Since `{COMMIT_SHA}` — **{NEW_COMMIT_COUNT}** new commits | **{FILE_COUNT}** files changed
 
 ---
 
@@ -369,8 +412,8 @@ Same format as severity sections in the full review, grouped by severity:
 ### Incremental Verdict Rules
 
 The verdict is based on **Still Open + New** findings combined (resolved findings are excluded):
-- INCOMPLETE: Required coverage is missing and no critical is confirmed; publish with `--verdict INCOMPLETE` (COMMENTED review, no dismissal)
-- APPROVE: No findings remaining, with complete required coverage
+- INCOMPLETE: This round's review could not be completed and no critical is confirmed; publish with `--verdict INCOMPLETE` (COMMENTED review, no dismissal). Never INCOMPLETE because an earlier round listed a gap the author has since answered, or because of evidence owned outside the PR.
+- APPROVE: No findings remaining, with complete required coverage. Every earlier blocking finding verified resolved and no new ones means APPROVE, even if the previous round was INCOMPLETE or REQUEST_CHANGES.
 - APPROVE_WITH_SUGGESTIONS: Only suggestions remaining
 - CHANGES_SUGGESTED: At least one should-fix finding still open or newly introduced, but no criticals — non-blocking, exactly as in a full review
 - REQUEST_CHANGES: At least one critical finding still open or newly introduced

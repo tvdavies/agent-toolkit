@@ -131,9 +131,13 @@ longer needed and permitted by the caller's retention policy.
    inaccessible ticket is unavailable REQUIRED coverage, not zero findings.
    Include only directly relevant related decisions, not a full project audit.
 6. For a PR, collect bounded prior discussion:
-   `bash "$SKILL_DIR/scripts/fetch-conversation.sh" --pr PR_NUMBER >
-   "$REVIEW_TMPDIR/pr-prior-discussion.md"`. Record retrieval failures; a failed
-   fetch is not proof there was no discussion. Pass retrieved text to reviewers.
+   `bash "$SKILL_DIR/scripts/fetch-conversation.sh" --pr PR_NUMBER --full-dir
+   "$REVIEW_TMPDIR/discussion" > "$REVIEW_TMPDIR/pr-prior-discussion.md"`.
+   Record retrieval failures; a failed fetch is not proof there was no
+   discussion. Pass retrieved text to reviewers. Excerpts marked `truncated`
+   name a file with the full text: read it before asking for evidence or a
+   decision, because authors often post test runs, query output and ownership
+   decisions in long PR comments.
 7. Collect current-head CI evidence and define the verification matrix below
    before review. No changes means report the empty scope and stop, not approve
    unreviewed code.
@@ -173,6 +177,13 @@ with the captured head via check-run/status metadata. A green check for another
 SHA is stale evidence. Fetch failed logs through available authorized tools;
 provider-specific CLIs are optional, not a prerequisite. Preserve links when
 logs are inaccessible. Do not guess project/account values.
+
+Required coverage is what this review must do itself. Evidence only someone
+else can produce (database or runtime results, deployment or CronJob
+configuration, criteria the ticket or discussion assigns to another card) is a
+caveat with an owner, never an `unavailable` required row; see
+[severity-verdict.md](references/severity-verdict.md). Evidence already posted
+in the discussion counts as supplied.
 
 Track each dimension/check as `passed`, `failed`, `unavailable`, or `skipped`,
 with `required`, reason, scope, reviewed head, and evidence/command outcome.
@@ -245,7 +256,8 @@ Use [severity-verdict.md](references/severity-verdict.md), the contract also
 mirrored and regression-tested in saved `review-pr`. Only CRITICAL blocks with
 `REQUEST_CHANGES`; SHOULD_FIX yields nonblocking `CHANGES_SUGGESTED`.
 Incomplete REQUIRED coverage without a confirmed critical yields `INCOMPLETE`,
-not an approval. Under `--independent-checks`, remote CI and CodeRabbit are
+not an approval. `INCOMPLETE` is for a review that could not finish, not for
+external evidence or a criterion owned elsewhere. Under `--independent-checks`, remote CI and CodeRabbit are
 separate merge gates, so their outstanding status does not constitute incomplete
 required code-review coverage. A critical still yields `REQUEST_CHANGES`, with
 the gaps visible.
@@ -259,7 +271,11 @@ review approval, required CI and merge authorization are separate facts.
 
 Publish only on `--post` or explicit caller publishing policy. Read
 [github-output.md](references/github-output.md), preserve its required headings,
-and write output in the already allocated `REVIEW_TMPDIR`. Publish an
+and write output in the already allocated `REVIEW_TMPDIR`. Every posting opens
+with the verdict and a one-line reason; anything short of an approval follows
+it with `### To move this forward` and `- **owner:** action` bullets naming who
+does what next. The helper refuses non-approval postings without one. If you
+cannot name an owner and an action, the posting is not ready. Publish an
 `INCOMPLETE` verdict too, with `--verdict INCOMPLETE` and the Review Incomplete
 template. The helper posts it as a COMMENTED review pinned to the reviewed head:
 it never approves, never requests changes and never dismisses an earlier
@@ -307,8 +323,11 @@ it; don't pretend no review exists. If none is found, do a full-scope review or
 explicitly label delta-only coverage. Unparseable prior output is not full coverage.
 
 Classify prior findings as Resolved (verified fixed), Still Open, or New. Verdict
-uses Still Open + New, under the same coverage gate. Reuse earlier coverage only
-when its exact head/scope and the complete intervening delta are known. Do not
+uses Still Open + New, under the same coverage gate: when every earlier blocking
+finding is resolved and nothing new is found, approve. Reuse earlier coverage
+when its exact head/scope and the complete intervening delta are known and the
+delta does not touch what it covered. Re-check each gap an earlier round listed
+against the current discussion instead of carrying it forward. Do not
 turn an old missed minor issue or a good-faith fix into a moving approval target.
 A new blocker in untouched code needs verified CRITICAL impact and acknowledgment
 that it was missed before. Bundle necessary tests with a requested fix.

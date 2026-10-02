@@ -9,12 +9,18 @@
 # Line-comment threads carry the id of the review that opened them, so a
 # specific round's inline findings can be matched to its verdict entry.
 #
+# Long comments are where authors post evidence (test runs, query output,
+# ownership decisions), so people's comments get a larger excerpt than bots',
+# and every shortened entry says so. With --full-dir, the complete text of each
+# shortened comment or review body is written there and the excerpt names the
+# file, so a reviewer can read the evidence instead of asking for it again.
+#
 # Exits 0 on success even when the conversation is empty; exits non-zero when
 # retrieval itself fails, so a missing history is never mistaken for an empty
 # one.
 #
 # Usage:
-#   fetch-conversation.sh --pr NUMBER [--repo OWNER/NAME]
+#   fetch-conversation.sh --pr NUMBER [--repo OWNER/NAME] [--full-dir DIR]
 #
 # Output: markdown summary to stdout.
 #
@@ -24,11 +30,13 @@ set -euo pipefail
 
 PR_NUMBER=""
 REPO=""
+FULL_DIR=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --pr)   PR_NUMBER="$2"; shift 2 ;;
         --repo) REPO="$2"; shift 2 ;;
+        --full-dir) FULL_DIR="$2"; shift 2 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
@@ -108,6 +116,44 @@ fi
 
 threads_json=$conversation_json
 
+# Excerpt limits. Bots (CodeRabbit summaries, CI, Linear) repeat themselves;
+# people's comments carry the evidence.
+PERSON_LIMIT=1500
+BOT_LIMIT=400
+if [[ -n "$FULL_DIR" ]]; then
+    mkdir -p "$FULL_DIR"
+fi
+
+# Writes the full body of each over-limit entry under FULL_DIR as
+# <kind>-<index>.md. Args: kind, jq path to the node array.
+write_full_bodies() {
+    local kind=$1 path=$2 count i
+    [[ -n "$FULL_DIR" ]] || return 0
+    count=$(jq -r --argjson p "$PERSON_LIMIT" --argjson b "$BOT_LIMIT" "$JQ_DEFS $path | length" <<<"$conversation_json")
+    for ((i = 0; i < count; i++)); do
+        if jq -e --argjson p "$PERSON_LIMIT" --argjson b "$BOT_LIMIT" --argjson i "$i" \
+            "$JQ_DEFS $path[\$i] | is_long" <<<"$conversation_json" >/dev/null; then
+            jq -j --argjson i "$i" "$path[\$i] | \"<!-- \\(.author.login // \"deleted\") \\(.createdAt) -->\\n\\n\\(.body)\\n\"" \
+                <<<"$conversation_json" > "$FULL_DIR/${kind}-${i}.md"
+        fi
+    done
+}
+
+# Shared jq helpers: who is a bot, how long an excerpt may be, and the excerpt
+# itself with an explicit truncation marker.
+JQ_DEFS='
+  def is_bot: (.author.login // "") | test("\\[bot\\]$|^coderabbitai$|^linear(-code)?$|^github-actions$"; "i");
+  def limit: if is_bot then $b else $p end;
+  def flat: (.body // "") | gsub("\\s+"; " ");
+  def is_long: (flat | length) > limit;
+  def excerpt($kind; $i; $dir):
+    flat as $t
+    | if ($t | length) <= limit then $t
+      else $t[0:limit] + " … [truncated from \($t | length) chars"
+        + (if $dir != "" then "; full text: \($dir)/\($kind)-\($i).md" else "" end) + "]"
+      end;
+'
+
 # --- Format output ---
 
 echo "## Prior Discussion"
@@ -161,11 +207,13 @@ reviews_truncation=$(echo "$conversation_json" | jq -r '
 ')
 [[ -n "$reviews_truncation" ]] && echo "$reviews_truncation"
 
-reviews_md=$(echo "$conversation_json" | jq -r '
+write_full_bodies review '.data.repository.pullRequest.reviews.nodes'
+reviews_md=$(echo "$conversation_json" | jq -r --argjson p "$PERSON_LIMIT" --argjson b "$BOT_LIMIT" --arg dir "$FULL_DIR" "$JQ_DEFS"'
   .data.repository.pullRequest.reviews.nodes
-  | map(select(.state != "PENDING"))
-  | .[]
-  | "- **[\(.state)]** review \(.fullDatabaseId) by \(.author.login // "deleted") (\(.createdAt[0:10])): \(if (.body // "") == "" then "(no body)" else ((.body) | gsub("\\s+"; " ") | .[0:400]) end)"
+  | to_entries[]
+  | .key as $i | .value
+  | select(.state != "PENDING")
+  | "- **[\(.state)]** review \(.fullDatabaseId) by \(.author.login // "deleted") (\(.createdAt[0:10])): \(if (.body // "") == "" then "(no body)" else excerpt("review"; $i; $dir) end)"
 ')
 
 if [[ -z "$reviews_md" ]]; then
@@ -185,10 +233,12 @@ comments_truncation=$(echo "$conversation_json" | jq -r '
 ')
 [[ -n "$comments_truncation" ]] && echo "$comments_truncation"
 
-issue_md=$(echo "$conversation_json" | jq -r '
+write_full_bodies comment '.data.repository.pullRequest.comments.nodes'
+issue_md=$(echo "$conversation_json" | jq -r --argjson p "$PERSON_LIMIT" --argjson b "$BOT_LIMIT" --arg dir "$FULL_DIR" "$JQ_DEFS"'
   .data.repository.pullRequest.comments.nodes
-  | .[]
-  | "- **\(.author.login // "deleted")** (\(.createdAt[0:10])): \((.body // "") | gsub("\\s+"; " ") | .[0:400])"
+  | to_entries[]
+  | .key as $i | .value
+  | "- **\(.author.login // "deleted")** (\(.createdAt[0:10])): \(excerpt("comment"; $i; $dir))"
 ')
 
 if [[ -z "$issue_md" ]]; then
