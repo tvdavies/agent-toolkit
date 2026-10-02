@@ -58,6 +58,22 @@ describe("portable skill contracts (static guards, not model behaviour claims)",
     expect(text).toMatch(/agent\s+CLI through shell/);
   });
 
+  test("authorized INCOMPLETE reviews are published as a non-dismissing COMMENTED review", () => {
+    const prose = skill("pr-review").replace(/\s+/g, " ");
+    expect(prose).not.toContain("has no `INCOMPLETE` posting mode");
+    expect(prose).toContain("`--verdict INCOMPLETE`");
+    expect(prose).toContain("COMMENTED review pinned to the reviewed head");
+    expect(prose).toContain("never dismisses an earlier blocking review");
+    expect(prose).toContain("exactly which coverage, evidence or decision is still missing");
+    expect(prose).toContain("Do not withhold an authorized INCOMPLETE review");
+    const output = read("skills/general/pr-review/references/github-output.md");
+    expect(output).toContain("### INCOMPLETE Template");
+    expect(output).toContain("| INCOMPLETE | COMMENT");
+    expect(output).not.toContain("do not publish through the helper");
+    const helper = read("skills/general/pr-review/scripts/post-review.sh");
+    expect(helper).toMatch(/INCOMPLETE\)\s+EVENT="COMMENT"/);
+  });
+
   test("PR filesystem restrictions survive integration and bind every delegated prompt", () => {
     const text = skill("pr-review");
     const discipline = text.split("## Search and Filesystem Discipline\n")[1]?.split("\n## ")[0];
