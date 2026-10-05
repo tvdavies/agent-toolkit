@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { chmod, mkdtemp, mkdir, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -57,7 +58,7 @@ async function readSkillState(): Promise<{ repo: string; groups: string[] }> {
 }
 
 describe("scripts/sync.sh", () => {
-  it("reconciles dependencies, skills, the local package, workflows, and manifest packages", async () => {
+  it("reconciles dependencies, skills, the local package, and manifest packages", async () => {
     const result = runSync("--groups=general");
     expect(result.exitCode, result.stderr.toString()).toBe(0);
 
@@ -81,11 +82,24 @@ describe("scripts/sync.sh", () => {
       path.join(home, ".agents", "skills"),
     );
 
-    for (const workflow of ["debug-issue.ts", "implement-ticket.ts", "review-pr.ts"]) {
-      const link = path.join(home, ".pi", "agent", "workflows", workflow);
-      expect(path.resolve(path.dirname(link), await readlink(link))).toBe(path.join(repo, ".pi", "workflows", workflow));
-    }
+    expect(existsSync(path.join(home, ".pi", "agent", "workflows"))).toBe(false);
     expect(result.stdout.toString()).toContain("Run /reload in active Pi sessions");
+  });
+
+  it("removes workflow links left by the retired workflows extension and keeps user workflows", async () => {
+    const workflows = path.join(home, ".pi", "agent", "workflows");
+    const state = path.join(home, ".local", "state", "agent-toolkit");
+    await mkdir(workflows, { recursive: true });
+    await mkdir(state, { recursive: true });
+    await symlink(path.join(repo, ".pi", "workflows", "debug-issue.ts"), path.join(workflows, "debug-issue.ts"));
+    await writeFile(path.join(workflows, "mine.ts"), "export default {};\n");
+    await writeFile(path.join(state, "workflow-links.txt"), "debug-issue.ts\n");
+
+    const result = runSync("--groups=general");
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(existsSync(path.join(workflows, "debug-issue.ts"))).toBe(false);
+    expect(existsSync(path.join(workflows, "mine.ts"))).toBe(true);
+    expect(existsSync(path.join(state, "workflow-links.txt"))).toBe(false);
   });
 
   it("uses all groups on first install and updates Pi extensions only when explicitly requested", async () => {

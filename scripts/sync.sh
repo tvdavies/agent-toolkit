@@ -11,7 +11,7 @@ usage() {
 Usage: sync.sh [--groups general,personal,lleverage] [--install-git-hooks] [--update-pi-packages]
 
 Synchronise Agent Toolkit dependencies, managed skills, the local Pi package,
-saved workflows, and toolkit-managed third-party Pi packages.
+and toolkit-managed third-party Pi packages.
 
 Options:
   --groups VALUE           Replace the complete desired skill group set.
@@ -120,7 +120,23 @@ fi
 
 "$REPO_DIR/scripts/lib/install-skills.sh" "${GROUP_ARGS[@]}"
 pi install "$REPO_DIR"
-"$REPO_DIR/scripts/lib/sync-workflows.sh"
+
+# The workflows extension is retired. Remove the workflow links an earlier sync
+# created, leaving any other user workflows alone.
+WORKFLOW_STATE="$HOME/.local/state/agent-toolkit/workflow-links.txt"
+if [ -f "$WORKFLOW_STATE" ]; then
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    link="$HOME/.pi/agent/workflows/$name"
+    if [ -L "$link" ]; then
+      case "$(readlink "$link")" in
+        "$REPO_DIR"/*) rm "$link"; echo "Removed retired workflow link $name" ;;
+      esac
+    fi
+  done < "$WORKFLOW_STATE"
+  rm "$WORKFLOW_STATE"
+  rmdir "$HOME/.pi/agent/workflows" 2>/dev/null || true
+fi
 
 if [ "$UPDATE_PI_PACKAGES" = true ]; then
   "$REPO_DIR/scripts/lib/sync-pi-packages.sh"

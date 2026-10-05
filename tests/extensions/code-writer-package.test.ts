@@ -18,7 +18,7 @@ describe("code-writer packaging", () => {
 		const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 		expect(pkg["pi-subagents"]).toEqual({ agents: ["./agents"] });
 		expect(pkg.pi).toEqual({ extensions: ["./extensions"] });
-		expect(pkg.dependencies["pi-subagents"]).toBe("^0.28.0");
+		expect(pkg.dependencies).toBeUndefined();
 		expect(existsSync(join(ROOT, "agents", "code-writer.md"))).toBe(true);
 	});
 
@@ -37,7 +37,7 @@ describe("code-writer packaging", () => {
 		expect((meta.acceptance as { level: string }).level).toBe("none");
 		const tools = String(meta.tools).split(",").map((tool) => tool.trim());
 		expect(tools).toEqual(["read", "grep", "find", "ls", "edit", "write", "contact_supervisor"]);
-		for (const forbidden of ["bash", "interactive_shell", "subagent", "workflow_run"]) expect(tools).not.toContain(forbidden);
+		for (const forbidden of ["bash", "interactive_shell", "subagent"]) expect(tools).not.toContain(forbidden);
 		// The model is deployment configuration, not role prose; extensions stay explicitly empty until configured.
 		expect(meta.model).toBeUndefined();
 		expect(meta.fallbackModels).toBeUndefined();

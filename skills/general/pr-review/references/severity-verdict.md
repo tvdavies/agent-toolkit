@@ -1,9 +1,7 @@
 # Severity, coverage and verdict contract
 
-This contract applies to portable `pr-review` and saved `review-pr`. It is bundled
-inside this skill so individual installation/vendoring needs no sibling resource.
-The saved workflow cannot import host files: its deterministic function below is
-mirrored verbatim, and toolkit tests reject drift. Change both together.
+This contract applies to `pr-review`. It is bundled inside this skill so
+individual installation/vendoring needs no sibling resource.
 
 | Surviving findings / coverage | Verdict | Blocks via review event? |
 | --- | --- | --- |

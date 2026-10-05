@@ -252,8 +252,7 @@ low-risk work this extra check is optional, not a reassurance loop.
 
 ## 4. Decide and deliver
 
-Use [severity-verdict.md](references/severity-verdict.md), the contract also
-mirrored and regression-tested in saved `review-pr`. Only CRITICAL blocks with
+Use [severity-verdict.md](references/severity-verdict.md). Only CRITICAL blocks with
 `REQUEST_CHANGES`; SHOULD_FIX yields nonblocking `CHANGES_SUGGESTED`.
 Incomplete REQUIRED coverage without a confirmed critical yields `INCOMPLETE`,
 not an approval. `INCOMPLETE` is for a review that could not finish, not for

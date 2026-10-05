@@ -1,6 +1,6 @@
 # Agent Toolkit
 
-A portable personal toolkit for Pi: retained custom extensions, reusable Agent Skills, saved workflows, and safe installers for sharing them across machines.
+A portable personal toolkit for Pi: retained custom extensions, reusable Agent Skills, and safe installers for sharing them across machines.
 
 The retired daemon and Brain runtimes are no longer part of this repository. Git history remains the recovery path if either is needed later.
 
@@ -16,7 +16,7 @@ git clone git@github.com:tvdavies/agent-toolkit.git ~/agent-toolkit
 1. installs production npm dependencies used by retained extensions;
 2. creates managed individual skill links;
 3. installs this checkout as a local Pi package;
-4. links the saved workflows into `~/.pi/agent/workflows`; and
+4. removes workflow links left by the retired workflows extension; and
 5. reconciles toolkit-managed third-party Pi packages without running a blanket `pi update`.
 
 It does not require Bun, create services, or enable lingering. Pi's package command records the local checkout and managed third-party packages in the normal package configuration. Bun is needed only for development tests.
@@ -82,19 +82,13 @@ The writer turns the brief into the document; the skill then checks it and uploa
 files.myslop.app with a share-card image, so every report is handed over as a link that
 unfurls properly in Slack.
 
-## Extensions and workflows
+## Extensions and agents
 
-The Pi package exports `extensions/` and, for native pi-subagents, the `agents/` directory. See [`extensions/README.md`](extensions/README.md) for the active inventory and workflow security model.
-
-Saved workflows live in `.pi/workflows/` and remain available through the workflows extension:
-
-- `debug-issue`
-- `implement-ticket`
-- `review-pr`
+The Pi package exports `extensions/` and, for native pi-subagents, the `agents/` directory. See [`extensions/README.md`](extensions/README.md) for the active inventory.
 
 ## Synchronising changes
 
-Run the same command after adding or removing a skill, adding an extension or runtime dependency, changing a saved workflow, or editing `manifests/pi-packages.json`:
+Run the same command after adding or removing a skill, adding an extension or runtime dependency, or editing `manifests/pi-packages.json`:
 
 ```bash
 ./scripts/sync.sh
@@ -138,7 +132,7 @@ npm test
 
 The test suite validates skill frontmatter/layout, portable authority contracts,
 and installer safety in isolated temporary home directories. It covers retained
-extensions, mocked saved-workflow outcomes, real preserved-patch seeding, and the
+extensions and the
 PR posting shell fixtures (with a fake `gh`, never live publication). Run
 `git diff --check` before integration. See
 [`plans/portable-contract-evals.md`](plans/portable-contract-evals.md) for opt-in
@@ -152,7 +146,6 @@ extensions/                 Active Pi extensions
 skills/general/             Portable skills
 skills/personal/            Personal/local skills
 skills/lleverage/           Lleverage-specific skills
-.pi/workflows/              Saved workflows
 manifests/pi-packages.json  Third-party Pi package list
 scripts/sync.sh             Canonical install and reconciliation command
 scripts/lib/                Internal reconciliation and hook helpers
