@@ -47,8 +47,8 @@ when all of these hold:
 - it isn't listed under Exclusions in `STATE.md`, and Tom hasn't said another
   session owns it;
 - no local worktree or branch from another session exists for it (`git worktree list`);
-- it meets the readiness bar in `issues.md`. If not, it goes to the ready-up
-  queue, not to an implementer.
+- it meets the readiness bar in `issues.md`. If not, it goes to a `prepare-ticket`
+  subagent, not to an implementer.
 
 When you start a ticket, set it In Progress at once (yolo-ticket does this). That
 is the claim. If a ticket you were about to start changes state underneath you,
@@ -69,7 +69,8 @@ Rank eligible, ready tickets by:
 4. lane fit: avoid running two tickets that touch the same files at the same time.
 
 Batch triage: at start-up, give 2–3 read-only investigators batches of about 12
-tickets each. Each returns, per ticket: ready (y/n), size, files, blocker, impact.
+tickets each, to sort them quickly. Full preparation of a single ticket is
+`prepare-ticket`'s job. Each returns, per ticket: ready (y/n), size, files, blocker, impact.
 Record the verdicts in `STATE.md` with a timestamp. Verdicts older than a day get
 re-checked before dispatch.
 
@@ -87,8 +88,8 @@ re-checked before dispatch.
 ## Run
 
 Follow the loop in `orchestration.md`, with `linear-queue.sh cycle` as the queue.
-Keep 4–6 implementers busy. When the queue empties, follow the empty-queue
-procedure exactly. Readying tickets is real work, and claiming "nothing left" is
+Keep 4–6 implementers busy. Follow "Ending a turn" in `orchestration.md`. When
+the queue empties, follow the empty-queue procedure exactly. Readying tickets is real work, and claiming "nothing left" is
 the most common failure of this mode.
 
 Follow-ups from swept tickets go through `followup.sh --parent <ticket>`. A

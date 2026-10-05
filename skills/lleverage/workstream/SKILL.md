@@ -80,7 +80,9 @@ parallel.
 
 Run the loop in `orchestration.md`, using `linear-queue.sh tree ROOT` as the queue.
 `eligible` tickets that meet the readiness bar go to implementers. Unready ones
-go to investigators. Priority order: production-impacting fixes, then the
+go to `prepare-ticket` subagents. Read "Ending a turn" in `orchestration.md`
+before the first dispatch: this mode is unattended, and stopping early is its
+most common failure. Priority order: production-impacting fixes, then the
 critical path, then the rest.
 
 Throughout:

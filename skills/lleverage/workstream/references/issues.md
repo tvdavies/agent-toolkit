@@ -19,9 +19,10 @@ A ticket is ready when all of these hold:
 - no open blocker; dependencies are set as Linear `blocks` relations;
 - it fits one reviewable PR (roughly under 1,500 changed lines, one main contract).
 
-Getting a ticket ready is investigation work: give a read-only investigator one
-bounded question, then write the findings into the ticket description, not just a
-comment.
+Getting a ticket ready is investigation work. Follow `../../prepare-ticket/SKILL.md`
+(from a subagent: "Run the prepare-ticket skill on ID"), which writes the findings
+into the ticket description, not just a comment, and returns a verdict.
+Bug causes come from `../../root-cause/SKILL.md`.
 
 ## Planning a top-level issue
 
