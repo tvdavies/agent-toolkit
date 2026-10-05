@@ -3,7 +3,8 @@ import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AssistantMessage, Context, Message, Model } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { streamAnthropic } from "@earendil-works/pi-ai/anthropic";
+import { stream as streamAnthropic } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import { Type } from "typebox";
 import { MODELS, ensureRequiredAdaptiveThinking, stripCompactedThinking } from "../../extensions/anthropic-claude-code";
 
@@ -227,7 +228,7 @@ test.skipIf(!nativeModule)("Opus 5.5 native picker levels map to request-level a
 
 for (const definition of [fable, opus, sonnet]) {
   test(`${definition.id} pinned SDK wire regression: compacted tool turns and adaptive summaries`, async () => {
-    await wireRegression(streamAnthropic, definition);
+    await wireRegression((model, context, options) => streamAnthropic(model, normalizeContext(context), options), definition);
   });
 
   test.skipIf(!nativeModule)(`${definition.id} installed native SDK wire regression`, async () => {

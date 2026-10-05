@@ -168,7 +168,7 @@ describe("report-writer agent", () => {
 
   test("the skill makes uploading the checked report a standard final step", () => {
     const skill = readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
-    const meta = YAML.parse(skill.split("---")[1]);
+    const meta = YAML.parse(skill.split("---")[1] ?? "");
     expect(meta.description).toContain("uploaded to files.myslop.app");
     expect(skill).toContain("### 6. Upload and hand over");
     expect(skill).toContain('"https://files.myslop.app/$(basename "$1")$2"');

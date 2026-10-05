@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join, isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Model } from "@earendil-works/pi-ai";
-import { streamAnthropic } from "@earendil-works/pi-ai/anthropic";
+import { stream as streamAnthropic } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 
 const nativeModule = process.env.PI_TEST_ANTHROPIC_API_MODULE;
 
@@ -48,7 +49,7 @@ for (const native of [false, true]) {
         ...definition, api: config.api, provider: registration.name, baseUrl: config.baseUrl, headers: config.headers,
       };
       for (const apiKey of [config.apiKey, "sk-ant-oat-fixture-not-a-real-token"]) {
-        const result = await stream(model, { messages: [{ role: "user", content: "Local fixture", timestamp: 0 }] }, { apiKey, maxRetries: 0 }).result();
+        const result = await stream(model, normalizeContext({ messages: [{ role: "user", content: "Local fixture", timestamp: 0 }] }), { apiKey, maxRetries: 0 }).result();
         expect(result.stopReason).toBe("error");
         expect(result.errorMessage).toContain("Local fixture");
       }
