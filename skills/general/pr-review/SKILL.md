@@ -331,7 +331,8 @@ Pass the head actually reviewed, not a fresh SHA fetched merely to satisfy the
 posting guard. The helper rejects missing/stale heads. Automated callers may set
 `PRSMASH_REVIEW_EXPECTED_HEAD_FILE` (which a steered review moves forward) or the
 legacy `PRSMASH_REVIEW_EXPECTED_HEAD`; a conflicting `--expected-head` fails
-closed. Run the helper in the caller's environment: never set, unset or redirect
+closed, and with the file set `--expected-head` is mandatory, so always pass the
+head you analysed. Every posting carries a hidden `reviewed-head` marker. Run the helper in the caller's environment: never set, unset or redirect
 `PRSMASH_REVIEW_RESULT_FILE`, `PRSMASH_REVIEW_EXPECTED_HEAD` or
 `PRSMASH_REVIEW_EXPECTED_HEAD_FILE` yourself, because the caller reads the result
 from where it put it. Always pass the PR explicitly. Never call `gh pr review`,

@@ -329,6 +329,22 @@ assert_approved
 jq -e --arg head "$reviewed_head" '.commit_id == $head' "$review_payload" >/dev/null \
   || fail "steered review was not pinned to the steered head"
 
+jq -e --arg head "$reviewed_head" '.body | contains("<!-- pr-review reviewed-head=" + $head + " -->")' \
+    "$review_payload" >/dev/null || fail "posted body lacks the reviewed-head marker"
+
+# With a file, the reviewer must name its head: one still finishing the old
+# head cannot inherit the steered head through the file.
+rm -f "$call_log" "$result"
+if env -u PRSMASH_REVIEW_EXPECTED_HEAD PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" \
+    GH_CALL_LOG="$call_log" PRSMASH_REVIEW_RESULT_FILE="$result" \
+    PRSMASH_REVIEW_EXPECTED_HEAD_FILE="$TMP/expected-head" \
+    "$SCRIPT" --body "$TMP/body.md" --verdict APPROVE --pr 5938 >"$stdout_file" 2>"$stderr_file"; then
+  fail "expected-head file accepted without an explicit --expected-head"
+fi
+rg -q -- '--expected-head is required when PRSMASH_REVIEW_EXPECTED_HEAD_FILE' "$stderr_file" \
+  || fail "missing explicit-head diagnostic"
+[[ ! -e "$result" && ! -e "$call_log" ]] || fail "implicit file head posted"
+
 # The file still guards: a flag naming another head, or an unreadable file,
 # is refused before any GitHub call.
 rm -f "$call_log" "$result"
