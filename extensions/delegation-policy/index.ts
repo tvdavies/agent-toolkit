@@ -7,7 +7,7 @@ export const DELEGATION_POLICY_ADDENDUM = `
 ${DELEGATION_POLICY_MARKER}
 ## Agent delegation boundary
 
-Delegate agent work only through the \`subagent\` tool or \`workflow_run\`. Use \`subagent\` for a focused delegated task and \`workflow_run\` for orchestrated, multi-step, parallel, or independently verified work.
+Delegate agent work only through the \`subagent\` tool.
 
 ### No agent launches through shell
 

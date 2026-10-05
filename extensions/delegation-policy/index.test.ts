@@ -27,7 +27,7 @@ describe("delegation policy extension", () => {
 		expect(result.systemPrompt).toContain("BASE");
 		expect(result.systemPrompt).toContain(DELEGATION_POLICY_MARKER);
 		expect(result.systemPrompt).toContain("`subagent`");
-		expect(result.systemPrompt).toContain("`workflow_run`");
+		expect(result.systemPrompt).not.toContain("workflow_run");
 		expect(result.systemPrompt).toContain("Never use `interactive_shell`");
 		expect(result.systemPrompt).toContain("`bash`");
 		expect(result.systemPrompt).toContain("another general shell tool");
@@ -39,10 +39,10 @@ describe("delegation policy extension", () => {
 		expect(result.systemPrompt).toContain("work inline or ask the user");
 	});
 
-	it("approves only the native subagent and workflow routes", () => {
+	it("approves only the native subagent route", () => {
 		const prompt = appendDelegationPolicy("BASE");
 
-		expect(prompt).toContain("Delegate agent work only through the `subagent` tool or `workflow_run`.");
+		expect(prompt).toContain("Delegate agent work only through the `subagent` tool.");
 		expect(prompt).toContain("### No agent launches through shell");
 		expect(prompt).not.toMatch(/Dispatch|Docket|docket/);
 		expect(prompt).not.toContain("exception");

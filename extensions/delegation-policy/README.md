@@ -5,8 +5,7 @@ policy, not a shell-command parser or runtime permission gate.
 
 ## Approved routes
 
-- `subagent`: focused delegated work.
-- `workflow_run`: orchestrated work under its own execution policy.
+- `subagent`: delegated agent work.
 
 Never use `interactive_shell`, `bash`, or another general shell tool to launch,
 invoke, communicate with, or delegate to an AI agent harness (Pi, Claude Code,
