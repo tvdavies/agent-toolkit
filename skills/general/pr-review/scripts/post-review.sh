@@ -42,6 +42,11 @@
 #   PRSMASH_REVIEW_EXPECTED_HEAD Legacy alternative to --expected-head for automated
 #                                callers. One must supply the commit actually reviewed;
 #                                never substitute the latest head after analysis.
+#   PRSMASH_REVIEW_EXPECTED_HEAD_FILE
+#                                File holding the caller's expected head. Takes
+#                                precedence over PRSMASH_REVIEW_EXPECTED_HEAD:
+#                                prsmash moves it forward when it steers a
+#                                review onto new commits.
 #
 # Dependencies: bash, gh, jq, python3
 
@@ -147,12 +152,23 @@ fi
 
 # Require an analysis-time head before any GitHub access. Keep the legacy env
 # input for staggered automated callers, but never silently override a conflict.
-if [[ -n "$EXPECTED_HEAD" && -n "${PRSMASH_REVIEW_EXPECTED_HEAD:-}" &&
-      "$EXPECTED_HEAD" != "$PRSMASH_REVIEW_EXPECTED_HEAD" ]]; then
-    echo "Error: --expected-head conflicts with PRSMASH_REVIEW_EXPECTED_HEAD; refusing to post." >&2
+# The caller's file wins over its environment value: a steered review starts on
+# one head and is moved onto another, and only the file follows it.
+CALLER_HEAD="${PRSMASH_REVIEW_EXPECTED_HEAD:-}"
+CALLER_HEAD_SOURCE=PRSMASH_REVIEW_EXPECTED_HEAD
+if [[ -n "${PRSMASH_REVIEW_EXPECTED_HEAD_FILE:-}" ]]; then
+    if [[ ! -r "$PRSMASH_REVIEW_EXPECTED_HEAD_FILE" ]]; then
+        echo "Error: PRSMASH_REVIEW_EXPECTED_HEAD_FILE is not readable; refusing to post." >&2
+        exit 1
+    fi
+    CALLER_HEAD=$(head -n1 "$PRSMASH_REVIEW_EXPECTED_HEAD_FILE" | tr -d '[:space:]')
+    CALLER_HEAD_SOURCE="PRSMASH_REVIEW_EXPECTED_HEAD_FILE (${CALLER_HEAD:-empty})"
+fi
+if [[ -n "$EXPECTED_HEAD" && -n "$CALLER_HEAD" && "$EXPECTED_HEAD" != "$CALLER_HEAD" ]]; then
+    echo "Error: --expected-head ${EXPECTED_HEAD} conflicts with ${CALLER_HEAD_SOURCE}; refusing to post." >&2
     exit 1
 fi
-EXPECTED_HEAD="${EXPECTED_HEAD:-${PRSMASH_REVIEW_EXPECTED_HEAD:-}}"
+EXPECTED_HEAD="${EXPECTED_HEAD:-$CALLER_HEAD}"
 if ! [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
     echo "Error: --expected-head requires the full 40-character lowercase reviewed commit SHA (or PRSMASH_REVIEW_EXPECTED_HEAD)." >&2
     exit 1

@@ -44,6 +44,16 @@ GitHub review states in status files:
 - `CHANGES_REQUESTED` — changes were requested
 - `COMMENTED` or another state — review/comment was posted but it did not approve or request changes
 - `UNKNOWN` — prsmash completed but could not determine the resulting GitHub state
+- `NOT_POSTED` — the reviewer finished but published nothing; the PR log says why
+- `SUPERSEDED` — the head moved in a way the review could not follow (force-push,
+  large delta); nothing was posted or recorded, and the new head gets a fresh review
+- `LOCKED` / `HANDLED` — skipped: already in review, or this exact head was already handled
+
+Since prsmashd replaced the timer, each review is its own run directory (one PR
+per run). The daemon's decisions (eligible, started, steered) are in
+`journalctl --user -u prsmashd`; a review's own unit is `prsmash-run-pr<N>-*`.
+When a head moved mid-review, the PR log has `[prsmash-session …] steering onto
+<sha>` lines.
 - `ERR` result — prsmash failed for that PR; inspect the PR log
 
 ## How to Investigate

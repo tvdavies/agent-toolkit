@@ -17,6 +17,9 @@ merge, install tools globally, or modify a shared checkout.
 - `--pr NUMBER`: review that PR, not an inferred one.
 - `--base BRANCH`: override the comparison base.
 - `--since COMMIT_SHA`: incremental re-review against that reviewed ancestor.
+- `--head COMMIT_SHA`: the PR head to review, pinned by the caller (prsmash
+  passes the commit its worktree holds). Use it as `HEAD_OID`; do not replace
+  it with a freshly fetched `headRefOid`.
 - `--independent-checks`: review and publish independently of remote CI and
   CodeRabbit. These remain separate merge gates. Take one current status snapshot,
   report pending/failed/unavailable checks honestly, and proceed with the code
@@ -110,7 +113,9 @@ longer needed and permitted by the caller's retention policy.
    a command or install a different package manager's lockfile.
 2. For a PR, fetch metadata with `gh pr view PR_NUMBER --json
    number,title,body,baseRefName,baseRefOid,headRefName,headRefOid,url` and record
-   `BASE_OID`, `HEAD_OID`, and target repo/PR. Fetch missing Git objects using
+   `BASE_OID`, `HEAD_OID`, and target repo/PR. With `--head`, `HEAD_OID` is that
+   SHA; if `headRefOid` already differs, review the pinned head anyway and say so
+   (see "Head moves during a review"). Fetch missing Git objects using
    the verified remote; for forks, the base remote's `pull/NUMBER/head` ref may
    be needed. Verify the fetched head matches metadata. Never fetch a similarly
    named branch and assume it is the PR.
@@ -125,7 +130,8 @@ longer needed and permitted by the caller's retention policy.
    tree. Otherwise use `git show "$HEAD_OID:path"` for context, not unrelated
    local files. Compare `git diff --name-only "$BASE_OID...$HEAD_OID"` with
    `gh pr diff PR_NUMBER --name-only` when available. If the PR moves during
-   context capture, stop and report drift rather than mix revisions.
+   context capture, stop and report drift rather than mix revisions, unless the
+   caller steers reviews (below).
 5. Retrieve the ticket/acceptance criteria using discovered capabilities. No
    ticket reference is a documented not-applicable skip; an identified but
    inaccessible ticket is unavailable REQUIRED coverage, not zero findings.
@@ -195,6 +201,27 @@ Run each agreed check once per patch revision. Repeat only after a changed
 patch, a diagnosed transient failure (one retry), or a concrete new risk.
 Stop on deterministic infrastructure failure or no new evidence; report it.
 
+### Head moves during a review
+
+When `PRSMASH_CONTROL_DIR` is set, the caller watches the PR and tells you when
+it moves: a message beginning `prsmash: PR #N moved while you were reviewing
+it` names the old and new heads, the commits, the changed files and a delta
+diff path, and the caller has already fetched the new head and moved the
+expected head the posting helper accepts. Do not stop or report drift for a
+move the caller has announced; follow the message instead:
+
+1. Finish the step in progress, then `git checkout --detach NEW_HEAD` in the
+   worktree (a clean tree; never discard edits you did not make).
+2. Set `HEAD_OID` to the new head. Review the delta in full and re-check every
+   finding, conclusion and verification result that touches its files. Keep
+   what you verified on unchanged files; do not restart from scratch.
+3. Refresh CI/check status for the new head, then decide and publish against
+   it. If publication was refused because the PR moved, the message supersedes
+   the refusal: publish once the delta is reviewed.
+
+Without such a message, or without `PRSMASH_CONTROL_DIR`, head drift still
+stops publication as described in step 4 above and under Publication.
+
 ## 3. Review relevant dimensions
 
 Load [finding-format.md](references/finding-format.md). Cover the dimensions
@@ -245,7 +272,9 @@ a reviewer, but do not suppress a demonstrated critical defect for politeness.
 For auth, persistence/concurrency, destructive changes or public contracts,
 when provisionally approving, require one independent read-only challenge of
 uncovered failure modes. It must trace plausible failures, not assume a blocker
-exists. Run at most once per revision; reuse an already independent assessment
+exists. In headless mode, wait for that challenge (and any other delegated
+review you started) to return before deciding: ending your turn with "I'll post
+when it finishes" publishes nothing, because nobody resumes you. Run at most once per revision; reuse an already independent assessment
 covering those risks. If REQUIRED independence fails or is unavailable, show
 incomplete coverage; never silently proceed with full approval. For routine
 low-risk work this extra check is optional, not a reassurance loop.
@@ -299,9 +328,13 @@ bash "$SKILL_DIR/scripts/post-review.sh" \
 ```
 
 Pass the head actually reviewed, not a fresh SHA fetched merely to satisfy the
-posting guard. The helper rejects missing/stale heads. `PRSMASH_REVIEW_EXPECTED_HEAD`
-is a supported legacy alternative for automated callers; conflicting flag/env
-values fail closed. Always pass the PR explicitly. Never call `gh pr review`,
+posting guard. The helper rejects missing/stale heads. Automated callers may set
+`PRSMASH_REVIEW_EXPECTED_HEAD_FILE` (which a steered review moves forward) or the
+legacy `PRSMASH_REVIEW_EXPECTED_HEAD`; a conflicting `--expected-head` fails
+closed. Run the helper in the caller's environment: never set, unset or redirect
+`PRSMASH_REVIEW_RESULT_FILE`, `PRSMASH_REVIEW_EXPECTED_HEAD` or
+`PRSMASH_REVIEW_EXPECTED_HEAD_FILE` yourself, because the caller reads the result
+from where it put it. Always pass the PR explicitly. Never call `gh pr review`,
 `gh pr comment` or the reviews API directly to bypass the helper's event mapping,
 head guard or human-approval policy. Neither that policy nor an approval banner
 can supply missing publishing authority.
