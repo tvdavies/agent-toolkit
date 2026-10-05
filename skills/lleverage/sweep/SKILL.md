@@ -1,7 +1,7 @@
 ---
 name: sweep
 description: Autonomously work through the current cycle. Finds high-value, ready Linear tickets that nobody is working on and that don't sit under an in-progress parent, gets unready ones ready, and delivers them through parallel yolo-ticket subagents with one PR watcher and prod health checks. Safe to run alongside /workstream sessions. Use only when the user explicitly invokes /sweep or explicitly asks to yolo or sweep the cycle.
-compatibility: Requires git, GitHub CLI, jq, linear-cli, and the workstream, yolo-ticket, start-ticket and babysit-pr skills.
+compatibility: Requires git, GitHub CLI, jq, linear-cli, and the workstream, prod-health, yolo-ticket, start-ticket and babysit-pr skills.
 disable-model-invocation: true
 metadata:
   author: tvd
@@ -24,7 +24,9 @@ after a compaction:
 - `../workstream/references/verification.md`
 - `../workstream/references/implementer-brief.md`
 
-Scripts: `../workstream/scripts/{linear-queue.sh,pr-ledger.sh,followup.sh,prod-health.sh}`.
+Scripts: `../workstream/scripts/{linear-queue.sh,pr-ledger.sh,followup.sh}`. Health
+checks: the `prod-health` skill (`../prod-health/scripts/prod-health.sh`), run at
+start-up, after merge bursts and every two hours, with its severity response.
 
 ## Arguments
 

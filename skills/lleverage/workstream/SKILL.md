@@ -1,7 +1,7 @@
 ---
 name: workstream
 description: Autonomously drive one top-level Linear issue to done. Plans it, slices it into ready sub-issues, then delivers them through parallel yolo-ticket subagents with one PR watcher, staged rollout, prod health checks and disciplined follow-ups, until every descendant is done and verified. Use only when the user explicitly invokes /workstream with an issue ID, or explicitly asks to run a workstream or project on a named top-level issue. Grants the per-ticket merge authority of yolo-ticket for that issue's descendants only.
-compatibility: Requires git, GitHub CLI, jq, linear-cli, kubectl access per the prod-health-check-access memory, and the yolo-ticket, start-ticket and babysit-pr skills.
+compatibility: Requires git, GitHub CLI, jq, linear-cli, kubectl access per the prod-health-check-access memory, and the yolo-ticket, start-ticket, babysit-pr and prod-health skills.
 disable-model-invocation: true
 metadata:
   author: tvd
@@ -22,7 +22,9 @@ subagents write the code. Read these before starting, and again after a compacti
 - `references/implementer-brief.md`: the brief every implementer follows
 
 Scripts are in `scripts/` (run with `--help`): `linear-queue.sh`, `pr-ledger.sh`,
-`followup.sh`, `prod-health.sh`.
+`followup.sh`. Health checks use the `prod-health` skill
+(`../prod-health/scripts/prod-health.sh`); `scripts/prod-health.sh` here is a
+compatibility shim for it.
 
 ## Arguments
 
@@ -88,7 +90,8 @@ critical path, then the rest.
 Throughout:
 
 - After each merge, refresh the lane, verify the deploy, and wake dependants.
-- Health tick after each deploy of our change.
+- Health tick after each deploy of our change: follow the `prod-health` skill,
+  including its severity grading and response.
 - Follow-ups go through `followup.sh` and the order in `issues.md` (fold in first).
 - Keep `STATE.md` current. It is the only memory that survives.
 

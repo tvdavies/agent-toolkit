@@ -25,3 +25,6 @@ bun.lock
 
 # pi-subagents runtime artifacts
 .pi-subagents/
+
+# Python bytecode
+__pycache__/

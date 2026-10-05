@@ -1,0 +1,15 @@
+{
+ "env": "production", "captured_at": "2026-10-05T12:00:00Z", "window": "4 x 6h", "slices": 4,
+ "rates": {
+  "http.route:app|/api/public/workflow-session|401": 2.0,
+  "http.svc:app|401": 4.0,
+  "wf.total": 450.0, "wf.failed": 22.0,
+  "wf.category:upstream_rejected": 14.0, "wf.category:platform_error": 0.8,
+  "loki.error:argocd": 30.0, "loki.error:workflow-service": 12.0,
+  "posthog.pageviews": 120.0
+ },
+ "means": {"posthog.pageviews": 60.0, "wf.total": 400.0},
+ "presence": ["alert:KubeJobFailed|minio"],
+ "noise": [{"pattern": "loki.error:argocd", "note": "fixture noise"}],
+ "history": []
+}

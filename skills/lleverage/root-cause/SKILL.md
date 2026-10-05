@@ -38,7 +38,7 @@ Pick the sources the symptom touches, and look beyond the obvious one:
 | Agent session or thread misbehaving | `agent-session-debugger` (session DB, runs, events, checkpoints, Loki) |
 | Workflow run failure or wrong output | `workflow-debugger` (ClickHouse, GCS inputs and outputs) |
 | Frontend error, blank screen, wrong UI state | `posthog-debugger` (replays, exceptions), then `lleverage-browser-access` to reproduce |
-| Service errors, latency, crashes | Loki (skill at `~/dev/lleverage-ai/infrastructure/.agents/skills/loki-logs/SKILL.md`), pod state, alerts (`../workstream/scripts/prod-health.sh`) |
+| Service errors, latency, crashes | Loki (skill at `~/dev/lleverage-ai/infrastructure/.agents/skills/loki-logs/SKILL.md`), pod state, alerts, HTTP errors and deploys in the window (`../prod-health/scripts/prod-health.sh`, `--end` for a past window) |
 | Integration auth or refresh | `native-integrations` skill |
 
 Run read-only investigators (`sol-investigator`) in parallel on independent

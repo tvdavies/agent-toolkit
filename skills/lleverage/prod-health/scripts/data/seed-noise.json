@@ -1,0 +1,12 @@
+[
+  {"pattern": "loki.error:argocd", "note": "Argo CD logs ~13-25 errors per 30m (DiffFromCache key missing during syncs)"},
+  {"pattern": "loki.sig:argocd|*", "note": "Argo CD controller cache errors; not customer-facing"},
+  {"pattern": "loki.warn:graph-data-tables-service", "note": "graph-data-tables-service logs ~800 warn per 30m"},
+  {"pattern": "loki.error:org-j251sez8bl", "note": "TP Vision workflow node HTTP failures (customer endpoint), steady since Oct 2026"},
+  {"pattern": "loki.sig:*|Error executing the node <node>*", "note": "customer workflow node failures; the workflows check measures these by failure category instead"},
+  {"pattern": "k8s.notready:agent-sandbox-service/*", "note": "sandbox pods briefly Pending during warm-pool churn"},
+  {"pattern": "k8s.notready:code-sandbox-service/sandbox-*", "note": "ephemeral code sandboxes"},
+  {"pattern": "posthog.exc:Error|ResizeObserver loop*", "note": "benign browser ResizeObserver warning"},
+  {"pattern": "posthog.exc:Error|Script error.|*", "note": "opaque cross-origin script errors, no stack"},
+  {"pattern": "alert:KubeQuotaFullyUsed|nats", "note": "NATS namespace quota is deliberately full"}
+]

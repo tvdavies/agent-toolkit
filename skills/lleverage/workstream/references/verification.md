@@ -2,14 +2,21 @@
 
 ## Health ticks
 
-- At start-up, run `scripts/prod-health.sh --window 30m > $WS_DIR/baseline-health.txt`.
+Use the `prod-health` skill (`../prod-health/scripts/prod-health.sh`). It covers
+pods, alerts, Loki errors, HTTP 4xx/5xx, workflow failures, Sentry, PostHog,
+deploys and dispatches, compares them with a stored baseline, and attaches the
+deploys in the window to each finding. Its SKILL.md has the severity grading and
+the response (stop merging and alert Tom for SEV1, a deduplicated Linear bug for
+SEV2).
+
+- At start-up, run `../prod-health/scripts/prod-health.sh --window 30m > $WS_DIR/baseline-health.txt`.
+  If it reports `baseline=none`, run `../prod-health/scripts/baseline.sh capture` first.
 - Tick after each deploy of our change, and otherwise every two hours, from the
   main loop. Session crons don't fire while the session is busy, so don't rely on
   them alone.
-- Compare each tick with the baseline and ignore known noise
-  (graph-data-tables-service ~800 warn per 30 minutes, argocd errors, sandbox
-  Pending during warm-pool churn). Report only a new signal that can be attributed
-  to us.
+- Known noise lives in the prod-health baseline, not in your head. When a finding
+  is confirmed as normal, use `baseline.sh accept`. Report only a new signal, and
+  attribute it with the candidate deploys.
 - Programme-specific metrics (latencies, cache rates) go in
   `$WS_DIR/health-extra.sh`, passed with `--extra`.
 - Access details are in the memory note `prod-health-check-access`.
