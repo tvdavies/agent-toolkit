@@ -123,4 +123,4 @@ async function main() {
   console.log("Look at the PNG, upload it, then rebuild the report with --card-image <url>.");
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
