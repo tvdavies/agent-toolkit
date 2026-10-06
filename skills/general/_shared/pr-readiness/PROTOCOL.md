@@ -39,7 +39,7 @@ The script output is a blocker inventory, not sufficient proof that a PR is gree
 
 ## Waiting on GitHub: prwatch
 
-Install: `npm i -g @tvdavies/prwatch@^0.1.2`. One shared background poller per user reads every watched PR with one batched GraphQL request, so parallel agents stop spending the GitHub budget separately.
+Install: `npm i -g @tvdavies/prwatch@^0.1.3`. One shared background poller per user reads every watched PR with one batched GraphQL request, so parallel agents stop spending the GitHub budget separately.
 
 Upgrade: `npm i -g @tvdavies/prwatch@latest && prwatch daemon restart`. The restart hands the running background poller over to the new binary; waiters and `events` streams (including Monitors) reconnect and carry on with their deadline, `--for` and `--since` intact, without duplicate events. `prwatch list` warns when the poller is older than the installed binary. A poller from 0.1.1 or earlier cannot hand over: `prwatch daemon restart` says so, and `prwatch daemon restart --force` stops it, which ends its waiters with exit 1; re-run them.
 

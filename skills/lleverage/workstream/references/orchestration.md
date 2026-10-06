@@ -123,7 +123,7 @@ auto-merge silently. Every open PR has exactly one owner, and the ledger records
 
 ### Waiting on GitHub: prwatch
 
-Install: `npm i -g @tvdavies/prwatch@^0.1.2`; upgrade with
+Install: `npm i -g @tvdavies/prwatch@^0.1.3`; upgrade with
 `npm i -g @tvdavies/prwatch@latest && prwatch daemon restart`, which keeps the ledger watcher
 and every waiter running. With it on PATH, `pr-ledger.sh list` reads
 every ledger PR in one `prwatch status --json` call and `pr-ledger.sh watch` holds
