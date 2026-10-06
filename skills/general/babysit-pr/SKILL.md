@@ -1,7 +1,7 @@
 ---
 name: babysit-pr
 description: Autonomously monitors a GitHub pull request and keeps it moving toward merge readiness. Use only when the user explicitly asks to "babysit PR", "watch this PR", "monitor this PR", "keep this PR moving", "address PR feedback", "handle review comments", "fix PR feedback", "make this PR mergeable", or "unblock this PR" for a named PR or the unambiguous current PR. Handles reviews, comments, checks, flakes, and conflicts; may commit and push fixes to the PR head branch, but never merges.
-compatibility: Requires git, GitHub CLI, jq, network access, and a repository with worktree support. Uses prwatch (npm i -g @tvdavies/prwatch) for waiting when it is installed.
+compatibility: Requires git, GitHub CLI, jq, network access, and a repository with worktree support. Uses prwatch (npm i -g @tvdavies/prwatch@^0.1.1) for waiting when it is installed.
 disable-model-invocation: true
 metadata:
   author: tvd
@@ -57,7 +57,7 @@ bash "$SKILL_DIR/../_shared/pr-readiness/scripts/reply-and-resolve.sh" PR_NUMBER
 
 ### Waiting on GitHub
 
-Install: `npm i -g @tvdavies/prwatch`. Follow "Waiting on GitHub: prwatch" in the shared protocol:
+Install: `npm i -g @tvdavies/prwatch@^0.1.1`. Follow "Waiting on GitHub: prwatch" in the shared protocol:
 
 - Wait only through the bundled watcher (Phases 4 and 5), `prwatch wait --since TOKEN`, or the Monitor tool on `prwatch events --json --pr OWNER/REPO#N`. Never write ad hoc `gh pr view`, `gh pr checks` or `gh api graphql` loops.
 - One-off reads are fine. When GraphQL is rate-limited (check `prwatch rate`), prefer REST reads such as `gh api repos/OWNER/REPO/pulls/N`.
@@ -162,7 +162,7 @@ mv "$TEMP_BASELINE" "$BASELINE"
 jq . "$BASELINE"
 ```
 
-With prwatch the snapshot has `"source": "prwatch"` and a `prwatch` object holding the `token`, `needsAction` and `reasons`. Its thread and comment text are excerpts, resolved threads are only counted in `threadCounts`, and only recent top-level comments are listed. Read full bodies, comment IDs and check links with `fetch-pr-blockers.sh` and `gh pr view` when processing a change. prwatch does not wake on an edit to the text of an existing comment or review (new comments, reviews, thread replies and resolutions all wake it), so read current bodies when you process each change rather than relying on earlier ones. The `gh` fallback snapshot has full bodies and also detects edits.
+With prwatch the snapshot has `"source": "prwatch"` and a `prwatch` object holding the `token`, `needsAction` and `reasons`. Its thread and comment text are excerpts, resolved threads are only counted in `threadCounts`, and only recent top-level comments are listed. Read full bodies, comment IDs and check links with `fetch-pr-blockers.sh` and `gh pr view` when processing a change. prwatch 0.1.1 or later also wakes on edits to the description, comments, reviews and thread comments, but only within its fetched window (the newest 3 top-level comments, the latest review per reviewer and the newest 5 review threads), so still read current bodies when you process each change rather than relying on earlier ones. The `gh` fallback snapshot has full bodies and also detects edits.
 
 This sequence preserves the watcher exit status, validates the completed temporary file, and only then atomically replaces the baseline. Inspect the baseline file itself as the authoritative final state for the current cycle. If it contains a new failure, comment, review, head commit, or conflict, process that state before waiting. Do not take a separate final reading and then create the baseline, because a change in between could be missed.
 

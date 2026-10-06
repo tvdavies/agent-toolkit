@@ -235,7 +235,7 @@ remote GitHub checks, review feedback, comments, or threads.
    worktree has no uncommitted intended changes.
 
 GitHub reads here are one-off. This skill never waits on a PR; if a caller later
-needs to, it uses prwatch (install: `npm i -g @tvdavies/prwatch`) through
+needs to, it uses prwatch (install: `npm i -g @tvdavies/prwatch@^0.1.1`) through
 `prwatch wait --since TOKEN` or the Monitor tool on `prwatch events`, never ad
 hoc `gh pr view` or `gh api graphql` loops. When GraphQL is rate-limited (check
 `prwatch rate`), prefer REST reads such as `gh api repos/OWNER/REPO/pulls/N`.

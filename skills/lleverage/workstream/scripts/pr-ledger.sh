@@ -22,7 +22,7 @@ A PR needs action when CI failed, a review requested changes, a thread is unreso
 it conflicts with its base, or it is approved and green but auto-merge is off.
 Defaults: --interval 90, --stale-minutes 20.
 
-GitHub access: when prwatch is on PATH (npm i -g @tvdavies/prwatch), list reads every
+GitHub access: when prwatch is on PATH (npm i -g @tvdavies/prwatch@^0.1.1), list reads every
 PR with one `prwatch status --json` call and watch keeps one `prwatch events` stream
 open across the ledger, waking on each change and re-reading status from prwatch's
 shared cache at least every --interval seconds. Nothing here then polls GitHub

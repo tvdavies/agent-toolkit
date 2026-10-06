@@ -63,7 +63,7 @@ Follow ~/.claude/skills/yolo-ticket/SKILL.md for the flow, with these rules on t
   next tool call.
 - Waiting on CI or review is not a reason to stop. Keep a watcher running
   (babysit-pr's wait script) so you're woken by the change.
-- Wait through prwatch (install: `npm i -g @tvdavies/prwatch`): babysit-pr's
+- Wait through prwatch (install: `npm i -g @tvdavies/prwatch@^0.1.1`): babysit-pr's
   wait script uses it when it is on PATH, or use
   `prwatch wait OWNER/REPO#N --since TOKEN` or a Monitor on
   `prwatch events --json --pr OWNER/REPO#N`. Never poll with `gh pr view`,

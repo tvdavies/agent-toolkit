@@ -15,7 +15,7 @@ Commands:
 Defaults: --interval 60, --timeout 3600. Both changed and timeout events exit 0.
 
 Backends:
-  prwatch   Used when `prwatch` is on PATH (install: npm i -g @tvdavies/prwatch).
+  prwatch   Used when `prwatch` is on PATH (install: npm i -g @tvdavies/prwatch@^0.1.1).
             snapshot reads `prwatch status --json`; wait blocks on
             `prwatch wait --since TOKEN`, so this script never polls GitHub
             itself. The snapshot has "source": "prwatch" and a "prwatch" object
@@ -24,8 +24,10 @@ Backends:
             comments are listed. --interval is then only the retry delay after
             a transient prwatch error. prwatch wakes on new comments, reviews,
             thread replies, resolution, checks, head, mergeability and
-            auto-merge, but not on an edit to the text of an existing comment
-            or review.
+            auto-merge. prwatch 0.1.1 or later also wakes on edits to the
+            description, comments, reviews and thread comments, within its
+            fetched window (newest 3 comments, latest review per reviewer,
+            newest 5 threads).
   gh        The fallback when prwatch is absent, NO_PRWATCH=1 is set, or the
             baseline has no prwatch token: full bodies, polled every --interval.
 EOF

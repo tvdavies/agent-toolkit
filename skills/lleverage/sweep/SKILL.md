@@ -25,7 +25,7 @@ after a compaction:
 - `../workstream/references/implementer-brief.md`
 
 Scripts: `../workstream/scripts/{linear-queue.sh,pr-ledger.sh,followup.sh}`.
-PR waiting goes through prwatch (install: `npm i -g @tvdavies/prwatch`): the
+PR waiting goes through prwatch (install: `npm i -g @tvdavies/prwatch@^0.1.1`): the
 ledger watcher uses it when installed, and agents wait with `prwatch wait --since`
 or a Monitor on `prwatch events`, never ad hoc `gh pr view` or `gh api graphql`
 loops. Prefer REST for one-off reads when GraphQL is rate-limited (`prwatch rate`);

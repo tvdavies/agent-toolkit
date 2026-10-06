@@ -39,7 +39,7 @@ The script output is a blocker inventory, not sufficient proof that a PR is gree
 
 ## Waiting on GitHub: prwatch
 
-Install: `npm i -g @tvdavies/prwatch`. One shared background poller per user reads every watched PR with one batched GraphQL request, so parallel agents stop spending the GitHub budget separately.
+Install: `npm i -g @tvdavies/prwatch@^0.1.1`. One shared background poller per user reads every watched PR with one batched GraphQL request, so parallel agents stop spending the GitHub budget separately.
 
 - Wait with `prwatch wait OWNER/REPO#N --since TOKEN --timeout 30m --json`, passing the `token` from the previous snapshot so nothing between calls is missed. `--for checks|review|mergeable|merged|closed` waits for a specific condition. Exit codes: 0 condition met, 124 timeout, 2 usage or authentication, 3 not found, 1 other (retry).
 - In Claude Code, the Monitor tool on `prwatch events --json --pr OWNER/REPO#N` streams one line per change and keeps the shared poller running.

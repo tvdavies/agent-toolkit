@@ -123,7 +123,7 @@ auto-merge silently. Every open PR has exactly one owner, and the ledger records
 
 ### Waiting on GitHub: prwatch
 
-Install: `npm i -g @tvdavies/prwatch`. With it on PATH, `pr-ledger.sh list` reads
+Install: `npm i -g @tvdavies/prwatch@^0.1.1`. With it on PATH, `pr-ledger.sh list` reads
 every ledger PR in one `prwatch status --json` call and `pr-ledger.sh watch` holds
 one `prwatch events` stream across the ledger, so the session and all its
 implementers share one daemon's batched poll instead of each polling GitHub.
