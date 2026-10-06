@@ -19,15 +19,20 @@ are different: depth of analysis alone is not severity evidence.
 
 `coverageComplete` means every required dimension, independent challenge and
 verification check completed successfully for the reviewed head/scope. A review
-stream may pass its assessment and return findings. Missing/failed/null output,
-unavailable required ticket context, and pending/stale required CI are not passes.
+stream may pass its assessment and return findings. Missing/failed/null output
+and pending/stale required CI are not passes. An unreadable ticket is a caveat,
+not missing coverage: assess against the PR description and say so.
 
 Required coverage is what this review has to do itself: read the diff and the
 ticket, run each dimension, adjudicate findings, and check the verification it
-owns. Separate three things that earlier rounds blurred together:
+owns. Separate four things that earlier rounds blurred together:
 
-- **Review failure** (a stream failed, objects or ticket unreadable, a check
-  this review owns could not run): coverage is incomplete, so `INCOMPLETE`.
+- **Review failure** (a stream failed, objects unreadable, a check this
+  review owns could not run, with neither green current-head CI nor a local
+  run to cover it): coverage is incomplete, so `INCOMPLETE`.
+- **Unreadable ticket** (tool missing, not found, no access): requirements are
+  assessed against the PR description and discussion, and the review says
+  which ticket it could not read. A caveat, not `INCOMPLETE`.
 - **External evidence** (database or runtime results, deployment or CronJob
   configuration, a criterion the ticket or PR discussion assigns to another
   card or owner): not required coverage. List it as a caveat with its owner.

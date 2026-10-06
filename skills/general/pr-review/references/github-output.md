@@ -1,6 +1,6 @@
 # GitHub PR Comment Format
 
-This document defines publication formatting for an explicitly authorized PR review (`--post` or explicit caller publishing policy). Headless mode is not authority. Use [severity-verdict.md](severity-verdict.md) for severity and required-coverage gates. INCOMPLETE is published with `--verdict INCOMPLETE` as a COMMENTED review on the reviewed head; never coerce it into an approval, a request for changes, or a non-blocking comment that dismisses a prior block.
+This document defines publication formatting for an explicitly authorized PR review (`--post` or explicit caller publishing policy). Headless mode is not authority. Use [severity-verdict.md](severity-verdict.md) for severity and required-coverage gates. INCOMPLETE is published with `--verdict INCOMPLETE` as a COMMENTED review on the reviewed head; never coerce it into an approval, a request for changes, or a non-blocking comment that dismisses a prior block. When the caller sets `PRSMASH_HOLD_INCOMPLETE=true`, the helper holds it instead of posting; call it the same way.
 
 ## Every posting answers "what now?"
 
@@ -412,7 +412,7 @@ Same format as severity sections in the full review, grouped by severity:
 ### Incremental Verdict Rules
 
 The verdict is based on **Still Open + New** findings combined (resolved findings are excluded):
-- INCOMPLETE: This round's review could not be completed and no critical is confirmed; publish with `--verdict INCOMPLETE` (COMMENTED review, no dismissal). Never INCOMPLETE because an earlier round listed a gap the author has since answered, or because of evidence owned outside the PR.
+- INCOMPLETE: This round's review could not be completed and no critical is confirmed; publish with `--verdict INCOMPLETE` (COMMENTED review, no dismissal). Never INCOMPLETE because an earlier round listed a gap the author has since answered, because of evidence owned outside the PR, because a ticket could not be read, or because of tests that green current-head CI already ran.
 - APPROVE: No findings remaining, with complete required coverage. Every earlier blocking finding verified resolved and no new ones means APPROVE, even if the previous round was INCOMPLETE or REQUEST_CHANGES.
 - APPROVE_WITH_SUGGESTIONS: Only suggestions remaining
 - CHANGES_SUGGESTED: At least one should-fix finding still open or newly introduced, but no criticals — non-blocking, exactly as in a full review
