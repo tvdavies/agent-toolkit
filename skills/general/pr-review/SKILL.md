@@ -127,8 +127,11 @@ longer needed and permitted by the caller's retention policy.
    `gh pr diff PR_NUMBER --name-only` when available. If the PR moves during
    context capture, stop and report drift rather than mix revisions.
 5. Retrieve the ticket/acceptance criteria using discovered capabilities. No
-   ticket reference is a documented not-applicable skip; an identified but
-   inaccessible ticket is unavailable REQUIRED coverage, not zero findings.
+   ticket reference is a documented not-applicable skip. An identified ticket
+   you cannot read (tool missing, not found, no access) is a caveat, not a
+   coverage gap: assess requirements against the PR description, linked
+   context and discussion, and say in the review which ticket you could not
+   read. It never makes the review `INCOMPLETE` on its own.
    Include only directly relevant related decisions, not a full project audit.
 6. For a PR, collect bounded prior discussion:
    `bash "$SKILL_DIR/scripts/fetch-conversation.sh" --pr PR_NUMBER --full-dir
@@ -153,7 +156,22 @@ remote merge checks. Missing, pending, failed or stale CI alone does not make
 this code assessment `INCOMPLETE` and does not withhold publication. Do not run
 an entire missing CI suite locally merely to wait for or replace the merge gate.
 Use completed relevant checks when available and run targeted verification for
-specific uncovered risks. A demonstrable defect in CI remains a finding; a
+specific uncovered risks.
+
+When the review needs changed tests to actually run (for example, to confirm
+behaviour against the real pinned dependency), take evidence in this order:
+
+1. **Green CI on the reviewed head.** A completed, successful check on the
+   exact head whose job runs those tests is execution evidence. Cite the
+   check, SHA and link; where logs are accessible, confirm the suite or file
+   ran. Don't run again what green CI already ran.
+2. **A targeted local run.** If CI hasn't finished or doesn't cover it, run
+   just those tests in the worktree when its dependencies are installed
+   (automated callers install them before the review starts). In a monorepo,
+   go through the repo's task runner (for example
+   `pnpm test --filter <package> -- <file>`) so the workspace packages the
+   tests import are built first; a bare test-runner call fails to resolve them.
+3. Only when neither is possible is the check `unavailable`. A demonstrable defect in CI remains a finding; a
 failed or unavailable required code-review assessment still means `INCOMPLETE`.
 Apply the following default matrix to callers without `--independent-checks`.
 
@@ -283,7 +301,9 @@ to clear. State what was verified, which earlier findings are resolved, any
 real non-critical findings, and exactly which coverage, evidence or decision is
 still missing. Do not withhold an authorized INCOMPLETE review: an unpublished
 result hides the gaps from the author and leaves automated callers nothing
-recorded against that head. Under `--independent-checks`, choose the
+recorded against that head. Always call the helper; when an automated caller
+sets `PRSMASH_HOLD_INCOMPLETE=true`, the helper holds the INCOMPLETE review
+instead of posting it and records it for the caller, which retries the head. Under `--independent-checks`, choose the
 code-review verdict from the completed assessment and include a visible line
 for current CI and CodeRabbit status; do not wait to publish it. This can be a real code-review approval while
 CI is pending or failing, because the merge gate is enforced separately. Do not

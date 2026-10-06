@@ -39,6 +39,10 @@
 #                                APPROVE events. Accepts true/false only.
 #   PRSMASH_REVIEW_RESULT_FILE   Optional path for an atomic machine-readable
 #                                posting result consumed by prsmash.
+#   PRSMASH_HOLD_INCOMPLETE      Set to true to hold an INCOMPLETE verdict
+#                                instead of posting it: nothing reaches GitHub,
+#                                the result file records posting "held" and the
+#                                body is kept beside it (<result>.held.md).
 #   PRSMASH_REVIEW_EXPECTED_HEAD Legacy alternative to --expected-head for automated
 #                                callers. One must supply the commit actually reviewed;
 #                                never substitute the latest head after analysis.
@@ -209,7 +213,7 @@ assert_current_head() {
 }
 
 write_prsmash_result() {
-    local posting=$1 submitted_event=$2 target tmp
+    local posting=$1 submitted_event=$2 held_body=${3:-} target tmp
     target="${PRSMASH_REVIEW_RESULT_FILE:-}"
     [[ -n "$target" ]] || return 0
     mkdir -p "$(dirname "$target")"
@@ -223,9 +227,11 @@ write_prsmash_result() {
         --arg verdict "$VERDICT" \
         --argjson manualApprovalRequired "$MANUAL_APPROVAL_REQUIRED" \
         --arg postedAt "$(date -Is)" \
+        --arg heldBody "$held_body" \
         '{repo: $repo, pr: $pr, head: $head, posting: $posting, event: $event,
           verdict: $verdict, manualApprovalRequired: $manualApprovalRequired,
-          postedAt: $postedAt}' \
+          postedAt: $postedAt}
+         + (if $heldBody == "" then {} else {heldBody: $heldBody} end)' \
         > "$tmp"; then
         mv "$tmp" "$target"
     else
@@ -313,6 +319,33 @@ if [[ "$VERDICT" == "CHANGES_SUGGESTED" || "$VERDICT" == "REQUEST_CHANGES" || "$
 fi
 
 MANUAL_APPROVAL_REQUIRED=false
+
+# --- Held INCOMPLETE ---
+#
+# An automated caller (prsmash) can ask for INCOMPLETE reviews to be held
+# rather than posted: it retries the head once CI finishes or someone answers,
+# and tells its operator privately if the review still cannot finish. The body
+# has passed every check above, so a held review is one that could have been
+# posted. Nothing is sent to GitHub; the result file says it was held and
+# where the body is.
+HOLD_INCOMPLETE=$(printf '%s' "${PRSMASH_HOLD_INCOMPLETE:-false}" | tr '[:upper:]' '[:lower:]')
+if [[ "$VERDICT" == "INCOMPLETE" && "$HOLD_INCOMPLETE" == true ]]; then
+    if [[ "$DRY_RUN" == true ]]; then
+        echo ""
+        echo "=== DRY RUN: INCOMPLETE review would be held, not posted (PRSMASH_HOLD_INCOMPLETE) ==="
+        exit 0
+    fi
+    HELD_BODY=""
+    if [[ -n "${PRSMASH_REVIEW_RESULT_FILE:-}" ]]; then
+        HELD_BODY="${PRSMASH_REVIEW_RESULT_FILE%.json}.held.md"
+        mkdir -p "$(dirname "$HELD_BODY")"
+        printf '%s\n' "$BODY_CONTENT" > "$HELD_BODY"
+    fi
+    write_prsmash_result held "" "$HELD_BODY"
+    echo "Held: INCOMPLETE review not posted (PRSMASH_HOLD_INCOMPLETE=true). The caller retries this head."
+    exit 0
+fi
+
 MANUAL_APPROVAL_REASON=""
 MANUAL_APPROVAL_REASON_CODE=""
 MANUAL_APPROVAL_BANNER_META=""

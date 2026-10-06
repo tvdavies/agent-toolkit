@@ -513,6 +513,48 @@ rg -q '^Verdict: INCOMPLETE$' "$stdout_file" && rg -q '^Event: COMMENT$' "$stdou
   || fail "INCOMPLETE dry run did not report its verdict and event"
 [[ ! -e "$call_log" && ! -e "$result" ]] || fail "INCOMPLETE dry run posted"
 
+# --- Held INCOMPLETE (PRSMASH_HOLD_INCOMPLETE) ---
+#
+# prsmash holds INCOMPLETE rather than posting it. Nothing reaches GitHub; the
+# result file says "held" and points at the kept body.
+printf '## ⚪ Review Incomplete\n\nCI still running.\n\n### To move this forward\n- **Reviewer (prsmash):** use CI once it finishes.\n' > "$TMP/body.md"
+run_case INCOMPLETE beth 11 6 PRSMASH_HOLD_INCOMPLETE=true || fail "held INCOMPLETE failed"
+[[ ! -e "$call_log" ]] || fail "held INCOMPLETE reached GitHub: $(<"$call_log")"
+jq -e --arg body "$TMP/result.held.md" '
+    .posting == "held"
+    and .verdict == "INCOMPLETE"
+    and .event == ""
+    and .heldBody == $body
+    and .head == "3fe402e15f8fe7403b4edd8d6975b807c369068e"
+  ' "$result" >/dev/null || fail "held result file is wrong: $(cat "$result")"
+rg -q 'CI still running' "$TMP/result.held.md" || fail "held body was not kept"
+rg -q '^Held: INCOMPLETE review not posted' "$stdout_file" || fail "held run did not say so"
+
+# Only INCOMPLETE is held; other verdicts post as usual with the variable set.
+write_default_body
+run_case CHANGES_SUGGESTED beth 11 6 "${policy[@]}" PRSMASH_HOLD_INCOMPLETE=TRUE \
+  || fail "CHANGES_SUGGESTED failed with hold set"
+[[ -s "$call_log" ]] || fail "CHANGES_SUGGESTED was not posted with hold set"
+jq -e '.posting != "held" and (has("heldBody") | not)' "$result" >/dev/null \
+  || fail "CHANGES_SUGGESTED was recorded as held"
+
+# A held body must still pass the posting checks.
+printf '## ⚪ Review Incomplete\n\nNothing verified.\n' > "$TMP/body.md"
+if run_case INCOMPLETE beth 11 6 PRSMASH_HOLD_INCOMPLETE=true; then
+  fail "held INCOMPLETE accepted a body without an owner action"
+fi
+[[ ! -e "$result" ]] || fail "invalid held body wrote a result"
+
+# Dry run reports the hold and writes nothing.
+printf '## ⚪ Review Incomplete\n\nStill needed: evidence.\n\n### To move this forward\n- **@beth:** attach the run.\n' > "$TMP/body.md"
+rm -f "$call_log" "$result"
+env PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" \
+    GH_CALL_LOG="$call_log" PRSMASH_REVIEW_RESULT_FILE="$result" PRSMASH_HOLD_INCOMPLETE=true \
+    "$SCRIPT" --body "$TMP/body.md" --verdict INCOMPLETE --pr 5938 --dry-run \
+    >"$stdout_file" 2>"$stderr_file" || fail "held INCOMPLETE dry run failed"
+rg -q 'would be held, not posted' "$stdout_file" || fail "dry run did not report the hold"
+[[ ! -e "$call_log" && ! -e "$result" ]] || fail "held dry run wrote something"
+
 # A head that moved after analysis is refused for INCOMPLETE too.
 if run_case INCOMPLETE alice 11 6 GH_RECHECK_HEAD=4fe402e15f8fe7403b4edd8d6975b807c369068e; then
   fail "INCOMPLETE posted after the head moved"
