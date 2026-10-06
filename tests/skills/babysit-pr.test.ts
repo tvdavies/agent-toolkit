@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import YAML from "yaml";
 
@@ -15,6 +15,101 @@ let prState = "";
 let threadState = "";
 let commentPages = "";
 let reviewPages = "";
+let prwatchBin = "";
+let prwatchLog = "";
+let ghLog = "";
+
+// The machine running the tests may have a real prwatch installed. Strip it so the
+// gh fallback is what the fallback tests exercise.
+const pathWithoutPrwatch = (process.env.PATH ?? "")
+  .split(delimiter)
+  .filter((dir) => dir && !existsSync(join(dir, "prwatch")))
+  .join(delimiter);
+
+function prwatchSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 1,
+    pr: "acme/widgets#7",
+    owner: "acme",
+    repo: "widgets",
+    number: 7,
+    url: "https://github.com/acme/widgets/pull/7",
+    title: "Fix widget",
+    state: "OPEN",
+    isDraft: false,
+    merged: false,
+    mergedAt: null,
+    mergeCommit: null,
+    headRefOid: "abc123",
+    baseRefName: "main",
+    mergeable: "MERGEABLE",
+    mergeStateStatus: "BLOCKED",
+    autoMerge: { enabled: false, method: null },
+    reviewDecision: "REVIEW_REQUIRED",
+    reviews: [{ author: "alice", state: "COMMENTED", submittedAt: "2026-01-01T01:00:00Z", commit: "abc123" }],
+    reviewCount: 1,
+    reviewRequests: ["bob"],
+    threads: {
+      total: 2,
+      unresolved: 1,
+      truncated: false,
+      items: [{ id: "thread-2", path: "src/b.ts", line: 20, outdated: false, author: "bob", excerpt: "Could this…" }],
+    },
+    checks: {
+      state: "PENDING",
+      total: 2,
+      contexts: [
+        { name: "unit", kind: "check_run", status: "IN_PROGRESS", conclusion: "", required: true },
+        { name: "lint", kind: "check_run", status: "COMPLETED", conclusion: "SUCCESS", required: false },
+      ],
+    },
+    comments: { total: 1, recent: [{ author: "carol", createdAt: "2026-01-01T00:30:00Z", excerpt: "LGTM" }] },
+    updatedAt: "2026-01-01T02:00:00Z",
+    needsAction: true,
+    reasons: ["unresolved_threads"],
+    token: "1.0123456789abcdef.01234567",
+    fetchedAt: "2026-01-01T02:00:05Z",
+    incomplete: false,
+    ...overrides,
+  };
+}
+
+function writePrwatchStub() {
+  prwatchBin = join(temp, "prwatch-bin");
+  mkdirSync(prwatchBin);
+  const stub = join(prwatchBin, "prwatch");
+  writeFileSync(
+    stub,
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$FAKE_PRWATCH_LOG"
+case "\${1:-}" in
+  status) cat "$FAKE_PRWATCH_STATUS"; exit "\${FAKE_PRWATCH_STATUS_EXIT:-0}" ;;
+  wait) cat "$FAKE_PRWATCH_WAIT"; exit "\${FAKE_PRWATCH_WAIT_EXIT:-0}" ;;
+  *) echo "unexpected prwatch invocation: $*" >&2; exit 2 ;;
+esac
+`,
+  );
+  chmodSync(stub, 0o755);
+}
+
+function setPrwatchStatus(snapshots: unknown[], exit = 0) {
+  writeFileSync(join(temp, "prwatch-status.json"), `${JSON.stringify(snapshots, null, 2)}\n`);
+  process.env.FAKE_PRWATCH_STATUS_EXIT = String(exit);
+}
+
+function setPrwatchWait(snapshot: unknown, exit = 0) {
+  writeFileSync(join(temp, "prwatch-wait.json"), `${JSON.stringify(snapshot)}\n`);
+  process.env.FAKE_PRWATCH_WAIT_EXIT = String(exit);
+}
+
+function prwatchCalls() {
+  return existsSync(prwatchLog) ? readFileSync(prwatchLog, "utf8").trim().split("\n").filter(Boolean) : [];
+}
+
+function ghCalls() {
+  return existsSync(ghLog) ? readFileSync(ghLog, "utf8").trim().split("\n").filter(Boolean) : [];
+}
 
 function defaultPrState() {
   return {
@@ -119,6 +214,11 @@ beforeEach(() => {
   commentPages = join(temp, "comment-pages.json-stream");
   reviewPages = join(temp, "review-pages.json-stream");
   mkdirSync(fakeBin);
+  prwatchLog = join(temp, "prwatch.log");
+  ghLog = join(temp, "gh.log");
+  delete process.env.FAKE_PRWATCH_STATUS_EXIT;
+  delete process.env.FAKE_PRWATCH_WAIT_EXIT;
+  writePrwatchStub();
   writeFileSync(prState, `${JSON.stringify(defaultPrState())}\n`);
   writeFileSync(threadState, `${JSON.stringify(defaultThreadState())}\n`);
   writeFileSync(commentPages, pagesAsJsonStream(defaultCommentPages()));
@@ -128,6 +228,7 @@ beforeEach(() => {
     gh,
     `#!/usr/bin/env bash
 set -euo pipefail
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 case "\${1:-} \${2:-}" in
   "repo view") printf '%s\\n' 'acme/widgets' ;;
   "pr view") cat "$FAKE_PR_STATE" ;;
@@ -149,7 +250,8 @@ afterEach(() => {
   if (temp) rmSync(temp, { recursive: true, force: true });
 });
 
-function runWaiter(args: string[]) {
+function runWaiter(args: string[], options: { prwatch?: boolean; env?: Record<string, string> } = {}) {
+  const path = options.prwatch ? [prwatchBin, fakeBin, pathWithoutPrwatch] : [fakeBin, pathWithoutPrwatch];
   return spawnSync("bash", [waiter, ...args], {
     cwd: temp,
     encoding: "utf8",
@@ -157,7 +259,12 @@ function runWaiter(args: string[]) {
     maxBuffer: 16 * 1024 * 1024,
     env: {
       ...process.env,
-      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      ...options.env,
+      PATH: path.join(delimiter),
+      FAKE_GH_LOG: ghLog,
+      FAKE_PRWATCH_LOG: prwatchLog,
+      FAKE_PRWATCH_STATUS: join(temp, "prwatch-status.json"),
+      FAKE_PRWATCH_WAIT: join(temp, "prwatch-wait.json"),
       FAKE_PR_STATE: prState,
       FAKE_THREAD_STATE: threadState,
       FAKE_COMMENT_PAGES: commentPages,
@@ -482,5 +589,140 @@ describe("wait-for-pr-change.sh", () => {
     const result = runWaiter(["wait", "7", "--repo", "acme/widgets", "--baseline", baseline, "--interval", "1", "--timeout", "1"]);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("baseline belongs to a different repository or PR");
+  });
+});
+
+describe("wait-for-pr-change.sh with prwatch on PATH", () => {
+  function prwatchBaseline(name = "baseline-prwatch.json") {
+    setPrwatchStatus([prwatchSnapshot()]);
+    const result = runWaiter(["snapshot", "7", "--repo", "acme/widgets"], { prwatch: true });
+    expect(result.status, result.stderr).toBe(0);
+    const baseline = join(temp, name);
+    writeFileSync(baseline, result.stdout);
+    return baseline;
+  }
+
+  it("reads the snapshot from prwatch status without calling GitHub", () => {
+    setPrwatchStatus([prwatchSnapshot()]);
+    const result = runWaiter(["snapshot", "#7", "--repo", "acme/widgets"], { prwatch: true });
+    expect(result.status, result.stderr).toBe(0);
+    expect(prwatchCalls()).toEqual(["status --json acme/widgets#7"]);
+    expect(ghCalls()).toEqual([]);
+
+    const parsed = JSON.parse(result.stdout);
+    // The fields babysit-pr and yolo-ticket validate and read.
+    expect(parsed.repository).toBe("acme/widgets");
+    expect(parsed.source).toBe("prwatch");
+    expect(parsed.prwatch.token).toBe("1.0123456789abcdef.01234567");
+    expect(parsed.prwatch.reasons).toEqual(["unresolved_threads"]);
+    expect(parsed.pr.number).toBe(7);
+    expect(parsed.pr.state).toBe("OPEN");
+    expect(parsed.pr.mergedAt).toBeNull();
+    expect(parsed.pr.headRefOid).toBe("abc123");
+    expect(parsed.pr.mergeable).toBe("MERGEABLE");
+    expect(parsed.pr.mergeStateStatus).toBe("BLOCKED");
+    expect(parsed.pr.reviewDecision).toBe("REVIEW_REQUIRED");
+    expect(parsed.pr.autoMergeRequest).toBeNull();
+    expect(parsed.pr.statusCheckRollup.map((check: { name: string }) => check.name)).toEqual(["lint", "unit"]);
+    expect(parsed.pr.statusCheckRollup.find((check: { name: string }) => check.name === "unit")).toMatchObject({ status: "IN_PROGRESS", conclusion: null });
+    expect(parsed.pr.reviews[0]).toMatchObject({ author: { login: "alice" }, state: "COMMENTED", commitId: "abc123" });
+    expect(parsed.threadCounts).toEqual({ total: 2, unresolved: 1, truncated: false });
+    expect(parsed.reviewThreads).toEqual([
+      { id: "thread-2", isResolved: false, isOutdated: false, path: "src/b.ts", line: 20, comments: [{ author: { login: "bob" }, excerpt: "Could this…" }] },
+    ]);
+
+    // The SKILL.md baseline validation accepts it.
+    const validated = spawnSync("jq", ["-e", 'type == "object" and has("repository") and has("pr") and has("reviewThreads")'], { input: result.stdout, encoding: "utf8" });
+    expect(validated.status).toBe(0);
+  });
+
+  it("maps auto-merge and merge state", () => {
+    setPrwatchStatus([prwatchSnapshot({ state: "MERGED", merged: true, mergedAt: "2026-01-02T00:00:00Z", mergeCommit: "fff000", autoMerge: { enabled: true, method: "SQUASH" } })]);
+    const result = runWaiter(["snapshot", "7", "--repo", "acme/widgets"], { prwatch: true });
+    expect(result.status, result.stderr).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.pr.state).toBe("MERGED");
+    expect(parsed.pr.mergedAt).toBe("2026-01-02T00:00:00Z");
+    expect(parsed.pr.mergeCommit).toBe("fff000");
+    expect(parsed.pr.autoMergeRequest).toEqual({ enabledAt: null, enabledBy: null, mergeMethod: "SQUASH" });
+  });
+
+  it("refuses an incomplete or failed prwatch snapshot rather than reading partial data", () => {
+    setPrwatchStatus([prwatchSnapshot({ incomplete: true, incompleteReason: "checks: timeout" })], 1);
+    const failed = runWaiter(["snapshot", "7", "--repo", "acme/widgets"], { prwatch: true });
+    expect(failed.status).toBe(2);
+    expect(failed.stderr).toContain("prwatch could not read acme/widgets#7");
+    expect(ghCalls()).toEqual([]);
+  });
+
+  it("waits with prwatch wait --since and atomically replaces the baseline on change", () => {
+    const baseline = prwatchBaseline();
+    setPrwatchWait(prwatchSnapshot({ headRefOid: "def456", token: "1.fedcba9876543210.01234567" }));
+
+    const result = runWaiter(["wait", "7", "--repo", "acme/widgets", "--baseline", baseline, "--timeout", "120"], { prwatch: true });
+    expect(result.status, result.stderr).toBe(0);
+    const calls = prwatchCalls();
+    expect(calls[calls.length - 1]).toMatch(/^wait acme\/widgets#7 --since 1\.0123456789abcdef\.01234567 --timeout 1[12][0-9]s --json$/);
+    expect(ghCalls()).toEqual([]);
+
+    const event = JSON.parse(result.stdout);
+    expect(event.event).toBe("changed");
+    expect(event.repository).toBe("acme/widgets");
+    expect(event.pr).toBe(7);
+    expect(event.oldHash).not.toBe(event.newHash);
+    expect(event.snapshot.pr.headRefOid).toBe("def456");
+    const stored = JSON.parse(readFileSync(baseline, "utf8"));
+    expect(stored.pr.headRefOid).toBe("def456");
+    expect(stored.prwatch.token).toBe("1.fedcba9876543210.01234567");
+  });
+
+  it("maps a prwatch timeout (exit 124) to the structured timeout event with exit 0", () => {
+    const baseline = prwatchBaseline();
+    const before = readFileSync(baseline, "utf8");
+    setPrwatchWait(prwatchSnapshot(), 124);
+
+    const result = runWaiter(["wait", "7", "--repo", "acme/widgets", "--baseline", baseline, "--timeout", "5"], { prwatch: true });
+    expect(result.status, result.stderr).toBe(0);
+    const event = JSON.parse(result.stdout);
+    expect(event.event).toBe("timeout");
+    expect(event.repository).toBe("acme/widgets");
+    expect(event.pr).toBe(7);
+    expect(typeof event.hash).toBe("string");
+    expect(typeof event.elapsedSeconds).toBe("number");
+    expect(JSON.parse(readFileSync(baseline, "utf8"))).toEqual(JSON.parse(before));
+  });
+
+  it("fails on a prwatch not-found or auth error instead of reporting a timeout", () => {
+    const baseline = prwatchBaseline();
+    setPrwatchWait({}, 3);
+    const result = runWaiter(["wait", "7", "--repo", "acme/widgets", "--baseline", baseline, "--timeout", "5"], { prwatch: true });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("prwatch wait failed for acme/widgets#7 (exit 3)");
+  });
+
+  it("retries transient prwatch errors, then gives up after three", () => {
+    const baseline = prwatchBaseline();
+    setPrwatchWait({}, 1);
+    const result = runWaiter(["wait", "7", "--repo", "acme/widgets", "--baseline", baseline, "--interval", "1", "--timeout", "30"], { prwatch: true });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("transient GitHub read failure; retrying");
+    expect(prwatchCalls().filter((call) => call.startsWith("wait ")).length).toBe(3);
+  });
+
+  it("keeps a gh-format baseline on the gh path even when prwatch is installed", () => {
+    const baseline = join(temp, "baseline-gh.json");
+    writeFileSync(baseline, `${snapshot()}\n`);
+    const result = runWaiter(["wait", "7", "--repo", "acme/widgets", "--baseline", baseline, "--interval", "1", "--timeout", "1"], { prwatch: true });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).event).toBe("timeout");
+    expect(prwatchCalls()).toEqual([]);
+  });
+
+  it("uses the gh path when NO_PRWATCH=1 is set", () => {
+    const result = runWaiter(["snapshot", "7", "--repo", "acme/widgets"], { prwatch: true, env: { NO_PRWATCH: "1" } });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).source).toBeUndefined();
+    expect(prwatchCalls()).toEqual([]);
+    expect(ghCalls().length).toBeGreaterThan(0);
   });
 });

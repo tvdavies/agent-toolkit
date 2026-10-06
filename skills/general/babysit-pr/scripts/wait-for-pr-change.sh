@@ -10,9 +10,24 @@ Usage:
 
 Commands:
   snapshot  Print canonical relevant PR-state JSON.
-  wait      Compare immediately with FILE, then poll internally until changed or timed out.
+  wait      Compare immediately with FILE, then block until changed or timed out.
 
 Defaults: --interval 60, --timeout 3600. Both changed and timeout events exit 0.
+
+Backends:
+  prwatch   Used when `prwatch` is on PATH (install: npm i -g @tvdavies/prwatch).
+            snapshot reads `prwatch status --json`; wait blocks on
+            `prwatch wait --since TOKEN`, so this script never polls GitHub
+            itself. The snapshot has "source": "prwatch" and a "prwatch" object
+            with the token; thread and comment bodies are excerpts, resolved
+            threads are only counted (threadCounts), and only recent top-level
+            comments are listed. --interval is then only the retry delay after
+            a transient prwatch error. prwatch wakes on new comments, reviews,
+            thread replies, resolution, checks, head, mergeability and
+            auto-merge, but not on an edit to the text of an existing comment
+            or review.
+  gh        The fallback when prwatch is absent, NO_PRWATCH=1 is set, or the
+            baseline has no prwatch token: full bodies, polled every --interval.
 EOF
 }
 
@@ -107,6 +122,54 @@ else
 fi
 owner="${repo%%/*}"
 name="${repo#*/}"
+
+# prwatch is one shared per-user GitHub poller. When it is on PATH, read and wait
+# through it rather than polling GitHub from here. NO_PRWATCH=1 forces gh.
+use_prwatch() { [ -z "${NO_PRWATCH:-}" ] && command -v prwatch >/dev/null 2>&1; }
+prwatch_ref="$repo#$pr"
+
+# Map one prwatch snapshot (stdin) onto this script's snapshot contract. Fields
+# prwatch does not carry (closedAt, head repository, full bodies, resolved
+# threads, older comments) are absent rather than invented.
+prwatch_to_snapshot() {
+  jq -Sc --arg repo "$repo" '
+    def actor: if . == null or . == "" then null else {login: .} end;
+    {
+      repository: $repo,
+      source: "prwatch",
+      prwatch: {token, needsAction, reasons},
+      pr: {
+        number, url, title, state, isDraft, mergedAt, mergeCommit,
+        headRefOid, baseRefName, mergeable, mergeStateStatus, reviewDecision,
+        autoMergeRequest: (
+          if .autoMerge.enabled then {enabledAt: null, enabledBy: null, mergeMethod: .autoMerge.method} else null end
+        ),
+        checkRollupState: .checks.state,
+        statusCheckRollup: (
+          [.checks.contexts[] | {name, kind, status, conclusion: (if (.conclusion // "") == "" then null else .conclusion end), required}]
+          | sort_by(.name, .kind)
+        ),
+        reviews: ([.reviews[] | {author: (.author | actor), state, submittedAt, commitId: .commit}] | sort_by((.author.login // ""), (.submittedAt // ""))),
+        reviewCount,
+        reviewRequests: (.reviewRequests | sort),
+        commentCount: .comments.total,
+        comments: ([.comments.recent[] | {author: (.author | actor), createdAt, excerpt}] | sort_by(.createdAt, (.author.login // "")))
+      },
+      threadCounts: {total: .threads.total, unresolved: .threads.unresolved, truncated: (.threads.truncated // false)},
+      reviewThreads: (
+        [.threads.items[] | {id, isResolved: false, isOutdated: .outdated, path, line, comments: [{author: (.author | actor), excerpt}]}]
+        | sort_by(.id)
+      )
+    }'
+}
+
+prwatch_snapshot() {
+  local out rc=0
+  out=$(prwatch status --json "$prwatch_ref") || rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  jq -e 'type == "array" and length == 1 and (.[0].incomplete | not)' <<<"$out" >/dev/null || return 1
+  jq -c '.[0]' <<<"$out" | prwatch_to_snapshot
+}
 
 # Large JSON goes through temp files and --slurpfile, never --argjson: PR
 # bodies and review threads can exceed the kernel's single-argument limit.
@@ -284,6 +347,12 @@ collect_snapshot() {
 }
 
 if [ "$mode" = "snapshot" ]; then
+  if use_prwatch; then
+    status=0
+    prwatch_snapshot || status=$?
+    [ "$status" -eq 0 ] || die "prwatch could not read $prwatch_ref (exit $status)"
+    exit 0
+  fi
   collect_snapshot || die "could not fetch PR #$pr state from $repo"
   exit 0
 fi
@@ -299,7 +368,12 @@ baseline_dir=$(dirname "$baseline")
 mkdir -p "$baseline_dir"
 canonical_baseline=$(mktemp "$baseline_dir/.babysit-pr-baseline.XXXXXX")
 current_file=$(mktemp "${TMPDIR:-/tmp}/babysit-pr-current.XXXXXX")
-cleanup() { rm -f "$canonical_baseline" "$current_file"; }
+raw_file=$(mktemp "${TMPDIR:-/tmp}/babysit-pr-raw.XXXXXX")
+child_pid=""
+cleanup() {
+  if [ -n "$child_pid" ]; then kill "$child_pid" 2>/dev/null || true; fi
+  rm -f "$canonical_baseline" "$current_file" "$raw_file"
+}
 interrupted() {
   cleanup
   jq -cn --arg event interrupted --arg repo "$repo" --argjson pr "$pr" '{event:$event,repository:$repo,pr:$pr}'
@@ -314,50 +388,105 @@ start=$(date +%s)
 failures=0
 max_failures=3
 
+# Replace the baseline with current_file atomically and report the change.
+emit_changed() {
+  local new_hash temporary
+  new_hash=$(hash_file "$current_file")
+  temporary=$(mktemp "$baseline_dir/.babysit-pr-update.XXXXXX")
+  cp "$current_file" "$temporary"
+  mv "$temporary" "$baseline"
+  # --slurpfile, not --argjson: a large snapshot exceeds ARG_MAX.
+  jq -cn \
+    --arg event changed \
+    --arg repository "$repo" \
+    --argjson pr "$pr" \
+    --arg oldHash "$old_hash" \
+    --arg newHash "$new_hash" \
+    --slurpfile snapshots "$baseline" \
+    '{event:$event,repository:$repository,pr:$pr,oldHash:$oldHash,newHash:$newHash,snapshot:$snapshots[0]}'
+  exit 0
+}
+
+emit_timeout() {
+  local elapsed=$(( $(date +%s) - start ))
+  jq -cn \
+    --arg event timeout \
+    --arg repository "$repo" \
+    --argjson pr "$pr" \
+    --arg hash "$old_hash" \
+    --argjson elapsed "$elapsed" \
+    '{event:$event,repository:$repository,pr:$pr,hash:$hash,elapsedSeconds:$elapsed}'
+  exit 0
+}
+
+# Run a blocking command in the background so INT/TERM interrupt it promptly.
+run_child() {
+  local status=0
+  "$@" &
+  child_pid=$!
+  wait "$child_pid" || status=$?
+  child_pid=""
+  return "$status"
+}
+
+transient_failure() {
+  failures=$((failures + 1))
+  if [ "$failures" -eq 1 ]; then
+    echo "wait-for-pr-change: transient GitHub read failure; retrying" >&2
+  fi
+  if [ "$failures" -ge "$max_failures" ]; then
+    die "GitHub state fetch failed $failures consecutive times for $repo#$pr"
+  fi
+}
+
+since_token=$(jq -r '.prwatch.token // empty' "$baseline")
+if [ -n "$since_token" ] && use_prwatch; then
+  # prwatch returns at once if the PR already differs from the baseline token,
+  # so a change made after the baseline was captured is never missed.
+  while :; do
+    remaining=$(( timeout - ($(date +%s) - start) ))
+    [ "$remaining" -gt 0 ] || emit_timeout
+    status=0
+    run_child prwatch wait "$prwatch_ref" --since "$since_token" --timeout "${remaining}s" --json > "$raw_file" || status=$?
+    case "$status" in
+      0)
+        if jq -e 'type == "object" and (.incomplete | not)' "$raw_file" >/dev/null 2>&1 \
+          && prwatch_to_snapshot < "$raw_file" > "$current_file"; then
+          emit_changed
+        fi
+        transient_failure
+        ;;
+      124) emit_timeout ;;
+      2|3) die "prwatch wait failed for $prwatch_ref (exit $status)" ;;
+      *) transient_failure ;;
+    esac
+    remaining=$(( timeout - ($(date +%s) - start) ))
+    [ "$remaining" -gt 0 ] || emit_timeout
+    delay="$interval"
+    if [ "$delay" -gt "$remaining" ]; then delay="$remaining"; fi
+    run_child sleep "$delay"
+  done
+fi
+
 while :; do
   if collect_snapshot > "$current_file"; then
     failures=0
     new_hash=$(hash_file "$current_file")
     if [ "$new_hash" != "$old_hash" ]; then
-      temporary=$(mktemp "$baseline_dir/.babysit-pr-update.XXXXXX")
-      cp "$current_file" "$temporary"
-      mv "$temporary" "$baseline"
-      # --slurpfile, not --argjson: a large snapshot exceeds ARG_MAX.
-      jq -cn \
-        --arg event changed \
-        --arg repository "$repo" \
-        --argjson pr "$pr" \
-        --arg oldHash "$old_hash" \
-        --arg newHash "$new_hash" \
-        --slurpfile snapshots "$baseline" \
-        '{event:$event,repository:$repository,pr:$pr,oldHash:$oldHash,newHash:$newHash,snapshot:$snapshots[0]}'
-      exit 0
+      emit_changed
     fi
   else
-    failures=$((failures + 1))
-    if [ "$failures" -eq 1 ]; then
-      echo "wait-for-pr-change: transient GitHub read failure; retrying" >&2
-    fi
-    if [ "$failures" -ge "$max_failures" ]; then
-      die "GitHub state fetch failed $failures consecutive times for $repo#$pr"
-    fi
+    transient_failure
   fi
 
   now=$(date +%s)
   elapsed=$((now - start))
   if [ "$elapsed" -ge "$timeout" ]; then
-    jq -cn \
-      --arg event timeout \
-      --arg repository "$repo" \
-      --argjson pr "$pr" \
-      --arg hash "$old_hash" \
-      --argjson elapsed "$elapsed" \
-      '{event:$event,repository:$repository,pr:$pr,hash:$hash,elapsedSeconds:$elapsed}'
-    exit 0
+    emit_timeout
   fi
 
   remaining=$((timeout - elapsed))
   delay="$interval"
   if [ "$delay" -gt "$remaining" ]; then delay="$remaining"; fi
-  sleep "$delay"
+  run_child sleep "$delay"
 done

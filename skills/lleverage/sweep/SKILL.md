@@ -24,7 +24,13 @@ after a compaction:
 - `../workstream/references/verification.md`
 - `../workstream/references/implementer-brief.md`
 
-Scripts: `../workstream/scripts/{linear-queue.sh,pr-ledger.sh,followup.sh}`. Health
+Scripts: `../workstream/scripts/{linear-queue.sh,pr-ledger.sh,followup.sh}`.
+PR waiting goes through prwatch (install: `npm i -g @tvdavies/prwatch`): the
+ledger watcher uses it when installed, and agents wait with `prwatch wait --since`
+or a Monitor on `prwatch events`, never ad hoc `gh pr view` or `gh api graphql`
+loops. Prefer REST for one-off reads when GraphQL is rate-limited (`prwatch rate`);
+writes (merge, auto-merge, comments, review requests) still use `gh`. See
+"Waiting on GitHub: prwatch" in `../workstream/references/orchestration.md`. Health
 checks: the `prod-health` skill (`../prod-health/scripts/prod-health.sh`), run at
 start-up, after merge bursts and every two hours, with its severity response.
 

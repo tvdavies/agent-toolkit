@@ -1,11 +1,11 @@
 ---
 name: babysit-pr
 description: Autonomously monitors a GitHub pull request and keeps it moving toward merge readiness. Use only when the user explicitly asks to "babysit PR", "watch this PR", "monitor this PR", "keep this PR moving", "address PR feedback", "handle review comments", "fix PR feedback", "make this PR mergeable", or "unblock this PR" for a named PR or the unambiguous current PR. Handles reviews, comments, checks, flakes, and conflicts; may commit and push fixes to the PR head branch, but never merges.
-compatibility: Requires git, GitHub CLI, jq, network access, and a repository with worktree support.
+compatibility: Requires git, GitHub CLI, jq, network access, and a repository with worktree support. Uses prwatch (npm i -g @tvdavies/prwatch) for waiting when it is installed.
 disable-model-invocation: true
 metadata:
   author: tvd
-  version: 1.2.0
+  version: 1.3.0
 ---
 
 # Babysit PR
@@ -54,6 +54,14 @@ Use the shared scripts for blocker inventory and thread replies:
 bash "$SKILL_DIR/../_shared/pr-readiness/scripts/fetch-pr-blockers.sh" PR_NUMBER
 bash "$SKILL_DIR/../_shared/pr-readiness/scripts/reply-and-resolve.sh" PR_NUMBER THREAD_ID COMMENT_DATABASE_ID "REPLY" [--no-resolve]
 ```
+
+### Waiting on GitHub
+
+Install: `npm i -g @tvdavies/prwatch`. Follow "Waiting on GitHub: prwatch" in the shared protocol:
+
+- Wait only through the bundled watcher (Phases 4 and 5), `prwatch wait --since TOKEN`, or the Monitor tool on `prwatch events --json --pr OWNER/REPO#N`. Never write ad hoc `gh pr view`, `gh pr checks` or `gh api graphql` loops.
+- One-off reads are fine. When GraphQL is rate-limited (check `prwatch rate`), prefer REST reads such as `gh api repos/OWNER/REPO/pulls/N`.
+- Writes still go through `gh` directly: comments, replies, thread resolution and review requests. prwatch only reads.
 
 ## Phase 1: Identify the exact PR
 
@@ -134,7 +142,7 @@ A local merge commit is not a resolved GitHub conflict. The conflict cycle is **
 
 ## Phase 4: Establish a race-safe watch baseline
 
-The bundled watcher makes one blocking tool call and polls GitHub internally, conserving agent turns and tokens.
+The bundled watcher makes one blocking tool call, conserving agent turns and tokens. When `prwatch` is on PATH it reads and waits through the shared prwatch daemon and never polls GitHub itself; otherwise it polls GitHub internally with `gh`.
 
 After a processing cycle, write a fresh canonical snapshot:
 
@@ -153,6 +161,8 @@ jq -e 'type == "object" and has("repository") and has("pr") and has("reviewThrea
 mv "$TEMP_BASELINE" "$BASELINE"
 jq . "$BASELINE"
 ```
+
+With prwatch the snapshot has `"source": "prwatch"` and a `prwatch` object holding the `token`, `needsAction` and `reasons`. Its thread and comment text are excerpts, resolved threads are only counted in `threadCounts`, and only recent top-level comments are listed. Read full bodies, comment IDs and check links with `fetch-pr-blockers.sh` and `gh pr view` when processing a change. prwatch does not wake on an edit to the text of an existing comment or review (new comments, reviews, thread replies and resolutions all wake it), so read current bodies when you process each change rather than relying on earlier ones. The `gh` fallback snapshot has full bodies and also detects edits.
 
 This sequence preserves the watcher exit status, validates the completed temporary file, and only then atomically replaces the baseline. Inspect the baseline file itself as the authoritative final state for the current cycle. If it contains a new failure, comment, review, head commit, or conflict, process that state before waiting. Do not take a separate final reading and then create the baseline, because a change in between could be missed.
 
@@ -179,7 +189,7 @@ bash "$SKILL_DIR/scripts/wait-for-pr-change.sh" wait PR_NUMBER \
 
 `--timeout` is the inactivity budget: the maximum time to wait for anything at all to happen on the PR. It is not a cap on the whole babysitting session. Default `MAX_WAIT_SECONDS` to 3600 (one hour) unless the user's request sets a different bound. Each processed change starts the next wait fresh, so an active PR is monitored indefinitely while a silent one ends after one budget.
 
-The script immediately compares GitHub with the baseline, so a change after baseline creation is not missed. It then blocks and polls internally. Parse its JSON result:
+The script immediately compares GitHub with the baseline, so a change after baseline creation is not missed. With prwatch it blocks in `prwatch wait --since TOKEN` (`--interval` is then only the retry delay after a transient error); otherwise it polls internally every `--interval` seconds. A baseline taken without prwatch is waited on with `gh`. Parse its JSON result:
 
 - `event: "changed"`: the baseline file has been atomically replaced with the new snapshot. Return to Phase 3 and process it; the next wait restarts the inactivity budget.
 - `event: "timeout"`: nothing happened within the inactivity budget. Do not infer progress or readiness, and do not silently start another full wait. Take one fresh snapshot; if it reveals a change after all, process it and continue monitoring. If the PR state is genuinely unchanged, stop and report `TIMED OUT` as defined in Exit and cleanup.

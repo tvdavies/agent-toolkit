@@ -121,6 +121,24 @@ on expiry) for every repo, infra included. Act on each line:
 A watcher that only tracks the merge is not babysitting: a change request blocks
 auto-merge silently. Every open PR has exactly one owner, and the ledger records it.
 
+### Waiting on GitHub: prwatch
+
+Install: `npm i -g @tvdavies/prwatch`. With it on PATH, `pr-ledger.sh list` reads
+every ledger PR in one `prwatch status --json` call and `pr-ledger.sh watch` holds
+one `prwatch events` stream across the ledger, so the session and all its
+implementers share one daemon's batched poll instead of each polling GitHub.
+Without prwatch the ledger falls back to `gh` GraphQL per PR every `--interval`.
+
+- Wait with the ledger watcher, `prwatch wait OWNER/REPO#N --since TOKEN`, or a
+  Monitor on `prwatch events --json --pr OWNER/REPO#N`. Never write ad hoc
+  `gh pr view`, `gh pr checks` or `gh api graphql` loops, and don't let
+  implementers either.
+- One-off reads are fine. When GraphQL is rate-limited (check `prwatch rate`),
+  prefer REST such as `gh api repos/OWNER/REPO/pulls/N`.
+- Writes still go through `gh` directly: merge, auto-merge, comments and review
+  requests.
+- `prwatch list` shows what the daemon is watching and for whom.
+
 ## Human action queue
 
 Tom's attention is the scarcest resource. Keep **one** numbered list in `STATE.md`:

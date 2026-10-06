@@ -35,6 +35,20 @@ bash scripts/reply-and-resolve.sh PR_NUMBER THREAD_ID FIRST_COMMENT_DATABASE_ID 
 
 The script output is a blocker inventory, not sufficient proof that a PR is green.
 
+`fetch-pr-blockers.sh` is a one-shot read for a processing cycle, not a polling loop: it reads full thread bodies, comment database IDs and check links through `gh`, because replies and log reads need them and prwatch carries only excerpts. Run it after a watcher reports a change, never on a timer.
+
+## Waiting on GitHub: prwatch
+
+Install: `npm i -g @tvdavies/prwatch`. One shared background poller per user reads every watched PR with one batched GraphQL request, so parallel agents stop spending the GitHub budget separately.
+
+- Wait with `prwatch wait OWNER/REPO#N --since TOKEN --timeout 30m --json`, passing the `token` from the previous snapshot so nothing between calls is missed. `--for checks|review|mergeable|merged|closed` waits for a specific condition. Exit codes: 0 condition met, 124 timeout, 2 usage or authentication, 3 not found, 1 other (retry).
+- In Claude Code, the Monitor tool on `prwatch events --json --pr OWNER/REPO#N` streams one line per change and keeps the shared poller running.
+- `prwatch status OWNER/REPO#N --json` reads the cached snapshot: `needsAction`/`reasons`, unresolved threads (excerpts), the check rollup, review decision, mergeability, auto-merge and `incomplete`.
+- The bundled watchers (`babysit-pr`'s `wait-for-pr-change.sh`, the workstream `pr-ledger.sh`) use prwatch whenever it is on PATH and fall back to `gh` polling otherwise.
+- Never wait with ad hoc `gh pr view`, `gh pr checks` or `gh api graphql` loops, or `sleep` loops around them.
+- One-off reads are fine. When GraphQL is rate-limited (check `prwatch rate`), prefer REST such as `gh api repos/OWNER/REPO/pulls/N` or `gh api repos/OWNER/REPO/commits/SHA/check-runs`; `gh pr view` and `gh pr checks` use GraphQL.
+- Writes still go through `gh` directly: merge, auto-merge, comments, replies, thread resolution and review requests. prwatch only reads.
+
 ## Authoritative state
 
 After fetching blockers, query current GitHub state for the same PR and head commit:
@@ -138,7 +152,7 @@ The absence of failing checks or unresolved threads alone is never enough to dec
 ## Loop and exit rules
 
 - Re-check after each push because the head, checks, and automated-review evidence changed.
-- Do not spend agent turns on repeated `sleep` and status-check cycles. `babysit-pr` must use its blocking `wait-for-pr-change.sh` watcher with at least 60 seconds between remote polls; other callers should use an equivalent watch, park, or scheduled resume.
+- Do not spend agent turns on repeated `sleep` and status-check cycles. `babysit-pr` must use its blocking `wait-for-pr-change.sh` watcher, which waits through prwatch when it is installed and otherwise polls with at least 60 seconds between remote reads; other callers should use `prwatch wait --since`, a Monitor on `prwatch events`, or an equivalent watch, park, or scheduled resume (see "Waiting on GitHub: prwatch").
 - Build the waiting baseline from the same canonical snapshot used for the final actionable-state decision. Inspect that snapshot before waiting so a change is not hidden inside a newly captured baseline.
 - If only external CI or human review is pending and no resumable wait exists, return the exact pending state; do not pretend the PR is ready.
 - Stop after roughly three no-progress cycles, a repeatedly failing check with no verified fix, unsafe conflict resolution, or a human decision the agent cannot make safely.

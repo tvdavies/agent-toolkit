@@ -234,6 +234,14 @@ remote GitHub checks, review feedback, comments, or threads.
 7. Verify the branch is pushed, record the exact remote head SHA, and ensure the
    worktree has no uncommitted intended changes.
 
+GitHub reads here are one-off. This skill never waits on a PR; if a caller later
+needs to, it uses prwatch (install: `npm i -g @tvdavies/prwatch`) through
+`prwatch wait --since TOKEN` or the Monitor tool on `prwatch events`, never ad
+hoc `gh pr view` or `gh api graphql` loops. When GraphQL is rate-limited (check
+`prwatch rate`), prefer REST reads such as `gh api repos/OWNER/REPO/pulls/N`.
+Writes such as `gh pr create`, comments and review requests still go through
+`gh` directly.
+
 If a PR already exists for the ticket branch, update it and mark it ready when
 necessary instead of opening a duplicate. Do not inspect remote checks or review
 feedback after the ready-for-review PR and current head are verified.

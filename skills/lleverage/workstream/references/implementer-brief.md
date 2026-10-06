@@ -63,6 +63,13 @@ Follow ~/.claude/skills/yolo-ticket/SKILL.md for the flow, with these rules on t
   next tool call.
 - Waiting on CI or review is not a reason to stop. Keep a watcher running
   (babysit-pr's wait script) so you're woken by the change.
+- Wait through prwatch (install: `npm i -g @tvdavies/prwatch`): babysit-pr's
+  wait script uses it when it is on PATH, or use
+  `prwatch wait OWNER/REPO#N --since TOKEN` or a Monitor on
+  `prwatch events --json --pr OWNER/REPO#N`. Never poll with `gh pr view`,
+  `gh pr checks` or `gh api graphql` loops. One-off reads are fine; when GraphQL
+  is rate-limited (`prwatch rate`), prefer REST (`gh api repos/OWNER/REPO/pulls/N`).
+  Writes (merge, auto-merge, comments, review requests) still use `gh`.
 - When you do stop, the report says MERGED, BLOCKED (on what exactly) or
   INTERRUPTED (and the resume point).
 
