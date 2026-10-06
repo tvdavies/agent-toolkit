@@ -74,7 +74,8 @@ describe("shared PR readiness protocol", () => {
     expect(protocol).toContain("wait-for-pr-change.sh");
     expect(protocol).toContain("ready to merge or already merged");
     expect(protocol).not.toContain("drive-pr");
-    expect(protocol).not.toContain("daemon");
+    // The old resident-agent daemon is gone; only prwatch's own commands may mention one.
+    expect(protocol.replace(/prwatch daemon \w+/g, "")).not.toContain("daemon");
   });
 
   it("keeps review requests independent of billing estimates while preserving operational safeguards", () => {

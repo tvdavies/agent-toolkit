@@ -23,7 +23,8 @@ subagents write the code. Read these before starting, and again after a compacti
 
 Scripts are in `scripts/` (run with `--help`): `linear-queue.sh`, `pr-ledger.sh`,
 `followup.sh`. `pr-ledger.sh` reads and watches PRs through prwatch when it is
-installed (`npm i -g @tvdavies/prwatch@^0.1.1`). Agents wait with `prwatch wait --since`
+installed (`npm i -g @tvdavies/prwatch@^0.1.2`; upgrade with
+`npm i -g @tvdavies/prwatch@latest && prwatch daemon restart`). Agents wait with `prwatch wait --since`
 or a Monitor on `prwatch events`, never ad hoc `gh pr view` or `gh api graphql`
 loops; prefer REST for one-off reads when GraphQL is rate-limited (`prwatch rate`),
 and keep writes (merge, auto-merge, comments, review requests) on `gh`. See

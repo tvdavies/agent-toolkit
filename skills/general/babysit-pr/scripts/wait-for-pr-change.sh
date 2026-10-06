@@ -15,7 +15,8 @@ Commands:
 Defaults: --interval 60, --timeout 3600. Both changed and timeout events exit 0.
 
 Backends:
-  prwatch   Used when `prwatch` is on PATH (install: npm i -g @tvdavies/prwatch@^0.1.1).
+  prwatch   Used when `prwatch` is on PATH (install: npm i -g @tvdavies/prwatch@^0.1.2;
+            upgrade: npm i -g @tvdavies/prwatch@latest && prwatch daemon restart).
             snapshot reads `prwatch status --json`; wait blocks on
             `prwatch wait --since TOKEN`, so this script never polls GitHub
             itself. The snapshot has "source": "prwatch" and a "prwatch" object

@@ -53,7 +53,8 @@ turn, and the run stops there.
   Put status notes in the same message as the next tool call.
 - Waiting on CI, review or auto-merge is not a reason to stop: keep the blocking
   watcher from Phase 5 (or babysit-pr's) running so the change wakes you.
-- Wait through prwatch (install: `npm i -g @tvdavies/prwatch@^0.1.1`): the bundled
+- Wait through prwatch (install: `npm i -g @tvdavies/prwatch@^0.1.2`; upgrade:
+  `npm i -g @tvdavies/prwatch@latest && prwatch daemon restart`): the bundled
   watcher uses it when it is on PATH, and otherwise wait with
   `prwatch wait OWNER/REPO#N --since TOKEN` or the Monitor tool on
   `prwatch events --json --pr OWNER/REPO#N`. Never write ad hoc `gh pr view` or
