@@ -27,14 +27,36 @@ type PrState = {
   changesBy?: string[];
   unresolved?: number;
   mergeable?: string;
+  mergeState?: string;
   auto?: boolean;
   merge?: string | null;
+  // What prwatch (0.1.6 on) reports for this state; the gh fallback must agree.
+  reasons: string[];
 };
 
 const prs: Record<string, PrState> = {
-  "acme/widgets#7": { state: "OPEN", ci: "FAILURE", review: "CHANGES_REQUESTED", changesBy: ["bob"], unresolved: 1 },
-  "acme/infra#12": { state: "OPEN", ci: "SUCCESS", review: "APPROVED" },
-  "acme/widgets#9": { state: "MERGED", ci: "SUCCESS", review: "APPROVED", merge: "0123456789abcdef" },
+  "acme/widgets#7": {
+    state: "OPEN",
+    ci: "FAILURE",
+    review: "CHANGES_REQUESTED",
+    changesBy: ["bob"],
+    unresolved: 1,
+    reasons: ["check_failed", "changes_requested", "unresolved_threads"],
+  },
+  "acme/infra#12": { state: "OPEN", ci: "SUCCESS", review: "APPROVED", reasons: ["ready_auto_merge_off"] },
+  "acme/widgets#9": { state: "MERGED", ci: "SUCCESS", review: "APPROVED", merge: "0123456789abcdef", reasons: [] },
+};
+
+// Classification edges, read by the "need= follows prwatch's reasons" tests only.
+const edges: Record<string, PrState> = {
+  // No required review, so no review decision, but a reviewer asked for changes.
+  "acme/infra#13": { state: "OPEN", ci: "SUCCESS", review: null, changesBy: ["dave"], reasons: ["changes_requested", "ready_auto_merge_off"] },
+  // Approved and green, but GitHub still blocks the merge (a required check never reported).
+  "acme/widgets#11": { state: "OPEN", ci: "SUCCESS", review: "APPROVED", mergeState: "BLOCKED", reasons: ["merge_blocked"] },
+  // The same just after a push: no checks yet, so not (yet) blocked by anything unseen.
+  "acme/widgets#14": { state: "OPEN", review: "APPROVED", mergeState: "BLOCKED", reasons: [] },
+  // Drafts stay with their implementer.
+  "acme/widgets#12": { state: "OPEN", isDraft: true, ci: "FAILURE", reasons: ["check_failed"] },
 };
 
 // The old gh-backed watcher printed exactly these lines; both backends must keep them.
@@ -53,6 +75,7 @@ function graphql(p: PrState) {
           isDraft: p.isDraft ?? false,
           headRefOid: p.head ?? "abc1234567890",
           mergeable: p.mergeable ?? "MERGEABLE",
+          mergeStateStatus: p.mergeState ?? "CLEAN",
           reviewDecision: p.review ?? null,
           baseRefName: "main",
           mergeCommit: p.merge ? { oid: p.merge } : null,
@@ -82,15 +105,15 @@ function prwatchSnapshot(ref: string, p: PrState) {
     headRefOid: p.head ?? "abc1234567890",
     baseRefName: "main",
     mergeable: p.mergeable ?? "MERGEABLE",
-    mergeStateStatus: "CLEAN",
+    mergeStateStatus: p.mergeState ?? "CLEAN",
     autoMerge: { enabled: p.auto ?? false, method: null },
     reviewDecision: p.review ?? null,
     reviews: (p.changesBy ?? []).map((author) => ({ author, state: "CHANGES_REQUESTED" })).concat([{ author: "carol", state: "APPROVED" }]),
     threads: { total: (p.unresolved ?? 0) + 1, unresolved: p.unresolved ?? 0, items: [] },
     checks: { state: p.ci ?? "NONE", total: 0, contexts: [] },
     comments: { total: 0, recent: [] },
-    needsAction: false,
-    reasons: [],
+    needsAction: p.reasons.length > 0,
+    reasons: p.reasons,
     token: "1.0000000000000000.00000000",
     incomplete: false,
   };
@@ -104,7 +127,7 @@ beforeEach(() => {
   mkdirSync(ghBin);
   mkdirSync(prwatchBin);
 
-  for (const [ref, p] of Object.entries(prs)) {
+  for (const [ref, p] of Object.entries({ ...prs, ...edges })) {
     const safe = ref.replace(/[/#]/g, "_");
     writeFileSync(join(temp, `gql-${safe}.json`), JSON.stringify(graphql(p)));
   }
@@ -124,7 +147,7 @@ cat "$f"
   );
   chmodSync(join(ghBin, "gh"), 0o755);
 
-  const snapshots = Object.entries(prs).map(([ref, p]) => prwatchSnapshot(ref, p));
+  const snapshots = Object.entries({ ...prs, ...edges }).map(([ref, p]) => prwatchSnapshot(ref, p));
   writeFileSync(join(temp, "status.json"), JSON.stringify(snapshots, null, 2));
   writeFileSync(
     join(prwatchBin, "prwatch"),
@@ -218,6 +241,41 @@ describe("pr-ledger.sh list", () => {
       `acme/widgets#9\tLLE-9\tagent-a\t${expected["acme/widgets#9"]}`,
       "acme/widgets#404\tLLE-404\tagent-a\tERROR Could not resolve to a PullRequest",
     ]);
+  });
+});
+
+describe("pr-ledger.sh need= follows prwatch's reasons", () => {
+  const edgeLines = [
+    "acme/infra#13\tLLE-13\tagent-a\tstate=OPEN head=abc12345 ci=SUCCESS review=NONE changes-by=dave threads=0 mergeable=MERGEABLE auto=off need=changes-requested",
+    "acme/widgets#11\tLLE-11\tagent-a\tstate=OPEN head=abc12345 ci=SUCCESS review=APPROVED threads=0 mergeable=MERGEABLE auto=off need=merge-blocked",
+    "acme/widgets#14\tLLE-14\tagent-a\tstate=OPEN head=abc12345 ci=NONE review=APPROVED threads=0 mergeable=MERGEABLE auto=off need=none",
+    "acme/widgets#12\tLLE-12\tagent-a\tstate=OPEN head=abc12345 ci=FAILURE review=NONE threads=0 mergeable=MERGEABLE auto=off draft need=none",
+  ];
+  function addEdges() {
+    for (const ref of Object.keys(edges)) {
+      const [repo, n] = ref.split("#");
+      expect(run(["add", repo!, n!, `LLE-${n}`, "agent-a"]).status).toBe(0);
+    }
+  }
+
+  it("maps the first reason, and the gh fallback works out the same reasons", () => {
+    addEdges();
+    const viaPrwatch = run(["list"], { prwatch: true });
+    expect(viaPrwatch.status, viaPrwatch.stderr).toBe(0);
+    expect(lines(viaPrwatch.stdout)).toEqual(edgeLines);
+    const viaGh = run(["list"]);
+    expect(viaGh.status, viaGh.stderr).toBe(0);
+    expect(lines(viaGh.stdout)).toEqual(edgeLines);
+  });
+
+  it("passes a reason it doesn't know through, so it still needs action", () => {
+    const status = join(temp, "status.json");
+    const snapshots = JSON.parse(readFileSync(status, "utf8"));
+    for (const s of snapshots) if (s.pr === "acme/widgets#11") s.reasons = ["merge_queue_failed"];
+    writeFileSync(status, JSON.stringify(snapshots));
+    expect(run(["add", "acme/widgets", "11", "LLE-11", "agent-a"]).status).toBe(0);
+    const result = run(["list"], { prwatch: true });
+    expect(lines(result.stdout)).toEqual([edgeLines[1]!.replace("need=merge-blocked", "need=merge-queue-failed")]);
   });
 });
 
