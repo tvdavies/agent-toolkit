@@ -28,6 +28,13 @@ costs a new review round** (20–60 minutes). Therefore:
 - implementers run their own checks and an independent `sol-reviewer` (foreground,
   with the diff inline) **before** marking ready;
 - batch all feedback fixes into one push per review round;
+- CodeRabbit only reviews automatically when a PR opens or leaves draft
+  (`.coderabbit.yaml` has `auto_incremental_review: false` and `drafts: false`,
+  because of the review-attempt cap). After a round's fixes are pushed and its
+  threads answered, the PR's owner posts `@coderabbitai review` once. Never post
+  it after each commit, or for a clean base update. See the CodeRabbit section of
+  `_shared/pr-readiness/PROTOCOL.md` beside the real (symlink-resolved)
+  `babysit-pr` directory;
 - no cosmetic or docs-only pushes after approval. Put them in a follow-up PR or
   the next PR in the lane;
 - bundle a lane's small slices into one PR (one session went from about 20 PRs to
