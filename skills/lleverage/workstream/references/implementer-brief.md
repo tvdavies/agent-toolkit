@@ -41,6 +41,9 @@ Follow ~/.claude/skills/yolo-ticket/SKILL.md for the flow, with these rules on t
   Fix blocking findings.
 - Batch review fixes into one push per round. No cosmetic pushes after approval:
   each push needs a fresh approval.
+- CodeRabbit doesn't review pushes on its own. Once a round's fixes are pushed,
+  validated and every thread is answered, post `@coderabbitai review` once. Not
+  after each commit, and not for a clean base update.
 - Every thread gets a reply and is resolved after the fixing commit is pushed.
 
 ## Merge

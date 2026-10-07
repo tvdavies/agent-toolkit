@@ -244,7 +244,11 @@ Writes such as `gh pr create`, comments and review requests still go through
 `gh` directly.
 
 If a PR already exists for the ticket branch, update it and mark it ready when
-necessary instead of opening a duplicate. Do not inspect remote checks or review
+necessary instead of opening a duplicate. Opening a non-draft PR, or marking a
+draft ready, starts CodeRabbit's automatic review. In repositories where
+CodeRabbit incremental reviews are manual (see the shared PR-readiness protocol),
+a push to a PR that was already ready doesn't start one. Post
+`@coderabbitai review` once after the final push. Do not inspect remote checks or review
 feedback after the ready-for-review PR and current head are verified.
 
 ## Completion report

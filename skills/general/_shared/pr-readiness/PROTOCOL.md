@@ -67,11 +67,22 @@ Classify checks from `statusCheckRollup`:
 
 An empty rollup is not automatically green. If the repository normally runs checks or branch protection expects them, treat an empty rollup on a new head as pending. It may count as green only when repository policy clearly requires no checks.
 
-When the repository uses an automated reviewer, verify that it reviewed the current `headRefOid`; feedback on an older head is stale evidence.
+When the repository uses an automated reviewer, verify that it reviewed the current `headRefOid`; feedback on an older head is stale evidence. One exception: when the only commits since the reviewed head are a clean update from the base branch (`gh pr update-branch`, or a merge or rebase with no conflict resolution), the earlier review still covers the PR's own changes. Do not request a new automated review for that alone. A conflict resolution is a code change and needs review.
 
 ### Automated review request policy
 
 Necessary manual review and re-review requests are part of authorised PR babysitting. When automatic reviews are paused or current-head coverage is missing, use the provider's existing manual review command without asking the user for separate approval.
+
+#### CodeRabbit incremental reviews are manual
+
+Repositories such as `lleverage-ai/lleverage` set `auto_incremental_review: false` and `drafts: false` in `.coderabbit.yaml`, because CodeRabbit caps usage by the number of review attempts. Check the repository's `.coderabbit.yaml` to confirm. In these repositories, CodeRabbit reviews automatically once, when a non-draft PR opens or a draft is marked ready. After that, it reviews a new push only when someone comments `@coderabbitai review`. The agent that pushed is responsible for asking for that review.
+
+- Ask once per review round, after the round is finished: all feedback from the round is applied in one push, local validation passed, every handled thread has its reply, and you don't expect to push again straight away.
+- Don't ask after each commit, while local checks are failing, or for a head you expect to replace soon. If you are going to push again, finish that first.
+- Post exactly `@coderabbitai review` as a top-level PR comment (`gh pr comment PR_NUMBER --body "@coderabbitai review"`). Use `@coderabbitai full review` only when the incremental review is clearly insufficient, for example after a large rewrite.
+- Don't ask for a review of a base-only update (see "Authoritative state"), or if CodeRabbit is already reviewing the current head.
+- If CodeRabbit replies that the review limit has been reached, the request did not count. Wait for the time it gives and ask again. Don't escalate or treat it as a blocker before then.
+- A stale CodeRabbit `CHANGES_REQUESTED` review normally clears when it re-reviews the fixed head. That's why the re-review request is part of the round.
 
 Review budgets, included usage and additional usage billing are managed outside the agent. Do not estimate review charges, maintain spending reservations, enforce review-wave caps, or pause publication or review requests to ask about billing. Historical task budget notes are not PR-review permission gates. File counts, plan labels, remaining-usage indicators and old receipts do not reliably establish whether a request is included or additionally billed; do not claim that it is free or incurs a specific charge.
 
