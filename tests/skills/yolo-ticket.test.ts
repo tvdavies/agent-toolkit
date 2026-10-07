@@ -29,8 +29,8 @@ describe("yolo-ticket skill", () => {
     expect(skill).toContain("^[A-Z][A-Z0-9]*-[0-9]+$");
     expect(skill).toContain("reject flags");
     expect(skill).toContain("multiple tickets");
-    expect(skill).toContain("A Sal scheduled-task brief that Tom has confirmed");
-    expect(skill).toContain("counts as an explicit invocation for each of those tickets, one at\na time.");
+    expect(skill).toContain("An approved automation brief also counts as an explicit invocation");
+    expect(skill).toContain("It applies to each chosen ticket separately, one\nat a time, and every rule below still applies.");
   });
 
   it("composes start-ticket and babysit-pr in the same worktree", () => {
