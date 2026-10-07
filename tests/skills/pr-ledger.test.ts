@@ -30,7 +30,7 @@ type PrState = {
   mergeState?: string;
   auto?: boolean;
   merge?: string | null;
-  // What prwatch (0.1.5 on) reports for this state; the gh fallback must agree.
+  // What prwatch (0.1.6 on) reports for this state; the gh fallback must agree.
   reasons: string[];
 };
 
@@ -51,8 +51,10 @@ const prs: Record<string, PrState> = {
 const edges: Record<string, PrState> = {
   // No required review, so no review decision, but a reviewer asked for changes.
   "acme/infra#13": { state: "OPEN", ci: "SUCCESS", review: null, changesBy: ["dave"], reasons: ["changes_requested", "ready_auto_merge_off"] },
-  // Approved and green, but GitHub won't merge it yet: not ready, so nothing to arm.
-  "acme/widgets#11": { state: "OPEN", ci: "SUCCESS", review: "APPROVED", mergeState: "BLOCKED", reasons: [] },
+  // Approved and green, but GitHub still blocks the merge (a required check never reported).
+  "acme/widgets#11": { state: "OPEN", ci: "SUCCESS", review: "APPROVED", mergeState: "BLOCKED", reasons: ["merge_blocked"] },
+  // The same just after a push: no checks yet, so not (yet) blocked by anything unseen.
+  "acme/widgets#14": { state: "OPEN", review: "APPROVED", mergeState: "BLOCKED", reasons: [] },
   // Drafts stay with their implementer.
   "acme/widgets#12": { state: "OPEN", isDraft: true, ci: "FAILURE", reasons: ["check_failed"] },
 };
@@ -245,7 +247,8 @@ describe("pr-ledger.sh list", () => {
 describe("pr-ledger.sh need= follows prwatch's reasons", () => {
   const edgeLines = [
     "acme/infra#13\tLLE-13\tagent-a\tstate=OPEN head=abc12345 ci=SUCCESS review=NONE changes-by=dave threads=0 mergeable=MERGEABLE auto=off need=changes-requested",
-    "acme/widgets#11\tLLE-11\tagent-a\tstate=OPEN head=abc12345 ci=SUCCESS review=APPROVED threads=0 mergeable=MERGEABLE auto=off need=none",
+    "acme/widgets#11\tLLE-11\tagent-a\tstate=OPEN head=abc12345 ci=SUCCESS review=APPROVED threads=0 mergeable=MERGEABLE auto=off need=merge-blocked",
+    "acme/widgets#14\tLLE-14\tagent-a\tstate=OPEN head=abc12345 ci=NONE review=APPROVED threads=0 mergeable=MERGEABLE auto=off need=none",
     "acme/widgets#12\tLLE-12\tagent-a\tstate=OPEN head=abc12345 ci=FAILURE review=NONE threads=0 mergeable=MERGEABLE auto=off draft need=none",
   ];
   function addEdges() {
@@ -272,7 +275,7 @@ describe("pr-ledger.sh need= follows prwatch's reasons", () => {
     writeFileSync(status, JSON.stringify(snapshots));
     expect(run(["add", "acme/widgets", "11", "LLE-11", "agent-a"]).status).toBe(0);
     const result = run(["list"], { prwatch: true });
-    expect(lines(result.stdout)).toEqual([edgeLines[1]!.replace("need=none", "need=merge-queue-failed")]);
+    expect(lines(result.stdout)).toEqual([edgeLines[1]!.replace("need=merge-blocked", "need=merge-queue-failed")]);
   });
 });
 

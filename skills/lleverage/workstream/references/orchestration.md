@@ -116,6 +116,7 @@ ledger always agree. Drafts show `need=none`. Act on each line:
 | `CHANGE … need=changes-requested / threads` | Route to the owner at once. If the owner is gone, spawn a babysitter with `babysit-pr`. |
 | `CHANGE … need=conflict` | Route to the owner, naming the PR that caused the conflict. |
 | `CHANGE … need=approved-not-armed` | Arm auto-merge per the merge policy, or add to the human queue for infra. |
+| `CHANGE … need=merge-blocked` | Approved and green, yet GitHub blocks the merge (auto-merge won't fire either). Usually a required check never reported: find it in the PR's merge box and re-run or trigger it, or route to the owner. For infra, tell Tom. |
 | `CHANGE … need=<anything else>` | A newer prwatch reason this table doesn't name yet. Read the PR (`prwatch status`) and act on it; it still counts as needing action. |
 | `ATTENTION …` | Something has been stuck for 20 minutes. Treat it as a defect in the orchestration: fix the ownership. |
 | `MERGED …` | Update the roster. Refresh sibling PRs touching the same files. Start deploy verification (verification.md). Wake dependants. |
@@ -148,7 +149,7 @@ change-only Monitor started after the approval landed.)
 
 ### Waiting on GitHub: prwatch
 
-Install: `npm i -g @tvdavies/prwatch@^0.1.5`; upgrade with
+Install: `npm i -g @tvdavies/prwatch@^0.1.6`; upgrade with
 `npm i -g @tvdavies/prwatch@latest && prwatch daemon restart`, which keeps the ledger watcher
 and every waiter running. With it on PATH, `pr-ledger.sh list` reads
 every ledger PR in one `prwatch status --json` call and `pr-ledger.sh watch` holds

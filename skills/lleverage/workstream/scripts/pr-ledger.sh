@@ -20,12 +20,12 @@ watch prints one line per change, so run it under the Monitor tool:
 
 A PR needs action when prwatch's snapshot says so (needsAction/reasons): CI failed,
 a review requested changes, a thread is unresolved, it conflicts with its base, or
-it is ready to merge but auto-merge is off. need= names the first reason:
-ci-failed, changes-requested, threads, conflict or approved-not-armed. Drafts never
-need action here.
+it is ready to merge but auto-merge is off, or it is approved and green but GitHub
+still blocks the merge. need= names the first reason: ci-failed, changes-requested,
+threads, conflict, approved-not-armed or merge-blocked. Drafts never need action here.
 Defaults: --interval 90, --stale-minutes 20.
 
-GitHub access: when prwatch is on PATH (npm i -g @tvdavies/prwatch@^0.1.5; upgrade with
+GitHub access: when prwatch is on PATH (npm i -g @tvdavies/prwatch@^0.1.6; upgrade with
 npm i -g @tvdavies/prwatch@latest && prwatch daemon restart), list reads every
 PR with one `prwatch status --json` call and watch keeps one `prwatch events` stream
 open across the ledger, waking on each change and re-reading status from prwatch's
@@ -63,7 +63,8 @@ FMT='def need:
   if .state != "OPEN" or .isDraft or (.reasons | length) == 0 then "none"
   else {required_check_failed: "ci-failed", check_failed: "ci-failed",
         changes_requested: "changes-requested", unresolved_threads: "threads",
-        conflict: "conflict", ready_auto_merge_off: "approved-not-armed"}[.reasons[0]]
+        conflict: "conflict", ready_auto_merge_off: "approved-not-armed",
+        merge_blocked: "merge-blocked"}[.reasons[0]]
        // (.reasons[0] | gsub("_"; "-")) end;
 def fmt:
   need as $need
@@ -93,7 +94,10 @@ GH_REASONS='def reasons:
       (if (.isDraft | not) and (.decision == null or .decision == "APPROVED")
           and (.ci == "SUCCESS" or .ci == "NONE") and .threads == 0 and .mergeable == "MERGEABLE"
           and ([.mergeState] | inside(["", "CLEAN", "HAS_HOOKS", "UNSTABLE"])) and (.auto | not)
-       then "ready_auto_merge_off" else empty end) ] end;'
+       then "ready_auto_merge_off" else empty end),
+      (if (.isDraft | not) and (.decision == null or .decision == "APPROVED") and .cr == ""
+          and .ci == "SUCCESS" and .threads == 0 and .mergeable == "MERGEABLE" and .mergeState == "BLOCKED"
+       then "merge_blocked" else empty end) ] end;'
 
 status() { # repo pr -> one-line status via gh, or ERROR text on stderr with non-zero exit
   local repo="$1" pr="$2" out
