@@ -43,8 +43,38 @@ curl -sS --fail-with-body -X PUT -T <local-path> \
   artifacts/reports works directly.
 - Append `?private=1` for files only the account owner should see.
 
+## Update a file in place
+
+To publish a new version of something already shared, PUT to its existing URL
+instead of uploading afresh. The URL stays the same, so every link already
+shared shows the new version:
+
+```sh
+curl -sS --fail-with-body -X PUT -T <local-path> \
+  -H "Authorization: Bearer $TOKEN" \
+  "https://files.myslop.app/<prefix>/<filename>"
+```
+
+- Returns `200` and the same URL. Owner only: an unknown URL or someone else's
+  file returns `404`, and nothing is created.
+- Privacy is kept unless you append `?private=1` or `?private=0`.
+- Public files are served `no-cache`, so readers get the new version on reload.
+  Files first served before 7 Oct 2026 were cached as immutable; anyone who had
+  one open needs a hard refresh.
+
+## Delete a file
+
+```sh
+curl -sS --fail-with-body -X DELETE \
+  -H "Authorization: Bearer $TOKEN" \
+  "https://files.myslop.app/<prefix>/<filename>"
+```
+
+Owner only. Returns `200`, or `404` for an unknown URL or someone else's file.
+Use it to clean up stray or superseded uploads.
+
 ## After uploading
 
 Return the URL to the user or embed it where they asked (PR body, Slack message,
-etc.). Files are managed — private, delete, list — at
+etc.). Files can also be managed — private, delete, list — at
 https://files.myslop.app/dashboard.

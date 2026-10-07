@@ -151,10 +151,15 @@ curl -sI "$CARD_URL" | head -1
   project names alone do not require private. When unsure, ask before uploading.
 - **Use the returned URL.** The response body is the permanent URL. Never construct it.
   Check it opens (`curl -sI <url>` returns `200`) before handing it over.
-- **Re-uploads get a new URL.** After fixes, repeat steps a–e and give the user the new
-  link, saying it replaces the earlier one. A new URL also gets a fresh Slack preview; Slack
-  caches previews per URL. Old links and cards are removed from
-  https://files.myslop.app/dashboard.
+- **Updates replace the report in place.** Once a report link has been shared, publish fixes
+  and revisions to the *same* URL so every existing link shows the latest version: rebuild
+  with the same `--card-image` (read it from the live page's `og:image` if needed), then
+  `put "$OUT"` against the full existing path instead of the bare filename:
+  `curl -sS --fail-with-body -X PUT -T "$OUT" -H "Authorization: Bearer $TOKEN" "<existing URL>"`.
+  It returns `200` and the same URL. Re-render and replace the card the same way if its
+  figures or title changed. Slack keeps its cached preview per URL, so an in-place update
+  does not refresh an unfurl that has already been posted. Delete stray or superseded uploads
+  with `curl -X DELETE` on their URL (see the `file-upload` skill).
 - **If the upload fails** (no token, `401`, network), give the user the local path and the
   error, and point them to the token setup in the `file-upload` skill. Do not report the
   report as published.
