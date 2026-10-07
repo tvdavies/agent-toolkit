@@ -312,6 +312,58 @@ fi
 rg -q 'conflicts with' "$stderr_file" || fail "missing conflicting-head diagnostic"
 [[ ! -e "$result" && ! -e "$call_log" ]] || fail "conflicting heads posted"
 
+# A steered review: prsmash started it on an older head (still in the env) and
+# moved the expected-head file onto the head the reviewer was steered to. The
+# file wins, so publishing against the steered head works (lleverage#7738 was
+# refused on exactly this env/flag mismatch).
+rm -f "$call_log" "$result" "$review_payload"
+printf '%s\n' "$reviewed_head" > "$TMP/expected-head"
+env PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" GH_CALL_LOG="$call_log" \
+    GH_REVIEW_PAYLOAD_CAPTURE="$review_payload" PRSMASH_REVIEW_RESULT_FILE="$result" \
+    PRSMASH_REVIEW_EXPECTED_HEAD=4fe402e15f8fe7403b4edd8d6975b807c369068e \
+    PRSMASH_REVIEW_EXPECTED_HEAD_FILE="$TMP/expected-head" \
+    "$SCRIPT" --body "$TMP/body.md" --verdict APPROVE --pr 5938 \
+    --expected-head "$reviewed_head" >"$stdout_file" 2>"$stderr_file" \
+  || fail "expected-head file did not take precedence over the stale env head"
+assert_approved
+jq -e --arg head "$reviewed_head" '.commit_id == $head' "$review_payload" >/dev/null \
+  || fail "steered review was not pinned to the steered head"
+
+jq -e --arg head "$reviewed_head" '.body | contains("<!-- pr-review reviewed-head=" + $head + " -->")' \
+    "$review_payload" >/dev/null || fail "posted body lacks the reviewed-head marker"
+
+# With a file, the reviewer must name its head: one still finishing the old
+# head cannot inherit the steered head through the file.
+rm -f "$call_log" "$result"
+if env -u PRSMASH_REVIEW_EXPECTED_HEAD PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" \
+    GH_CALL_LOG="$call_log" PRSMASH_REVIEW_RESULT_FILE="$result" \
+    PRSMASH_REVIEW_EXPECTED_HEAD_FILE="$TMP/expected-head" \
+    "$SCRIPT" --body "$TMP/body.md" --verdict APPROVE --pr 5938 >"$stdout_file" 2>"$stderr_file"; then
+  fail "expected-head file accepted without an explicit --expected-head"
+fi
+rg -q -- '--expected-head is required when PRSMASH_REVIEW_EXPECTED_HEAD_FILE' "$stderr_file" \
+  || fail "missing explicit-head diagnostic"
+[[ ! -e "$result" && ! -e "$call_log" ]] || fail "implicit file head posted"
+
+# The file still guards: a flag naming another head, or an unreadable file,
+# is refused before any GitHub call.
+rm -f "$call_log" "$result"
+if env PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" GH_CALL_LOG="$call_log" \
+    PRSMASH_REVIEW_RESULT_FILE="$result" PRSMASH_REVIEW_EXPECTED_HEAD_FILE="$TMP/expected-head" \
+    "$SCRIPT" --body "$TMP/body.md" --verdict APPROVE --pr 5938 \
+    --expected-head 4fe402e15f8fe7403b4edd8d6975b807c369068e >"$stdout_file" 2>"$stderr_file"; then
+  fail "flag conflicting with the expected-head file was accepted"
+fi
+rg -q 'conflicts with PRSMASH_REVIEW_EXPECTED_HEAD_FILE' "$stderr_file" || fail "missing file conflict diagnostic"
+[[ ! -e "$result" && ! -e "$call_log" ]] || fail "file conflict posted"
+if env PATH="$TMP/bin:$PATH" GH_PR_JSON="$(pr_json alice 11 6)" GH_CALL_LOG="$call_log" \
+    PRSMASH_REVIEW_EXPECTED_HEAD_FILE="$TMP/missing-expected-head" \
+    "$SCRIPT" --body "$TMP/body.md" --verdict APPROVE --pr 5938 \
+    --expected-head "$reviewed_head" >"$stdout_file" 2>"$stderr_file"; then
+  fail "unreadable expected-head file was accepted"
+fi
+[[ ! -e "$call_log" ]] || fail "unreadable expected-head file posted"
+
 # Missing reviewed head also blocks edit-last and dry-run, not just reviews.
 for mode in --edit-last --dry-run; do
   if env -u PRSMASH_REVIEW_EXPECTED_HEAD PATH="$TMP/bin:$PATH" \

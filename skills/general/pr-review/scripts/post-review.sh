@@ -46,6 +46,11 @@
 #   PRSMASH_REVIEW_EXPECTED_HEAD Legacy alternative to --expected-head for automated
 #                                callers. One must supply the commit actually reviewed;
 #                                never substitute the latest head after analysis.
+#   PRSMASH_REVIEW_EXPECTED_HEAD_FILE
+#                                File holding the caller's expected head. Takes
+#                                precedence over PRSMASH_REVIEW_EXPECTED_HEAD:
+#                                prsmash moves it forward when it steers a
+#                                review onto new commits.
 #
 # Dependencies: bash, gh, jq, python3
 
@@ -151,12 +156,30 @@ fi
 
 # Require an analysis-time head before any GitHub access. Keep the legacy env
 # input for staggered automated callers, but never silently override a conflict.
-if [[ -n "$EXPECTED_HEAD" && -n "${PRSMASH_REVIEW_EXPECTED_HEAD:-}" &&
-      "$EXPECTED_HEAD" != "$PRSMASH_REVIEW_EXPECTED_HEAD" ]]; then
-    echo "Error: --expected-head conflicts with PRSMASH_REVIEW_EXPECTED_HEAD; refusing to post." >&2
+# The caller's file wins over its environment value: a steered review starts on
+# one head and is moved onto another, and only the file follows it.
+CALLER_HEAD="${PRSMASH_REVIEW_EXPECTED_HEAD:-}"
+CALLER_HEAD_SOURCE=PRSMASH_REVIEW_EXPECTED_HEAD
+if [[ -n "${PRSMASH_REVIEW_EXPECTED_HEAD_FILE:-}" ]]; then
+    if [[ ! -r "$PRSMASH_REVIEW_EXPECTED_HEAD_FILE" ]]; then
+        echo "Error: PRSMASH_REVIEW_EXPECTED_HEAD_FILE is not readable; refusing to post." >&2
+        exit 1
+    fi
+    CALLER_HEAD=$(head -n1 "$PRSMASH_REVIEW_EXPECTED_HEAD_FILE" | tr -d '[:space:]')
+    CALLER_HEAD_SOURCE="PRSMASH_REVIEW_EXPECTED_HEAD_FILE (${CALLER_HEAD:-empty})"
+fi
+# A steered caller moves the file before the reviewer has seen the new head.
+# A reviewer still finishing the old head must not inherit the new one through
+# the file, so with a file the reviewer has to name the head it analysed.
+if [[ -n "${PRSMASH_REVIEW_EXPECTED_HEAD_FILE:-}" && -z "$EXPECTED_HEAD" ]]; then
+    echo "Error: --expected-head is required when PRSMASH_REVIEW_EXPECTED_HEAD_FILE is set: pass the head you actually reviewed." >&2
     exit 1
 fi
-EXPECTED_HEAD="${EXPECTED_HEAD:-${PRSMASH_REVIEW_EXPECTED_HEAD:-}}"
+if [[ -n "$EXPECTED_HEAD" && -n "$CALLER_HEAD" && "$EXPECTED_HEAD" != "$CALLER_HEAD" ]]; then
+    echo "Error: --expected-head ${EXPECTED_HEAD} conflicts with ${CALLER_HEAD_SOURCE}; refusing to post." >&2
+    exit 1
+fi
+EXPECTED_HEAD="${EXPECTED_HEAD:-$CALLER_HEAD}"
 if ! [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
     echo "Error: --expected-head requires the full 40-character lowercase reviewed commit SHA (or PRSMASH_REVIEW_EXPECTED_HEAD)." >&2
     exit 1
@@ -404,10 +427,15 @@ if [[ "$MANUAL_APPROVAL_REQUIRED" == true ]]; then
     BODY_CONTENT=$(printf '<!-- manual-approval-required source=automated-review %s -->\n\n> ⚠️ **Awaiting human approval:** this automated review found nothing merge-blocking. A human reviewer makes the final approval call.\n\n%s' \
         "$MANUAL_APPROVAL_BANNER_META" \
         "$BODY_CONTENT")
-    TEMP_BODY_FILE=$(mktemp)
-    printf '%s\n' "$BODY_CONTENT" > "$TEMP_BODY_FILE"
-    EFFECTIVE_BODY_FILE="$TEMP_BODY_FILE"
 fi
+
+# Mark every posting with the head it reviewed. Issue comments carry no commit,
+# so this marker is how automated callers tell a review comment for this head
+# from any other comment by the same account.
+BODY_CONTENT=$(printf '%s\n\n<!-- pr-review reviewed-head=%s -->' "$BODY_CONTENT" "$EXPECTED_HEAD")
+TEMP_BODY_FILE=$(mktemp)
+printf '%s\n' "$BODY_CONTENT" > "$TEMP_BODY_FILE"
+EFFECTIVE_BODY_FILE="$TEMP_BODY_FILE"
 
 # INCOMPLETE is submitted as a review (event COMMENT) rather than an issue
 # comment, so GitHub pins it to the reviewed commit and it never takes the
