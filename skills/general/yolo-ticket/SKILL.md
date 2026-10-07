@@ -16,6 +16,12 @@ GitHub auto-merge without routine supervision. Require exactly one identifier
 matching `^[A-Z][A-Z0-9]*-[0-9]+$`; normalise it to uppercase and reject flags,
 URLs, partial matches, or multiple tickets.
 
+An approved automation brief also counts as an explicit invocation: a scheduled
+or delegated run whose brief the user approved, that names `yolo-ticket`, and
+that names either the ticket or a rule for choosing tickets (for example, bugs
+`prepare-ticket` judged Ready). It applies to each chosen ticket separately, one
+at a time, and every rule below still applies.
+
 That explicit invocation grants exceptional authority for this ticket's one PR:
 implement it, babysit it to verified readiness, request normal GitHub auto-merge,
 and continue until GitHub reports the merge. It does not grant authority to
