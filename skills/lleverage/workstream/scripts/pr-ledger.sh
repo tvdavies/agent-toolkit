@@ -18,11 +18,14 @@ watch prints one line per change, so run it under the Monitor tool:
   CLOSED   repo#n ticket owner                   closed unmerged; dropped from the ledger
   ERROR    repo#n <message>                      could not read the PR (repeats are suppressed)
 
-A PR needs action when CI failed, a review requested changes, a thread is unresolved,
-it conflicts with its base, or it is approved and green but auto-merge is off.
+A PR needs action when prwatch's snapshot says so (needsAction/reasons): CI failed,
+a review requested changes, a thread is unresolved, it conflicts with its base, or
+it is ready to merge but auto-merge is off. need= names the first reason:
+ci-failed, changes-requested, threads, conflict or approved-not-armed. Drafts never
+need action here.
 Defaults: --interval 90, --stale-minutes 20.
 
-GitHub access: when prwatch is on PATH (npm i -g @tvdavies/prwatch@^0.1.3; upgrade with
+GitHub access: when prwatch is on PATH (npm i -g @tvdavies/prwatch@^0.1.5; upgrade with
 npm i -g @tvdavies/prwatch@latest && prwatch daemon restart), list reads every
 PR with one `prwatch status --json` call and watch keeps one `prwatch events` stream
 open across the ledger, waking on each change and re-reading status from prwatch's
@@ -51,16 +54,19 @@ valid_ref() { [[ "$1" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "$2" =~ ^[0-9]+$ ]
 MALFORMED="malformed ledger row; re-add it with: pr-ledger.sh add OWNER/REPO PR TICKET"
 
 # The status line, from a normalised object:
-# {state, isDraft, head, ci, review, cr, threads, mergeable, auto, merge}
-FMT='def fmt:
-  (if .state != "OPEN" then "none"
-   elif .isDraft then "none"
-   elif .ci == "FAILURE" or .ci == "ERROR" then "ci-failed"
-   elif .cr != "" then "changes-requested"
-   elif .threads > 0 then "threads"
-   elif .mergeable == "CONFLICTING" then "conflict"
-   elif .review == "APPROVED" and .ci == "SUCCESS" and (.auto | not) then "approved-not-armed"
-   else "none" end) as $need
+# {state, isDraft, head, ci, review, cr, threads, mergeable, auto, merge, reasons}
+# What needs action is prwatch's call: need= is its first reason, in prwatch's
+# order, under the names the orchestration docs act on. A reason this script
+# doesn't know yet is passed through, so it still counts as needing action.
+# Drafts are still with their implementer, so they never need the orchestrator.
+FMT='def need:
+  if .state != "OPEN" or .isDraft or (.reasons | length) == 0 then "none"
+  else {required_check_failed: "ci-failed", check_failed: "ci-failed",
+        changes_requested: "changes-requested", unresolved_threads: "threads",
+        conflict: "conflict", ready_auto_merge_off: "approved-not-armed"}[.reasons[0]]
+       // (.reasons[0] | gsub("_"; "-")) end;
+def fmt:
+  need as $need
   | "state=\(.state) head=\(.head[0:8]) ci=\(.ci) review=\(.review)"
     + (if .cr != "" then " changes-by=\(.cr)" else "" end)
     + " threads=\(.threads) mergeable=\(.mergeable) auto=\(if .auto then "on" else "off" end)"
@@ -72,26 +78,41 @@ FMT='def fmt:
 FROM_PRWATCH='def norm: {
   state, isDraft, head: .headRefOid, ci: .checks.state, review: (.reviewDecision // "NONE"),
   cr: ([.reviews[] | select(.state == "CHANGES_REQUESTED") | .author] | unique | join(",")),
-  threads: .threads.unresolved, mergeable, auto: .autoMerge.enabled, merge: .mergeCommit };'
+  threads: .threads.unresolved, mergeable, auto: .autoMerge.enabled, merge: .mergeCommit,
+  reasons };'
+
+# The gh fallback has no prwatch, so it works out prwatch's reasons itself: a copy
+# of computeReasons in prwatch's internal/snapshot/snapshot.go, from the check
+# rollup rather than each check. Keep the two in step; prwatch is the reference.
+GH_REASONS='def reasons:
+  if .state != "OPEN" then [] else
+    [ (if .ci == "FAILURE" or .ci == "ERROR" then "check_failed" else empty end),
+      (if .decision == "CHANGES_REQUESTED" or .cr != "" then "changes_requested" else empty end),
+      (if .threads > 0 then "unresolved_threads" else empty end),
+      (if .mergeable == "CONFLICTING" then "conflict" else empty end),
+      (if (.isDraft | not) and (.decision == null or .decision == "APPROVED")
+          and (.ci == "SUCCESS" or .ci == "NONE") and .threads == 0 and .mergeable == "MERGEABLE"
+          and ([.mergeState] | inside(["", "CLEAN", "HAS_HOOKS", "UNSTABLE"])) and (.auto | not)
+       then "ready_auto_merge_off" else empty end) ] end;'
 
 status() { # repo pr -> one-line status via gh, or ERROR text on stderr with non-zero exit
   local repo="$1" pr="$2" out
   out="$(gh api graphql -F owner="${repo%/*}" -F name="${repo#*/}" -F n="$pr" -f query='
     query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){
-      state isDraft headRefOid mergeable reviewDecision baseRefName
+      state isDraft headRefOid mergeable mergeStateStatus reviewDecision baseRefName
       mergeCommit{oid} autoMergeRequest{enabledAt}
       commits(last:1){nodes{commit{statusCheckRollup{state}}}}
       reviewThreads(first:100){nodes{isResolved}}
       latestReviews(first:20){nodes{state author{login}}}
     }}}' 2>&1)" || { echo "$out" | tail -1 | sed -E 's/.*"message":"([^"]*)".*/\1/' | cut -c1-200 >&2; return 1; }
-  echo "$out" | jq -r "$FMT"'.data.repository.pullRequest
+  echo "$out" | jq -r "$FMT $GH_REASONS"'.data.repository.pullRequest
     | {state, isDraft, head: .headRefOid,
        ci: (.commits.nodes[0].commit.statusCheckRollup.state // "NONE"),
-       review: (.reviewDecision // "NONE"),
+       decision: .reviewDecision, review: (.reviewDecision // "NONE"),
        cr: ([.latestReviews.nodes[] | select(.state == "CHANGES_REQUESTED") | .author.login] | unique | join(",")),
        threads: ([.reviewThreads.nodes[] | select(.isResolved | not)] | length),
-       mergeable, auto: (.autoMergeRequest != null), merge: .mergeCommit.oid}
-    | fmt'
+       mergeable, mergeState: (.mergeStateStatus // ""), auto: (.autoMergeRequest != null), merge: .mergeCommit.oid}
+    | .reasons = reasons | fmt'
 }
 
 # Adds each complete snapshot in a prwatch status array to the caller's `got` map.

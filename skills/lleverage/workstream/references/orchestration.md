@@ -106,7 +106,9 @@ in the foreground so this rarely happens.
 ## One watcher for all PRs
 
 Start one Monitor on `WS_DIR=... pr-ledger.sh watch` (timeout 30 minutes, re-armed
-on expiry) for every repo, infra included. Act on each line:
+on expiry) for every repo, infra included. Whether a PR needs action is prwatch's
+call: `need=` is the first of its snapshot `reasons`, so `prwatch status` and the
+ledger always agree. Drafts show `need=none`. Act on each line:
 
 | Event | Action |
 |---|---|
@@ -114,6 +116,7 @@ on expiry) for every repo, infra included. Act on each line:
 | `CHANGE … need=changes-requested / threads` | Route to the owner at once. If the owner is gone, spawn a babysitter with `babysit-pr`. |
 | `CHANGE … need=conflict` | Route to the owner, naming the PR that caused the conflict. |
 | `CHANGE … need=approved-not-armed` | Arm auto-merge per the merge policy, or add to the human queue for infra. |
+| `CHANGE … need=<anything else>` | A newer prwatch reason this table doesn't name yet. Read the PR (`prwatch status`) and act on it; it still counts as needing action. |
 | `ATTENTION …` | Something has been stuck for 20 minutes. Treat it as a defect in the orchestration: fix the ownership. |
 | `MERGED …` | Update the roster. Refresh sibling PRs touching the same files. Start deploy verification (verification.md). Wake dependants. |
 | `CLOSED …` | Confirm it was intended (superseded) and that nothing depends on it. |
@@ -145,7 +148,7 @@ change-only Monitor started after the approval landed.)
 
 ### Waiting on GitHub: prwatch
 
-Install: `npm i -g @tvdavies/prwatch@^0.1.3`; upgrade with
+Install: `npm i -g @tvdavies/prwatch@^0.1.5`; upgrade with
 `npm i -g @tvdavies/prwatch@latest && prwatch daemon restart`, which keeps the ledger watcher
 and every waiter running. With it on PATH, `pr-ledger.sh list` reads
 every ledger PR in one `prwatch status --json` call and `pr-ledger.sh watch` holds
