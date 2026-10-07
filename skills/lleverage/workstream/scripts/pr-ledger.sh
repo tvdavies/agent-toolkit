@@ -45,6 +45,11 @@ touch "$LEDGER"; mkdir -p "$CACHE"
 
 key() { echo "${1//\//_}_$2"; }
 
+# A row prwatch and gh can read: OWNER/REPO and a PR number. Anything else (a
+# hand-edited row, say) reports its own error instead of breaking the batch.
+valid_ref() { [[ "$1" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "$2" =~ ^[0-9]+$ ]]; }
+MALFORMED="malformed ledger row; re-add it with: pr-ledger.sh add OWNER/REPO PR TICKET"
+
 # The status line, from a normalised object:
 # {state, isDraft, head, ci, review, cr, threads, mergeable, auto, merge}
 FMT='def fmt:
@@ -89,6 +94,16 @@ status() { # repo pr -> one-line status via gh, or ERROR text on stderr with non
     | fmt'
 }
 
+# Adds each complete snapshot in a prwatch status array to the caller's `got` map.
+# Incomplete snapshots are partial data: leave them out so they report as errors.
+collect_prwatch() {
+  local ref line
+  while IFS=$'\t' read -r ref line; do
+    [ -n "$ref" ] && got["$ref"]="$line"
+  done < <(jq -r "$FMT $FROM_PRWATCH"'.[] | select(.incomplete | not)
+    | "\("\(.owner)/\(.repo)#\(.number)" | ascii_downcase)\t\(norm | fmt)"' <<<"$1")
+}
+
 # Every ledger row as "repo<TAB>pr<TAB>ticket<TAB>owner<TAB>status", where status is
 # a status line or "ERROR <message>". With prwatch this is one call for all PRs.
 status_all() {
@@ -96,7 +111,11 @@ status_all() {
   if ! use_prwatch; then
     while IFS=$'\t' read -r repo pr ticket owner _; do
       [ -n "$repo" ] || continue
-      s="$(status "$repo" "$pr" 2>&1)" || s="ERROR $s"
+      if valid_ref "$repo" "$pr"; then
+        s="$(status "$repo" "$pr" 2>&1)" || s="ERROR $s"
+      else
+        s="ERROR $MALFORMED"
+      fi
       printf '%s\t%s\t%s\t%s\t%s\n' "$repo" "$pr" "$ticket" "$owner" "$s"
     done < "$LEDGER"
     return 0
@@ -104,21 +123,29 @@ status_all() {
   local refs=() out err line ref msg
   declare -A got=()
   while IFS=$'\t' read -r repo pr _; do
-    [ -n "$repo" ] && refs+=("$repo#$pr")
+    [ -n "$repo" ] && valid_ref "$repo" "$pr" && refs+=("$repo#$pr")
   done < "$LEDGER"
-  [ "${#refs[@]}" -gt 0 ] || return 0
   err="$(mktemp "${TMPDIR:-/tmp}/pr-ledger-err.XXXXXX")"
-  # Exits non-zero when any PR failed; the others are still printed.
-  out="$(prwatch status --json "${refs[@]}" 2>"$err")" || true
-  if jq -e 'type == "array"' <<<"$out" >/dev/null 2>&1; then
-    # Incomplete snapshots are partial data: leave them out so they report as errors.
-    while IFS=$'\t' read -r ref line; do
-      [ -n "$ref" ] && got["$ref"]="$line"
-    done < <(jq -r "$FMT $FROM_PRWATCH"'.[] | select(.incomplete | not)
-      | "\("\(.owner)/\(.repo)#\(.number)" | ascii_downcase)\t\(norm | fmt)"' <<<"$out")
+  # Exits non-zero when any PR failed; the others are still printed. A failure of
+  # the whole call (no array back) would hide every PR, so then read them one by one.
+  if [ "${#refs[@]}" -gt 0 ]; then
+    out="$(prwatch status --json "${refs[@]}" 2>"$err")" || true
+    if jq -e 'type == "array"' <<<"$out" >/dev/null 2>&1; then
+      collect_prwatch "$out"
+    elif [ "${#refs[@]}" -gt 1 ]; then
+      : > "$err"
+      for ref in "${refs[@]}"; do
+        out="$(prwatch status --json "$ref" 2>>"$err")" || true
+        jq -e 'type == "array"' <<<"$out" >/dev/null 2>&1 && collect_prwatch "$out"
+      done
+    fi
   fi
   while IFS=$'\t' read -r repo pr ticket owner _; do
     [ -n "$repo" ] || continue
+    if ! valid_ref "$repo" "$pr"; then
+      printf '%s\t%s\t%s\t%s\t%s\n' "$repo" "$pr" "$ticket" "$owner" "ERROR $MALFORMED"
+      continue
+    fi
     ref="$repo#$pr"
     s="${got[${ref,,}]:-}"
     if [ -z "$s" ]; then
@@ -210,6 +237,7 @@ case "$cmd" in
   add)
     [ "$#" -ge 3 ] || die "add OWNER/REPO PR TICKET [OWNER-AGENT]"
     repo="$1"; pr="${2#\#}"; ticket="$3"; owner="${4:--}"
+    valid_ref "$repo" "$pr" || die "add OWNER/REPO PR TICKET [OWNER-AGENT]: '$repo' '$pr' is not OWNER/REPO and a PR number"
     awk -F'\t' -v r="$repo" -v p="$pr" '!($1 == r && $2 == p)' "$LEDGER" > "$LEDGER.tmp"
     printf '%s\t%s\t%s\t%s\t%s\n' "$repo" "$pr" "$ticket" "$owner" "$(date -u +%FT%TZ)" >> "$LEDGER.tmp"
     mv "$LEDGER.tmp" "$LEDGER"

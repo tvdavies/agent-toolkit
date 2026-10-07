@@ -121,6 +121,28 @@ on expiry) for every repo, infra included. Act on each line:
 A watcher that only tracks the merge is not babysitting: a change request blocks
 auto-merge silently. Every open PR has exactly one owner, and the ledger records it.
 
+Keeping the watcher honest:
+
+- **Only `pr-ledger.sh add` writes `prs.tsv`.** Never append rows by hand. `add`
+  rejects anything that isn't `OWNER/REPO` and a PR number. If a malformed row
+  does get in, `list` and `watch` report it as an `ERROR … malformed ledger row`
+  line. Fix it straight away by removing it and re-adding through `add`.
+- **The watcher is the only thing you watch PRs with.** Don't replace it with a
+  hand-written Monitor that prints only changes: a review that lands before such
+  a loop's first poll becomes its baseline and is never reported. `pr-ledger.sh
+  watch` reports every PR on its first pass, then flags approved-and-green PRs
+  with `ATTENTION` once they've been idle for a while.
+- **Re-arm on expiry, and check on re-arm.** When the watcher's Monitor expires,
+  run `pr-ledger.sh list` and act on any `need=` that isn't `none` before you
+  re-arm it.
+- **Read before you report.** Before telling Tom a PR is waiting on someone, run
+  `pr-ledger.sh list` (or `prwatch status`) and quote what it says now, not what
+  you last remember.
+
+(LLE-14029, 7 October: an infra approval sat for 50 minutes. Hand-appended
+ledger rows had turned every ledger read into an error, and an ad hoc
+change-only Monitor started after the approval landed.)
+
 ### Waiting on GitHub: prwatch
 
 Install: `npm i -g @tvdavies/prwatch@^0.1.3`; upgrade with

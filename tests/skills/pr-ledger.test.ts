@@ -134,6 +134,12 @@ printf 'prwatch %s\\n' "$*" >> "$FAKE_LOG"
 case "\${1:-}" in
   status)
     shift; shift
+    # Like prwatch, one unparseable reference is a usage error for the whole call.
+    for ref in "$@"; do
+      [[ "$ref" =~ ^[^/#]+/[^/#]+#[0-9]+$ ]] || { echo "prwatch: unrecognised PR reference \"$ref\"" >&2; exit 2; }
+    done
+    # Simulates a batch-level failure (rate limit, daemon restart) for multi-PR calls.
+    if [ -n "\${FAKE_BATCH_FAIL:-}" ] && [ "$#" -gt 1 ]; then echo "prwatch: temporary error" >&2; exit 1; fi
     # Print only the snapshots asked for; report unknown PRs like prwatch does.
     rc=0
     jq --args '[.[] | select(.pr as $p | $ARGS.positional | index($p))]' "$@" < "$FAKE_DIR/status.json"
@@ -212,6 +218,53 @@ describe("pr-ledger.sh list", () => {
       `acme/widgets#9\tLLE-9\tagent-a\t${expected["acme/widgets#9"]}`,
       "acme/widgets#404\tLLE-404\tagent-a\tERROR Could not resolve to a PullRequest",
     ]);
+  });
+});
+
+describe("pr-ledger.sh ledger rows", () => {
+  it("refuses to add a malformed repository or PR number", () => {
+    for (const args of [["440", "infrastructure", "LLE-1"], ["acme/widgets", "x7", "LLE-1"], ["acme", "7", "LLE-1"]]) {
+      const result = run(["add", ...args]);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("OWNER/REPO");
+    }
+    expect(readFileSync(join(wsDir, "prs.tsv"), "utf8")).toBe("");
+  });
+
+  it("reports a hand-edited malformed row on its own and still reads the others", () => {
+    addAll();
+    writeFileSync(join(wsDir, "prs.tsv"), readFileSync(join(wsDir, "prs.tsv"), "utf8") + "440\tinfrastructure\tLLE-1\tnote\n");
+    const result = run(["list"], { prwatch: true });
+    expect(result.status, result.stderr).toBe(0);
+    expect(calls()).toEqual(["prwatch status --json acme/widgets#7 acme/infra#12 acme/widgets#9"]);
+    expect(lines(result.stdout)).toEqual([
+      `acme/widgets#7\tLLE-7\tagent-a\t${expected["acme/widgets#7"]}`,
+      `acme/infra#12\tLLE-12\tagent-a\t${expected["acme/infra#12"]}`,
+      `acme/widgets#9\tLLE-9\tagent-a\t${expected["acme/widgets#9"]}`,
+      "440#infrastructure\tLLE-1\tnote\tERROR malformed ledger row; re-add it with: pr-ledger.sh add OWNER/REPO PR TICKET",
+    ]);
+  });
+
+  it("reads PRs one at a time when the batched prwatch call fails", () => {
+    addAll();
+    const result = run(["list"], { prwatch: true, env: { FAKE_BATCH_FAIL: "1" } });
+    expect(result.status, result.stderr).toBe(0);
+    expect(lines(result.stdout)).toEqual([
+      `acme/widgets#7\tLLE-7\tagent-a\t${expected["acme/widgets#7"]}`,
+      `acme/infra#12\tLLE-12\tagent-a\t${expected["acme/infra#12"]}`,
+      `acme/widgets#9\tLLE-9\tagent-a\t${expected["acme/widgets#9"]}`,
+    ]);
+  });
+
+  it("watch reports a malformed row once and keeps watching the valid PRs", () => {
+    addAll();
+    writeFileSync(join(wsDir, "prs.tsv"), readFileSync(join(wsDir, "prs.tsv"), "utf8") + "440\tinfrastructure\tLLE-1\tnote\n");
+    const result = run(["watch", "--interval", "1"], { prwatch: true, timeout: 4_000 });
+    const out = lines(result.stdout);
+    expect(out).toContain(`CHANGE acme/infra#12 LLE-12 agent-a ${expected["acme/infra#12"]}`);
+    expect(out.filter((l) => l.startsWith("ERROR 440#infrastructure")).length).toBe(1);
+    const events = calls().filter((call) => call.startsWith("prwatch events"));
+    expect(events[0]).toBe("prwatch events --json --pr acme/infra#12 --pr acme/widgets#7");
   });
 });
 

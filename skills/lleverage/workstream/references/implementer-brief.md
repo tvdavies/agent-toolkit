@@ -22,6 +22,10 @@ Follow ~/.claude/skills/yolo-ticket/SKILL.md for the flow, with these rules on t
 ## Linear
 - Set the ticket In Progress when you start (exact state name), and comment the PR link.
   PR titles start with the ticket id.
+- Branch names and PR titles carry only your own (leaf) ticket id, never ROOT
+  (<ROOT>) or any parent. Linear links an issue whose id is in the branch name or
+  title and marks it Done when the PR merges, which drops the workstream's claim.
+  Mention parents only as "Refs"/"Part of" in the PR body.
 - Need a follow-up? Use ~/.claude/skills/workstream/scripts/followup.sh with
   WS_DIR=<WS_DIR> and --parent <your ticket>. Fold in or reply first; most findings
   don't need a ticket. Never create tickets any other way.
