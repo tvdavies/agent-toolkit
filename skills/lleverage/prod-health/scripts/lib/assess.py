@@ -6,11 +6,17 @@ stdin or from files. Output: a compact text report, or JSON with --json.
 
   assess.py [--env E] [--json] [--baseline PATH | --no-baseline] [--save-last] FILE|- ...
   assess.py --capture [--merge] [--env E] FILE|- ...     # write baseline rates
+  assess.py --watch [--state PATH] FILE|- ...            # compact items for unattended watchers
+
+--state PATH marks each finding new, escalated, reraise or unchanged against the
+previous runs (see references/watching.md) and keeps a source that has been
+unavailable for --unavailable-minutes as an item of its own.
 
 Baseline file: $PH_STATE_ROOT/<env>/baseline.json (see references/baselines.md).
 """
 import argparse
 import datetime as dt
+import fcntl
 import fnmatch
 import json
 import os
@@ -224,6 +230,83 @@ def overall(findings, results=()):
     return min((f.get("hint", "sev3") for f in findings), key=lambda h: SEV_ORDER.get(h, 9))
 
 
+def parse_iso(text):
+    try:
+        return dt.datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def sev_rank(sev):
+    return SEV_ORDER.get(sev, 9)
+
+
+def track(findings, results, path, now, reraise_h, unavailable_min, orgs):
+    """Mark findings against the watch state and return the watch items.
+
+    A key is new when the state has not seen it within the last reraise_h hours,
+    escalated when its severity is worse than the one last announced, reraise when
+    it is still present reraise_h hours after it was last announced, and otherwise
+    unchanged. A source unavailable for unavailable_min minutes becomes an item
+    (key source-unavailable:<check>) tracked the same way. The state file is locked
+    so overlapping runs (a 15m and a 2h watcher) share it safely."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path + ".lock", "w", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        state = load_json(path, {}) or {}
+        keys = state.get("keys", {})
+        sources = state.get("sources", {})
+        forget = dt.timedelta(hours=reraise_h)
+        stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        items = []
+
+        def mark(key, severity, summary, extra):
+            entry = keys.get(key)
+            seen = parse_iso((entry or {}).get("last_seen"))
+            if entry is None or seen is None or now - seen > forget:
+                entry = {"first_seen": stamp}
+                change = "new"
+            elif sev_rank(severity) < sev_rank(entry.get("announced_severity")):
+                change = "escalated"
+            elif now - (parse_iso(entry.get("announced_at")) or now) >= forget:
+                change = "reraise"
+            else:
+                change = "unchanged"
+            if change != "unchanged":
+                entry.update(announced_at=stamp, announced_severity=severity)
+            entry.update(last_seen=stamp, severity=severity, summary=summary[:300])
+            keys[key] = entry
+            item = {"key": key, "severity": severity, "summary": summary, "change": change, "first_seen": entry["first_seen"], **extra}
+            items.append(item)
+            return item
+
+        for f in findings:
+            item = mark(f["key"], f.get("hint", "sev3"), f"{f['check']}: {orgs.label(f['title'])}",
+                        {"check": f["check"], "kind": f.get("kind")})
+            f["change"], f["first_seen"] = item["change"], item["first_seen"]
+            ev = f.get("evidence") or {}
+            item["evidence"] = {k: (str(v)[:300] if k in ("sample", "query") else v) for k, v in ev.items()
+                                if not isinstance(v, (dict, list)) or len(json.dumps(v)) <= 400}
+            if f.get("candidates"):
+                item["candidates"] = f["candidates"]
+        for r in results:
+            check = r["check"]
+            if r.get("status") != "unavailable":
+                sources.pop(check, None)
+                continue
+            since = sources.setdefault(check, stamp)
+            started = parse_iso(since) or now
+            if now - started >= dt.timedelta(minutes=unavailable_min):
+                notes = "; ".join(n for n in r.get("notes", []) if n)[:300]
+                mark(f"source-unavailable:{check}", "sev3", f"{check} has been unavailable since {since}: {notes or 'no detail'}",
+                     {"check": check, "kind": "unavailable"})
+        # Forget what has not been seen for longer than the re-raise period.
+        for key in [k for k, e in keys.items() if now - (parse_iso(e.get("last_seen")) or now) > forget]:
+            del keys[key]
+        write_atomic(path, {"version": 1, "updated_at": stamp, "keys": keys, "sources": sources}, indent=1)
+    return items
+
+
 def render_text(results, findings, suppressed, info, deploys, have_baseline, baseline, orgs, env):
     first = results[0] if results else {}
     lines = []
@@ -239,7 +322,8 @@ def render_text(results, findings, suppressed, info, deploys, have_baseline, bas
         lines.append("")
         lines.append("FINDINGS (hint = suggested severity; you decide)")
         for f in findings:
-            lines.append(f"  [{f.get('hint', '?')}] {f['check']}: {orgs.label(f['title'])}")
+            tag = f" ({f['change']} since {f['first_seen']})" if f.get("change") else ""
+            lines.append(f"  [{f.get('hint', '?')}] {f['check']}: {orgs.label(f['title'])}{tag}")
             ev = f.get("evidence") or {}
             extra = {k: v for k, v in ev.items() if k not in ("count", "baseline_per_h", "now_per_h", "query", "sample")}
             if extra:
@@ -344,6 +428,11 @@ def main():
     ap.add_argument("--capture", action="store_true")
     ap.add_argument("--merge", action="store_true")
     ap.add_argument("--exit-code", action="store_true", help="exit 0 healthy, 3 findings, 4 incomplete")
+    ap.add_argument("--state", help="watch state file: mark findings new, escalated, reraise or unchanged")
+    ap.add_argument("--watch", action="store_true", help="print compact watch items; exit 0 with none, 3 with some")
+    ap.add_argument("--reraise-hours", type=float, default=6.0)
+    ap.add_argument("--unavailable-minutes", type=float, default=60.0)
+    ap.add_argument("--now", help=argparse.SUPPRESS)  # tests: the watch state's clock
     args = ap.parse_args()
     results = load_results(args.files or ["-"])
     if args.capture:
@@ -357,6 +446,13 @@ def main():
         names = sorted({n for n in (orgs.name(t) for t in re.findall(r"org-[0-9a-z-]{5,40}", f["key"] + " " + f["title"])) if n})
         if names:
             f["org_names"] = names
+    items = None
+    if args.watch and not args.state:
+        args.state = os.path.join(STATE_ROOT, args.env, "watch-state.json")
+    if args.state:
+        now = parse_iso(args.now) if args.now else dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        items = track(findings, results, args.state, now,
+                      args.reraise_hours, args.unavailable_minutes, orgs)
     report = {
         "env": args.env,
         "generated_at": now_iso(),
@@ -375,6 +471,16 @@ def main():
     }
     if args.save_last:
         write_atomic(os.path.join(STATE_ROOT, args.env, "last.json"), report)
+    if args.watch:
+        watch = {k: report[k] for k in ("env", "generated_at", "window", "start", "end", "verdict")}
+        watch.update(baseline_captured_at=(report["baseline"] or {}).get("captured_at"),
+                     items=items, raise_count=sum(1 for i in items if i["change"] != "unchanged"),
+                     sources={c: s["status"] for c, s in report["sources"].items()},
+                     state=args.state,
+                     report=os.path.join(STATE_ROOT, args.env, "last.json") if args.save_last else None)
+        print(json.dumps(watch, ensure_ascii=False))
+        # Watch contract: 0 nothing to report, 3 items present; anything else is a failure.
+        return 3 if items else 0
     if args.json:
         print(json.dumps(report, ensure_ascii=False))
     else:

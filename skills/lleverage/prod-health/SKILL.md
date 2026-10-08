@@ -20,6 +20,9 @@ Scripts live in `scripts/` (run any with `--help`):
   It takes `--env production|staging` (default production), `--window 30m`,
   `--end <ISO time>` for a past window, `--only`/`--skip`, and `--json` for
   other skills. Exit status 0 means healthy and 3 means there are findings.
+  `--watch` prints compact items for unattended watchers, each marked `new`,
+  `escalated`, `reraise` or `unchanged` against a state file
+  (`references/watching.md`).
 - `checks/<name>.sh` runs one check on its own, with the same flags. The checks are
   `k8s`, `alerts`, `loki-errors`, `http`, `workflows`, `sentry`, `posthog`,
   `deploys` and `dispatch`.
@@ -57,7 +60,9 @@ Scripts live in `scripts/` (run any with `--help`):
      crashlooping core service, or a failing deploy pipeline that blocks fixes.
    - **SEV2**: a real regression that affects some customers, or a degraded feature.
    - **SEV3**: a low-impact error or noise.
-5. **Respond.**
+5. **Respond.** If you can't message Tom yourself (you are a worker, or a
+   scheduled or unattended run), follow **Unattended runs** below instead of this
+   step's messaging.
    - **SEV1**: stop merging, and pause auto-merge on your open PRs. Tell Tom
      immediately with the PushNotification tool, or Slack if that isn't
      available. Give the symptom, the impact, the suspected deploy and PR, and a
@@ -91,6 +96,33 @@ Scripts live in `scripts/` (run any with `--help`):
 8. **Report** in one short message: the verdict, each confirmed finding with its
    severity and the ticket or action taken, sources that were unavailable, and
    anything waiting on Tom.
+
+## Unattended runs
+
+A worker or scheduled run has no PushNotification or Slack, and must not use
+either. Its caller (Sal) tells Tom. A message to Tom is a notification, not the
+response, so the work doesn't stop there: return the finding with a fix-forward
+plan, and the caller starts the fix without waiting for Tom.
+
+- **SEV1.** Stop merging and pause auto-merge on your own open PRs. File the
+  Linear bug at priority 1 through `followup.sh` (it dedupes). Then end your run
+  at once and return to the caller, at the top of your result:
+  `SEV1: <symptom>`, the impact (orgs by name, users, counts), when it started,
+  the evidence and queries, the suspected deploy and PR, a **rollback
+  recommendation** Tom can approve (the previous image tag from the `deploys`
+  line, or the PR to revert), a **fix-forward plan** (the ticket, the cause as far
+  as known, the scoped fix, and that `prepare-ticket` then `yolo-ticket` should run
+  on it at top priority), and the instruction **"stop other automated merges
+  until this is fixed; the SEV1 fix PR is exempt"**. Don't start the fix in the
+  same run, and never roll back, revert or change config.
+- **SEV2.** File the bug at priority 2 through `followup.sh` and return the same
+  shape without the alarm: the ticket, the evidence, who is affected and the
+  fix-forward plan (`prepare-ticket`, then `yolo-ticket` if Ready). No pause on
+  other merges.
+- **SEV3.** As in step 5.
+
+If `prepare-ticket` later says Needs decision or Blocked, park the ticket with a
+comment saying what is needed and return the decision to the caller.
 
 ## Investigating a finding
 

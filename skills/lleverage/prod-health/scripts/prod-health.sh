@@ -10,8 +10,16 @@
 #   --results     print the raw check results (JSONL) instead of a report
 #   --extra FILE  bash snippet sourced after the report; it can use $LOKI (logcli
 #                 base command with --since), $KUBECONFIG and $WIN (text mode only)
+#   --state FILE  mark each finding new, escalated, reraise or unchanged against
+#                 earlier runs that used the same file (shared by every cadence)
+#   --watch       for unattended watchers: compact JSON items {key, severity,
+#                 summary, change, first_seen, ...}; implies --state
+#                 (default <state>/<env>/watch-state.json). See references/watching.md
+#   --reraise-hours N        re-raise a finding still present after N hours (6)
+#   --unavailable-minutes N  report a source unavailable this long as an item (60)
 # Exit: 0 healthy, 3 findings present, 4 nothing found but some sources were not
-# checked (verdict "incomplete"), 2 usage error.
+# checked (verdict "incomplete"), 2 usage error. With --watch: 0 no items, 3 items,
+# anything else means the run failed.
 # Baselines: scripts/baseline.sh. Procedure: SKILL.md.
 set -uo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -20,7 +28,7 @@ HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 [[ " $* " == *" -h "* || " $* " == *" --help "* ]] && { ph_usage "$0"; exit 0; }
 ph_parse_common "$@"
 ALL="k8s alerts loki-errors http workflows sentry posthog deploys dispatch"
-ONLY=""; SKIP=""; NOBASE=0; RESULTS=0; TMO=180; EXTRA=""
+ONLY=""; SKIP=""; NOBASE=0; RESULTS=0; TMO=180; EXTRA=""; WATCH=(); STATE=""
 set -- "${PH_ARGS[@]+"${PH_ARGS[@]}"}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -30,6 +38,9 @@ while [ "$#" -gt 0 ]; do
     --results) RESULTS=1; shift ;;
     --timeout) TMO="$2"; shift 2 ;;
     --extra) EXTRA="$2"; shift 2 ;;
+    --state) [ -n "${2:-}" ] || ph_die "--state needs a file"; STATE="$2"; shift 2 ;;
+    --watch) WATCH+=(--watch); PH_JSON=1; shift ;;
+    --reraise-hours|--unavailable-minutes) [ -n "${2:-}" ] || ph_die "$1 needs a number"; WATCH+=("$1" "$2"); shift 2 ;;
     *) ph_die "unknown argument $1 (see --help)" ;;
   esac
 done
@@ -77,6 +88,7 @@ done
 
 if [ "$RESULTS" = 1 ]; then cat "$results"; exit 0; fi
 args=(--env "$PH_ENV" --save-last --exit-code); [ "$PH_JSON" = 1 ] && args+=(--json); [ "$NOBASE" = 1 ] && args+=(--no-baseline)
+[ -n "$STATE" ] && args+=(--state "$STATE"); args+=("${WATCH[@]+"${WATCH[@]}"}")
 report="$(python3 "$PH_LIB_DIR/assess.py" "${args[@]}" "$results")"; rc=$?
 case "$rc" in 0|3|4) ;; *) ph_die "assessment failed (exit $rc)" ;; esac
 echo "$report"

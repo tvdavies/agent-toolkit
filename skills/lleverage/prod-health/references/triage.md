@@ -22,6 +22,11 @@ the ticket that caused it (`--parent`).
 
 ## Response
 
+In an unattended run (a worker or scheduled run that can't message Tom), don't
+use PushNotification or Slack: follow **Unattended runs** in `SKILL.md`, which
+returns the SEV1 or SEV2 to the caller with a rollback recommendation and a
+fix-forward plan. The steps below are for an attended session.
+
 **SEV1**
 
 1. Stop merging. Pause auto-merge on your open PRs (`gh pr merge --disable-auto`) and
