@@ -12,23 +12,41 @@ Output is one JSON object:
 
 ```json
 {"env": "production", "window": "15m", "start": "…", "end": "…", "verdict": "sev3",
- "items": [{"key": "loki.warn:session-service", "severity": "sev3",
-            "summary": "loki-errors: warn lines in session-service x217306 (12720.4x baseline 17.1)",
-            "change": "new", "first_seen": "2026-10-07T23:47:32Z", "check": "loki-errors",
-            "kind": "spike", "evidence": {"count": 217306, "...": "..."}, "candidates": ["…"]}],
- "raise_count": 1, "sources": {"k8s": "ok", "...": "..."}, "state": "…", "report": "…/last.json"}
+ "findings": [{"key": "loki.warn:session-service", "severity": "sev3",
+               "summary": "loki-errors: warn lines in session-service x217306 (12720.4x baseline 17.1)",
+               "status": "new", "change": "new",
+               "first_seen": "2026-10-07T23:47:32Z", "last_raised": "2026-10-07T23:47:32Z",
+               "check": "loki-errors", "kind": "spike",
+               "evidence": {"count": 217306, "...": "..."}, "candidates": ["…"]}],
+ "items": ["the same list as findings"],
+ "raise_count": 1,
+ "sources": {"k8s": "ok", "posthog": "partial", "sentry": "unavailable", "...": "..."},
+ "source_notes": {"posthog": ["unavailable: no pageviews in the window, …"], "sentry": ["…"]},
+ "state": "…", "report": "…/last.json"}
 ```
 
-Exit status: 0 with no items, 3 with items, anything else means the run failed.
+Exit status: 0 with no findings, 3 with findings (whatever their `status`), anything
+else means the run failed. Wake someone only for findings whose `status` isn't
+`unchanged`; `raise_count` counts them. `items` is the older name for `findings`
+and `change` the older name for `status`; both stay for compatibility.
+
+`sources` gives every check's status: `ok`, `partial` (some of it couldn't be
+checked) or `unavailable`. Only `ok` means the source was fully checked; a PostHog
+window with no pageviews, for instance, is `partial`, never `ok`.
+
+Use `--watch`, not plain `--json`, for an unattended caller: `--json` also exits 4
+("incomplete") when nothing was found but a source wasn't fully checked.
 
 ## Keys and changes
 
 Finding keys are stable: they name the signal, not the count (`loki.warn:<ns>`,
 `http.svc:<ns>|404`, `alert:<name>|<ns>`, `k8s.waiting:<ns>/<workload>:<reason>`,
 `deploy.build:<service>`, `posthog.silent`). Severity is the script's hint
-(`sev1`, `sev2`, `sev3`).
+(`sev1`, `sev2`, `sev3`). `first_seen` is when the state first saw the key and
+`last_raised` when it was last announced (`new`, `escalated` or `reraise`).
+The state file is written atomically (a temporary file, then a rename).
 
-| `change` | When |
+| `status` | When |
 |---|---|
 | `new` | The state hasn't seen the key in the last `--reraise-hours` (6) hours |
 | `escalated` | Its severity is worse than the one last announced |

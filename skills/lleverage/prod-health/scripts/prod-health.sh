@@ -12,8 +12,9 @@
 #                 base command with --since), $KUBECONFIG and $WIN (text mode only)
 #   --state FILE  mark each finding new, escalated, reraise or unchanged against
 #                 earlier runs that used the same file (shared by every cadence)
-#   --watch       for unattended watchers: compact JSON items {key, severity,
-#                 summary, change, first_seen, ...}; implies --state
+#   --watch       for unattended watchers: compact JSON findings {key, severity,
+#                 summary, status, first_seen, last_raised, ...} and per-source
+#                 status; implies --state
 #                 (default <state>/<env>/watch-state.json). See references/watching.md
 #   --reraise-hours N        re-raise a finding still present after N hours (6)
 #   --unavailable-minutes N  report a source unavailable this long as an item (60)
