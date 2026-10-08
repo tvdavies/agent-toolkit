@@ -25,7 +25,8 @@ the ticket that caused it (`--parent`).
 In an unattended run (a worker or scheduled run that can't message Tom), don't
 use PushNotification or Slack: follow **Unattended runs** in `SKILL.md`, which
 returns the SEV1 or SEV2 to the caller with a rollback recommendation and a
-fix-forward plan. The steps below are for an attended session.
+fix-forward plan, and add `-l Sal` to every `followup.sh` call that creates a
+ticket. The steps below are for an attended session.
 
 **SEV1**
 
