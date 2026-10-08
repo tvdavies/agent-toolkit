@@ -90,6 +90,13 @@ r="$(watch 2026-10-08T01:10:00Z "$w2")"; [ "$r" = "k.one=unchanged source-unavai
 r="$(watch 2026-10-08T01:20:00Z "$w2")"; [ "$r" = "k.one=unchanged source-unavailable:sentry=unchanged rc=3" ] || fail "no second raise: $r"
 r="$(watch 2026-10-08T06:30:00Z "$w2")"; [ "$r" = "k.one=reraise source-unavailable:sentry=unchanged rc=3" ] || fail "re-raise after 6h: $r"
 jq -e '.keys["k.one"].first_seen == "2026-10-08T00:05:00Z"' "$ws" >/dev/null || fail "first_seen must survive escalation and re-raise"
+# Watcher contract: findings == items, each with status (== change), first_seen and
+# last_raised; per-source status with notes for the sources that weren't ok.
+set +e; out="$(PH_STATE_ROOT="$state" python3 "$lib/assess.py" --env production --watch --state "$ws" --now 2026-10-08T06:35:00Z - <<<"$w2")"; set -e
+jq -e '.findings == .items and (.findings[] | select(.key == "k.one") | .status == "unchanged" and .first_seen == "2026-10-08T00:05:00Z"
+       and .last_raised == "2026-10-08T06:30:00Z" and .severity == "sev2" and (.summary | test("one")))
+       and .sources.sentry == "unavailable" and (.source_notes.sentry[0] | test("token")) and (.source_notes | has("loki-errors") | not)' <<<"$out" >/dev/null \
+  || fail "watch contract fields: $(jq -c '{findings, sources, source_notes}' <<<"$out")"
 healthy='{"check":"k8s","window":"15m","start":"a","end":"b","window_s":900,"status":"ok","series":[],"notes":[],"data":{},"findings":[]}'
 r="$(watch 2026-10-08T06:40:00Z "$healthy")"; [ "$r" = " rc=0" ] || fail "healthy watch run should print no items and exit 0: $r"
 r="$(watch 2026-10-08T13:00:00Z "$w1")"; [ "$r" = "k.one=new source-unavailable:sentry=new rc=3" ] || fail "keys unseen for 6h are new again: $r"
@@ -97,25 +104,41 @@ r="$(watch 2026-10-08T13:00:00Z "$w1")"; [ "$r" = "k.one=new source-unavailable:
 PH_STATE_ROOT="$state" python3 "$lib/assess.py" --env production --state "$state/other.json" --now 2026-10-08T00:00:00Z - <<<"$w1" | grep -q 'one (new since 2026-10-08T00:00:00Z)' \
   || fail "text report should mark new findings"
 
-# PostHog: an empty window with pageviews earlier in the day is quiet, not broken;
-# no pageviews in 24h is a finding and the source is not checked.
+# PostHog: a zero is never "ok". An empty window with pageviews earlier in the day
+# is quiet but unconfirmed (partial); no pageviews for 2h of working hours is a
+# sev3 posthog.silent, and none in 24h a sev2 one (same key, so it escalates).
 bin="$state/bin"; mkdir -p "$bin"
 cat >"$bin/curl" <<'SH'
 #!/usr/bin/env bash
 cat >/dev/null
 while [ "$#" -gt 0 ]; do [ "$1" = --data-binary ] && body="$2"; shift; done
 case "$body" in
-  *"max(timestamp)"*) echo "{\"results\":[[${FAKE_PV24:-0}, \"2026-10-07T21:12:03.5Z\"]]}" ;;
+  *"max(timestamp)"*) echo "{\"results\":[[${FAKE_PV24:-0}, \"2026-10-07T21:12:03.5Z\", ${FAKE_PV2H:-0}]]}" ;;
   *countIf*) echo '{"results":[[0,0,0]]}' ;;
   *) echo '{"results":[]}' ;;
 esac
 SH
 chmod +x "$bin/curl"
-ph() { PATH="$bin:$PATH" POSTHOG_PERSONAL_API_KEY=x PH_STATE_ROOT="$state" FAKE_PV24="$1" "$here/../scripts/checks/posthog.sh" --raw --window 30m; }
-q="$(ph 40)"
-jq -e '.status == "ok" and (.findings | length) == 0 and (.data.summary | test("quiet window; last pageview 2026-10-07T21:12:03Z, 40 in 24h"))' <<<"$q" >/dev/null \
-  || fail "quiet PostHog window: $(jq -c '{status, findings, s: .data.summary}' <<<"$q")"
-q="$(ph 0)"
+ph() {  # ph PV24 PV2H END
+  PATH="$bin:$PATH" POSTHOG_PERSONAL_API_KEY=x PH_STATE_ROOT="$state" FAKE_PV24="$1" FAKE_PV2H="$2" \
+    "$here/../scripts/checks/posthog.sh" --raw --window 30m --end "$3"
+}
+# 8 Oct 2026 01:46 CEST: the night the check reported 0 pageviews as ok.
+q="$(ph 40 0 2026-10-07T23:46:46Z)"
+jq -e '.status == "partial" and (.findings | length) == 0 and (.data.summary | test("quiet window; last pageview 2026-10-07T21:12:03Z, 40 in 24h"))
+       and any(.notes[]; test("browser health can.t be confirmed"))' <<<"$q" >/dev/null \
+  || fail "quiet PostHog window must be partial, not ok: $(jq -c '{status, findings, notes, s: .data.summary}' <<<"$q")"
+# Thursday 8 Oct 14:00 CEST, nothing for 2h: a sev3 silence.
+q="$(ph 40 0 2026-10-08T12:00:00Z)"
+jq -e '.status == "partial" and .findings[0].key == "posthog.silent" and .findings[0].hint == "sev3" and .findings[0].evidence.lookback == "2h"' <<<"$q" >/dev/null \
+  || fail "working-hours PostHog silence: $(jq -c '{status, findings}' <<<"$q")"
+# Same time with traffic in the last 2h but none in the window: quiet, no finding.
+q="$(ph 40 7 2026-10-08T12:00:00Z)"
+jq -e '.status == "partial" and (.findings | length) == 0' <<<"$q" >/dev/null || fail "working-hours quiet window: $(jq -c '{status, findings}' <<<"$q")"
+# Saturday afternoon, nothing for 2h: quiet, not a finding.
+q="$(ph 40 0 2026-10-10T12:00:00Z)"
+jq -e '(.findings | length) == 0' <<<"$q" >/dev/null || fail "weekend 2h silence should not be a finding: $(jq -c '{findings}' <<<"$q")"
+q="$(ph 0 0 2026-10-07T23:46:46Z)"
 jq -e '.status == "partial" and .findings[0].key == "posthog.silent" and .findings[0].hint == "sev2"' <<<"$q" >/dev/null \
   || fail "silent PostHog: $(jq -c '{status, findings}' <<<"$q")"
 
