@@ -276,7 +276,10 @@ def track(findings, results, path, now, reraise_h, unavailable_min, orgs):
                 entry.update(announced_at=stamp, announced_severity=severity)
             entry.update(last_seen=stamp, severity=severity, summary=summary[:300])
             keys[key] = entry
-            item = {"key": key, "severity": severity, "summary": summary, "change": change, "first_seen": entry["first_seen"], **extra}
+            # status is the watcher contract's name for change; last_raised is when
+            # the key was last announced (new, escalated or re-raised).
+            item = {"key": key, "severity": severity, "summary": summary, "status": change, "change": change,
+                    "first_seen": entry["first_seen"], "last_raised": entry.get("announced_at"), **extra}
             items.append(item)
             return item
 
@@ -284,6 +287,7 @@ def track(findings, results, path, now, reraise_h, unavailable_min, orgs):
             item = mark(f["key"], f.get("hint", "sev3"), f"{f['check']}: {orgs.label(f['title'])}",
                         {"check": f["check"], "kind": f.get("kind")})
             f["change"], f["first_seen"] = item["change"], item["first_seen"]
+            f["status"], f["last_raised"] = item["status"], item["last_raised"]
             ev = f.get("evidence") or {}
             item["evidence"] = {k: (str(v)[:300] if k in ("sample", "query") else v) for k, v in ev.items()
                                 if not isinstance(v, (dict, list)) or len(json.dumps(v)) <= 400}
@@ -474,8 +478,11 @@ def main():
     if args.watch:
         watch = {k: report[k] for k in ("env", "generated_at", "window", "start", "end", "verdict")}
         watch.update(baseline_captured_at=(report["baseline"] or {}).get("captured_at"),
-                     items=items, raise_count=sum(1 for i in items if i["change"] != "unchanged"),
+                     items=items, findings=items,
+                     raise_count=sum(1 for i in items if i["change"] != "unchanged"),
                      sources={c: s["status"] for c, s in report["sources"].items()},
+                     source_notes={c: [str(n)[:300] for n in s["notes"]][:5] for c, s in report["sources"].items()
+                                   if s["status"] != "ok"},
                      state=args.state,
                      report=os.path.join(STATE_ROOT, args.env, "last.json") if args.save_last else None)
         print(json.dumps(watch, ensure_ascii=False))

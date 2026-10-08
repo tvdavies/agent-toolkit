@@ -19,10 +19,13 @@ Scripts live in `scripts/` (run any with `--help`):
 - `prod-health.sh` runs every check in parallel and prints a compact report.
   It takes `--env production|staging` (default production), `--window 30m`,
   `--end <ISO time>` for a past window, `--only`/`--skip`, and `--json` for
-  other skills. Exit status 0 means healthy and 3 means there are findings.
-  `--watch` prints compact items for unattended watchers, each marked `new`,
-  `escalated`, `reraise` or `unchanged` against a state file
-  (`references/watching.md`).
+  other skills. Exit status 0 means healthy, 3 means there are findings and 4
+  means nothing was found but a source wasn't fully checked.
+  `--watch` is the contract for unattended watchers: JSON `findings` (`key`,
+  `severity`, `summary`, `status`, `first_seen`, `last_raised`, evidence) plus
+  each source's status; exit 0 with no findings, 3 with findings, anything else
+  is a failed run. `status` is `new`, `escalated`, `reraise` or `unchanged`
+  against a state file (`references/watching.md`).
 - `checks/<name>.sh` runs one check on its own, with the same flags. The checks are
   `k8s`, `alerts`, `loki-errors`, `http`, `workflows`, `sentry`, `posthog`,
   `deploys` and `dispatch`.
@@ -108,7 +111,8 @@ response, so the work doesn't stop there: return the finding with a fix-forward
 plan, and the caller starts the fix without waiting for Tom.
 
 - **SEV1.** Stop merging and pause auto-merge on your own open PRs. File the
-  Linear bug at priority 1 through `followup.sh -l Sal` (it dedupes). Then end your run
+  Linear bug in Triage at priority 1 through `followup.sh --triage -p 1 -l Sal`
+  (it dedupes; on a duplicate, comment on the existing ticket and don't label it). Then end your run
   at once and return to the caller, at the top of your result:
   `SEV1: <symptom>`, the impact (orgs by name, users, counts), when it started,
   the evidence and queries, the suspected deploy and PR, a **rollback
@@ -118,11 +122,18 @@ plan, and the caller starts the fix without waiting for Tom.
   on it at top priority), and the instruction **"stop other automated merges
   until this is fixed; the SEV1 fix PR is exempt"**. Don't start the fix in the
   same run, and never roll back, revert or change config.
-- **SEV2.** File the bug at priority 2 through `followup.sh -l Sal` and return the same
-  shape without the alarm: the ticket, the evidence, who is affected and the
-  fix-forward plan (`prepare-ticket`, then `yolo-ticket` if Ready). No pause on
-  other merges.
+- **SEV2** (a real regression affecting some customers, or a degraded feature).
+  File the bug in Triage at priority 2 through `followup.sh --triage -p 2 -l Sal`
+  and return the same shape, starting `SEV2: <symptom>`, without the alarm: the
+  ticket, the evidence, who is affected, the suspected deploy and PR, a rollback
+  recommendation for Tom to approve, and the fix-forward plan (`prepare-ticket`,
+  then `yolo-ticket` if Ready). No pause on other merges. A SEV2 that worsens is
+  a SEV1.
 - **SEV3.** As in step 5.
+
+Fix forward means: the Triage ticket filed through `followup.sh`, then
+`prepare-ticket` on it, then `yolo-ticket` if it is Ready. The caller runs those;
+the run that found the problem only files and returns.
 
 If `prepare-ticket` later says Needs decision or Blocked, park the ticket with a
 comment saying what is needed and return the decision to the caller.
