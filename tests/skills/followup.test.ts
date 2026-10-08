@@ -14,7 +14,10 @@ kind="$2"; q="$3"; shift 3
 vars=()
 while [ "$#" -gt 0 ]; do case "$1" in -v) vars+=("$2"); shift 2 ;; *) shift ;; esac; done
 case "$kind:$q" in
-  query:*searchIssues*) echo '{"data":{"searchIssues":{"nodes":[]}}}' ;;
+  query:*searchIssues*)
+    if [ -n "\${FAKE_DUP:-}" ]; then
+      echo '{"data":{"searchIssues":{"nodes":[{"identifier":"LLE-9","title":"session-service cannot publish agent activity","state":{"name":"Triage"}}]}}}'
+    else echo '{"data":{"searchIssues":{"nodes":[]}}}'; fi ;;
   query:*viewer*) echo '{"data":{"viewer":{"id":"me"},"teams":{"nodes":[{"id":"team-lle","states":{"nodes":[{"id":"st-triage","name":"Triage"},{"id":"st-todo","name":"To Do"}]}}]},"cycles":{"nodes":[{"id":"cy","number":7,"startsAt":"2026-10-01","endsAt":"2026-10-15","isActive":true}]}}}' ;;
   query:*issueLabels*)
     case "\${vars[0]}" in
@@ -24,11 +27,12 @@ case "$kind:$q" in
   mutate:*issueCreate*)
     jq -c . <<<"\${vars[0]#input=}" >> "$FAKE_LOG"
     echo '{"data":{"issueCreate":{"success":true,"issue":{"identifier":"LLE-1","url":"u","cycle":null,"state":{"name":"Triage"}}}}}' ;;
+  mutate:*) echo "unexpected mutation" >> "$FAKE_LOG.other"; echo '{"data":{}}' ;;
   *) echo "unexpected $kind" >&2; exit 1 ;;
 esac
 `;
 
-function run(args: string[]) {
+function run(args: string[], extraEnv: Record<string, string> = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "followup-"));
   try {
     writeFileSync(path.join(dir, "linear-cli"), fake);
@@ -36,11 +40,13 @@ function run(args: string[]) {
     const log = path.join(dir, "created.jsonl");
     writeFileSync(log, "");
     const result = spawnSync("bash", [followup, ...args], {
-      env: { PATH: `${dir}:${process.env.PATH}`, FAKE_LOG: log, HOME: dir },
+      env: { PATH: `${dir}:${process.env.PATH}`, FAKE_LOG: log, HOME: dir, ...extraEnv },
       encoding: "utf8",
     });
     const created = readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    return { status: result.status, stderr: result.stderr, created };
+    let otherMutations = "";
+    try { otherMutations = readFileSync(`${log}.other`, "utf8"); } catch { /* none */ }
+    return { status: result.status, stderr: result.stderr, created, otherMutations };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -65,6 +71,14 @@ describe("followup.sh labels", () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("label Nope not found");
     expect(result.created).toHaveLength(0);
+  });
+
+  test("a duplicate creates nothing and labels nothing", () => {
+    const result = run(["--triage", "-p", "2", "-l", "Sal", "session-service cannot publish agent activity"], { FAKE_DUP: "1" });
+    expect(result.status).toBe(3);
+    expect(result.stderr).toContain("LLE-9");
+    expect(result.created).toHaveLength(0);
+    expect(result.otherMutations).toBe("");
   });
 
   test("without a label no labelIds are sent", () => {
