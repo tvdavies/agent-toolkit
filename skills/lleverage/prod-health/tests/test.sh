@@ -72,6 +72,53 @@ jq -e '.means["wf.total"] == 550 and .samples["wf.total"] == 2 and .ratios["wf.f
 n="$(PH_STATE_ROOT="$s2" python3 "$lib/assess.py" --env production --json - <<<"${b//\"window\":\"6h\"/\"window\":\"6h\",\"start\":\"a\",\"end\":\"b\"}" | jq '[.findings[] | select(.key == "wf.failed")] | length')"
 [ "$n" = 0 ] || fail "baselined failure share flagged as a regression"
 
+# Watch state: new, unchanged, escalated, reraise, forgotten; a long-unavailable source.
+ws="$state/watch.json"
+w1='{"check":"loki-errors","window":"15m","start":"a","end":"b","window_s":900,"status":"ok","series":[],"notes":[],"data":{},"findings":[
+  {"hint":"sev3","key":"k.one","title":"one"}]}
+{"check":"sentry","window":"15m","start":"a","end":"b","window_s":900,"status":"unavailable","series":[],"findings":[],"notes":["unavailable: token"],"data":{}}'
+w2="${w1/\"hint\":\"sev3\"/\"hint\":\"sev2\"}"
+watch() {  # watch NOW INPUT -> prints "key=change ..." and the exit status
+  local out rc
+  set +e; out="$(PH_STATE_ROOT="$state" python3 "$lib/assess.py" --env production --watch --state "$ws" --now "$1" - <<<"$2")"; rc=$?; set -e
+  echo "$(jq -r '[.items[] | "\(.key)=\(.change)"] | join(" ")' <<<"$out") rc=$rc"
+}
+r="$(watch 2026-10-08T00:05:00Z "$w1")"; [ "$r" = "k.one=new rc=3" ] || fail "first watch run: $r"
+r="$(watch 2026-10-08T00:15:00Z "$w1")"; [ "$r" = "k.one=unchanged rc=3" ] || fail "repeat should be unchanged: $r"
+r="$(watch 2026-10-08T00:25:00Z "$w2")"; [ "$r" = "k.one=escalated rc=3" ] || fail "sev3 -> sev2 should escalate: $r"
+r="$(watch 2026-10-08T01:10:00Z "$w2")"; [ "$r" = "k.one=unchanged source-unavailable:sentry=new rc=3" ] || fail "sentry unavailable an hour should be raised once: $r"
+r="$(watch 2026-10-08T01:20:00Z "$w2")"; [ "$r" = "k.one=unchanged source-unavailable:sentry=unchanged rc=3" ] || fail "no second raise: $r"
+r="$(watch 2026-10-08T06:30:00Z "$w2")"; [ "$r" = "k.one=reraise source-unavailable:sentry=unchanged rc=3" ] || fail "re-raise after 6h: $r"
+jq -e '.keys["k.one"].first_seen == "2026-10-08T00:05:00Z"' "$ws" >/dev/null || fail "first_seen must survive escalation and re-raise"
+healthy='{"check":"k8s","window":"15m","start":"a","end":"b","window_s":900,"status":"ok","series":[],"notes":[],"data":{},"findings":[]}'
+r="$(watch 2026-10-08T06:40:00Z "$healthy")"; [ "$r" = " rc=0" ] || fail "healthy watch run should print no items and exit 0: $r"
+r="$(watch 2026-10-08T13:00:00Z "$w1")"; [ "$r" = "k.one=new source-unavailable:sentry=new rc=3" ] || fail "keys unseen for 6h are new again: $r"
+# The full report carries the same marks.
+PH_STATE_ROOT="$state" python3 "$lib/assess.py" --env production --state "$state/other.json" --now 2026-10-08T00:00:00Z - <<<"$w1" | grep -q 'one (new since 2026-10-08T00:00:00Z)' \
+  || fail "text report should mark new findings"
+
+# PostHog: an empty window with pageviews earlier in the day is quiet, not broken;
+# no pageviews in 24h is a finding and the source is not checked.
+bin="$state/bin"; mkdir -p "$bin"
+cat >"$bin/curl" <<'SH'
+#!/usr/bin/env bash
+cat >/dev/null
+while [ "$#" -gt 0 ]; do [ "$1" = --data-binary ] && body="$2"; shift; done
+case "$body" in
+  *"max(timestamp)"*) echo "{\"results\":[[${FAKE_PV24:-0}, \"2026-10-07T21:12:03.5Z\"]]}" ;;
+  *countIf*) echo '{"results":[[0,0,0]]}' ;;
+  *) echo '{"results":[]}' ;;
+esac
+SH
+chmod +x "$bin/curl"
+ph() { PATH="$bin:$PATH" POSTHOG_PERSONAL_API_KEY=x PH_STATE_ROOT="$state" FAKE_PV24="$1" "$here/../scripts/checks/posthog.sh" --raw --window 30m; }
+q="$(ph 40)"
+jq -e '.status == "ok" and (.findings | length) == 0 and (.data.summary | test("quiet window; last pageview 2026-10-07T21:12:03Z, 40 in 24h"))' <<<"$q" >/dev/null \
+  || fail "quiet PostHog window: $(jq -c '{status, findings, s: .data.summary}' <<<"$q")"
+q="$(ph 0)"
+jq -e '.status == "partial" and .findings[0].key == "posthog.silent" and .findings[0].hint == "sev2"' <<<"$q" >/dev/null \
+  || fail "silent PostHog: $(jq -c '{status, findings}' <<<"$q")"
+
 # Normalisation.
 [ "$(python3 "$lib/normalise.py" route /lsq3oanefp/w/my-public-app)" = "/:org/w/:id" ] || fail "public app route"
 [ "$(python3 "$lib/normalise.py" route '/api/public/workflow-session?sessionId=1')" = "/api/public/workflow-session" ] || fail "query string"

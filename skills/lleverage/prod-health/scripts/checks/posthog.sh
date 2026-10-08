@@ -26,6 +26,23 @@ RANGE="timestamp > toDateTime($PH_START_S) AND timestamp <= toDateTime($PH_END_S
 vol="$(hogql "SELECT countIf(event = '\$pageview'), countIf(event = '\$exception'), uniqIf(distinct_id, event = '\$exception')
   FROM events WHERE $RANGE AND event IN ('\$pageview', '\$exception')")" || ph_bail "PostHog query API failed"
 pv="$(jq -r '.[0][0]' <<<"$vol")"; ex="$(jq -r '.[0][1]' <<<"$vol")"; exu="$(jq -r '.[0][2]' <<<"$vol")"
+# A window with no pageviews is either a quiet hour or broken capture (or a
+# broken query). Tell them apart with the newest pageview in the last day.
+last="$(hogql "SELECT count(), max(timestamp) FROM events WHERE event = '\$pageview' AND properties.\$host = '$APPHOST'
+  AND timestamp > toDateTime($PH_END_S) - INTERVAL 1 DAY AND timestamp <= toDateTime($PH_END_S)")" \
+  || ph_bail "PostHog query API failed (last pageview)"
+pv24="$(jq -r '.[0][0] // 0' <<<"$last")"; lastpv="$(jq -r '.[0][1] // ""' <<<"$last")"
+quiet=""
+if [ "${pv24:-0}" = 0 ]; then
+  # Nothing for a whole day on production means capture or this query is broken:
+  # the exception counts can't be trusted either, so this source is not checked.
+  ph_finding sev2 posthog.silent "no PostHog pageviews from $APPHOST in the 24h before $PH_END_ISO: capture or the query is broken" \
+    "$(jq -nc --arg h "$APPHOST" --arg q "SELECT count() FROM events WHERE event = '\$pageview' AND properties.\$host = '$APPHOST' AND timestamp > now() - INTERVAL 1 DAY" '{host:$h, query:$q}')"
+  ph_unavailable "no pageviews from $APPHOST in 24h, so a quiet window can't be told from lost capture"
+elif [ "${pv:-0}" = 0 ]; then
+  quiet=" (quiet window; last pageview ${lastpv:0:19}Z, $pv24 in 24h)"
+  ph_note "no pageviews in the window; the newest in the last 24h was at ${lastpv:0:19}Z ($pv24 in 24h), so capture works"
+fi
 ph_series posthog.pageviews "$pv" "PostHog pageviews on $APPHOST" '{"rules":["drop"],"drop_hint":"sev2","drop_min_expected":60}'
 ph_series posthog.exceptions "$ex" "browser exceptions on $APPHOST" '{"rules":["spike"],"min_spike":30,"hint":"sev2"}'
 
@@ -61,5 +78,5 @@ done <<<"$agg"
 
 ph_data summary "$(jq -nc --arg pv "$pv" --arg ex "$ex" --arg u "$exu" --arg h "$APPHOST" \
   --arg top "$(head -3 <<<"$agg" | jq -rs 'map("\(.type) \(.msg[0:50]) x\(.n)") | join("; ")')" \
-  '"\($h): \($pv) pageviews, \($ex) exceptions from \($u) users" + (if $top != "" then " (top: \($top))" else "" end)')"
+  --arg q "$quiet" '"\($h): \($pv) pageviews\($q), \($ex) browser exceptions" + (if $ex != "0" then " from \($u) users" else "" end) + (if $top != "" then " (top: \($top))" else "" end)')"
 ph_emit
