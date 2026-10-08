@@ -67,10 +67,30 @@ test("Sonnet 5.5 matches the native catalog without unsupported CPA per-message 
   expect(sonnet.reasoning).toBe(true);
   expect(sonnet.compat).toEqual({ forceAdaptiveThinking: true, supportsTemperature: false });
   expect(sonnet.thinkingLevelMap).toEqual({ off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" });
-  expect(sonnet.cost).toEqual({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 });
+  expect(sonnet.cost).toEqual({ input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 });
   expect(sonnet.input).toEqual(["text", "image"]);
   expect(sonnet.contextWindow).toBe(1_000_000);
   expect(sonnet.maxTokens).toBe(128_000);
+});
+
+test("Haiku 5.5 declares native effort levels, tiered pricing and the 272K budget", () => {
+  const haiku = MODELS.find((model) => model.id === "claude-haiku-5-5")!;
+  expect(haiku.name).toBe("Claude Haiku 5.5 (Claude Code creds)");
+  expect(haiku.reasoning).toBe(true);
+  expect(haiku.compat).toEqual({ forceAdaptiveThinking: true, supportsTemperature: false });
+  expect(haiku.thinkingLevelMap).toEqual(sonnet.thinkingLevelMap);
+  expect(haiku.cost).toEqual({
+    input: 0.1,
+    output: 0.5,
+    cacheRead: 0.01,
+    cacheWrite: 0.125,
+    tiers: [{ inputTokensAbove: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }],
+  });
+  expect(haiku.input).toEqual(["text", "image"]);
+  // Upstream window is 1M; the extension keeps the 272K default budget for a new model.
+  expect(haiku.contextWindow).toBe(272_000);
+  expect(haiku.maxTokens).toBe(128_000);
+  expect(new Set(MODELS.map((model) => model.id)).size).toBe(MODELS.length);
 });
 
 test("uncompacted append-only history is passed through unchanged", () => {
