@@ -14,7 +14,8 @@ Options:
   --triage          A separate bug unrelated to the workstream: Triage, unassigned, no cycle.
   -p, --priority N  1 urgent, 2 high, 3 normal (default), 4 low.
   -d, --description TEXT   Markdown body. Say why it exists and what done looks like.
-  -l, --label NAME  Label (repeatable).
+  -l, --label NAME|ID  Label by name or id (repeatable). A name resolves to a
+                    workspace label or one of the team's; an id is used as is.
   --project NAME    Project name (overrides the parent's).
   --team KEY        Team key (default LLE).
   --force           Create even when the duplicate check finds a close match.
@@ -107,10 +108,12 @@ if [ -n "$project" ]; then
 fi
 if [ "${#labels[@]}" -gt 0 ]; then
   ids="$(for l in "${labels[@]}"; do
+    if [[ "$l" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then echo "$l"; continue; fi
     lid="$(lq 'query($n:String!){ issueLabels(filter:{name:{eq:$n}}, first:5){nodes{id team{id}}} }' -v n="$l" | data \
       | jq -r --arg t "$team_id" '[.issueLabels.nodes[] | select(.team == null or .team.id == $t)][0].id // empty')"
     [ -n "$lid" ] || die "label $l not found"; echo "$lid"
-  done | jq -R . | jq -sc .)"
+  done)" || exit 2
+  ids="$(jq -R . <<<"$ids" | jq -sc .)"
   input="$(echo "$input" | jq --argjson l "$ids" '. + {labelIds:$l}')"
 fi
 

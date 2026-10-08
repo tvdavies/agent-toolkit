@@ -81,7 +81,10 @@ Scripts live in `scripts/` (run any with `--help`):
    creates anything:
    - use `--triage` for an unrelated bug;
    - use `--parent <ticket>` when a change from the current run caused it;
-   - use `-p 1` or `-p 2` for SEV1 and SEV2.
+   - use `-p 1` or `-p 2` for SEV1 and SEV2;
+   - in an unattended run for Sal (the production watch), add `-l Sal` to every
+     ticket you create, sub-issues and follow-ups included. Don't add the label to
+     an existing ticket you dedupe onto or comment on.
 
    On exit code 3 (a possible duplicate), comment on the existing ticket instead.
    The body follows the template in `references/triage.md`: the symptom, the
@@ -105,7 +108,7 @@ response, so the work doesn't stop there: return the finding with a fix-forward
 plan, and the caller starts the fix without waiting for Tom.
 
 - **SEV1.** Stop merging and pause auto-merge on your own open PRs. File the
-  Linear bug at priority 1 through `followup.sh` (it dedupes). Then end your run
+  Linear bug at priority 1 through `followup.sh -l Sal` (it dedupes). Then end your run
   at once and return to the caller, at the top of your result:
   `SEV1: <symptom>`, the impact (orgs by name, users, counts), when it started,
   the evidence and queries, the suspected deploy and PR, a **rollback
@@ -115,7 +118,7 @@ plan, and the caller starts the fix without waiting for Tom.
   on it at top priority), and the instruction **"stop other automated merges
   until this is fixed; the SEV1 fix PR is exempt"**. Don't start the fix in the
   same run, and never roll back, revert or change config.
-- **SEV2.** File the bug at priority 2 through `followup.sh` and return the same
+- **SEV2.** File the bug at priority 2 through `followup.sh -l Sal` and return the same
   shape without the alarm: the ticket, the evidence, who is affected and the
   fix-forward plan (`prepare-ticket`, then `yolo-ticket` if Ready). No pause on
   other merges.
