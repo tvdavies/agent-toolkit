@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -356,6 +356,25 @@ describe("pr-ledger.sh watch", () => {
     const passes = calls().filter((call) => call.startsWith("prwatch status")).length;
     expect(passes).toBeGreaterThanOrEqual(3);
   }, 15_000);
+
+  it("keeps working without a usable temp directory", () => {
+    // A full /tmp (tmpfs out of inodes) once made every pass fail at mktemp and the
+    // watcher was abandoned. Point TMPDIR somewhere unwritable to reproduce that.
+    addAll(["acme/widgets#404"]);
+    const env = { TMPDIR: join(temp, "no-such-tmp") };
+    const listed = run(["list"], { prwatch: true, env });
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(listed.stderr).toBe("");
+    // prwatch's per-PR error still reaches the line, so stderr capture still works.
+    expect(lines(listed.stdout)).toContain("acme/widgets#404\tLLE-404\tagent-a\tERROR acme/widgets#404 not found");
+    const watched = run(["watch", "--interval", "1"], { prwatch: true, timeout: 4_000, env });
+    expect(lines(watched.stdout).slice(0, 4)).toEqual([...watchLines, "ERROR acme/widgets#404 acme/widgets#404 not found"]);
+    expect(watched.stderr).not.toContain("mktemp");
+    expect(watched.stderr).not.toContain("No such file");
+    // Scratch files live in the workstream's state directory and are cleaned up.
+    const leftovers = readdirSync(join(wsDir, ".pr-status")).filter((f) => f.startsWith(".status-err") || f.startsWith(".events-fifo"));
+    expect(leftovers).toEqual([]);
+  });
 
   it("falls back to gh polling without prwatch", () => {
     addAll();
