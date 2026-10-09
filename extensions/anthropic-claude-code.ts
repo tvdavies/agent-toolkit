@@ -32,7 +32,14 @@ type ProviderModel = {
   name: string;
   reasoning: boolean;
   input: Array<"text" | "image">;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    // Request-wide pricing tiers: the highest matching threshold applies to the whole request.
+    tiers?: Array<{ inputTokensAbove: number; input: number; output: number; cacheRead: number; cacheWrite: number }>;
+  };
   contextWindow: number;
   maxTokens: number;
   // Required for adaptive-thinking models (Opus 4.6+, Sonnet 4.6+). Without this the
@@ -108,9 +115,10 @@ export const MODELS: ProviderModel[] = [
     // API supports native xhigh effort.
     thinkingLevelMap: { xhigh: "xhigh" },
     input: ["text", "image"],
-    cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+    // The $2/$10 launch price became the standard price; the planned rise to $3/$15 was cancelled.
+    cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
     contextWindow: 1_000_000,
-    maxTokens: 64_000,
+    maxTokens: 128_000,
   },
   {
     id: "claude-sonnet-5-5",
@@ -120,7 +128,8 @@ export const MODELS: ProviderModel[] = [
     compat: { forceAdaptiveThinking: true, supportsTemperature: false },
     thinkingLevelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
     input: ["text", "image"],
-    cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+    // Cache hits on Sonnet 5.5 cost 0.05x the input price.
+    cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
     contextWindow: 1_000_000,
     maxTokens: 128_000,
   },
@@ -194,6 +203,27 @@ export const MODELS: ProviderModel[] = [
     cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
     contextWindow: 200_000,
     maxTokens: 64_000,
+  },
+  {
+    id: "claude-haiku-5-5",
+    name: "Claude Haiku 5.5 (Claude Code creds)",
+    reasoning: true,
+    // As Sonnet 5.5: request-level effort for CPA, and non-default temperature returns a 400.
+    compat: { forceAdaptiveThinking: true, supportsTemperature: false },
+    // Pi's native catalog: adaptive thinking with all five effort levels (API default medium).
+    thinkingLevelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
+    input: ["text", "image"],
+    // Priced by prompt length: prompts over 100,000 tokens pay 5x on every rate.
+    cost: {
+      input: 0.1,
+      output: 0.5,
+      cacheRead: 0.01,
+      cacheWrite: 0.125,
+      tiers: [{ inputTokensAbove: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }],
+    },
+    // Upstream supports 1M; use the 272K default budget (extensions/AGENTS.md).
+    contextWindow: 272_000,
+    maxTokens: 128_000,
   },
 ];
 
