@@ -1,0 +1,5 @@
+/* Your look: override the --mv-* properties and add @font-face rules here. Keep fonts local (no CDN) so
+   renders never depend on the network; check.mjs fails when a face falls back. */
+:root {
+  --mv-accent: #e8742a;
+}
