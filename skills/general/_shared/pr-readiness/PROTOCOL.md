@@ -107,6 +107,18 @@ CI actions:
 - If evidence shows a pure infrastructure or test flake, rerun the failed job rather than changing code.
 - A new push restarts CI and invalidates readiness evidence for the previous head.
 
+CI failing in code the PR didn't touch:
+
+1. Run that suite on a clean `origin/main`. If it passes there, treat the failure
+   as this PR's (or a flake) and handle it as above.
+2. If `main` is red, `claim acquire main:OWNER/REPO` (see the `claims` skill).
+   - Held: don't fix it in this PR. Follow the holder's fix; once it lands and
+     `main` is green, update or rebase this PR and carry on.
+   - Acquired: file a ticket for the red `main`, or claim the existing one
+     (`ticket:<ID>`), and fix it in its own PR. Release `main:OWNER/REPO` once
+     that PR merges and `main` is green.
+3. Never fold another ticket's fix into this PR.
+
 Conflicts:
 
 - Resolve against the current base using repository policy.

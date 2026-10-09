@@ -53,6 +53,13 @@ costs a new review round** (20–60 minutes). Therefore:
   suite on `origin/main` first.
 - When `main` is red, fixing it is the top priority for the whole workstream. One
   agent fixes it, and everyone else rebases after.
+- That one agent is whoever holds `main:lleverage-ai/lleverage` (or
+  `main:<owner>/<repo>`; see the `claims` skill and the CI rule in
+  `_shared/pr-readiness/PROTOCOL.md`). Acquire it before starting a fix. If it's
+  held, don't fix `main` in your PR: wait for the holder's fix to land, then
+  rebase. If you get it, file or claim the red-main ticket, fix it in its own PR,
+  and release once it merges and `main` is green. Never fold another ticket's fix
+  into your PR (#8104 did, and #8113 duplicated it on 2026-10-09).
 - After each merge, the PRs in the same lane get refreshed immediately (`gh pr
   update-branch` or a rebase by their owner), before a human finds the conflict.
 - Close superseded PRs as soon as their replacement lands (#7601 sat orphaned).

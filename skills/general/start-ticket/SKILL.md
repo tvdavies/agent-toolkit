@@ -83,7 +83,21 @@ Resolve exactly one ticket identifier before proceeding.
    guidance. Inspect every screenshot, recording, transcript, and relevant
    attachment in the description and comments. Do not infer visual behaviour
    from filenames.
-4. Assign the Linear issue to yourself and move it to **In Progress**:
+4. Claim the ticket before touching Linear. Follow the `claims` skill
+   (`$SKILL_DIR/../claims/SKILL.md`) for the holder label and note:
+
+   ```bash
+   claim acquire ticket:TEAM-123 --holder "LABEL" --note "TEAM-123 start-ticket"
+   ```
+
+   - Exit 3: another session holds it. Stop `BLOCKED` with the holder, note and
+     expiry. Don't update Linear.
+   - Exit 0 with `acquired` (no live claim existed) while the ticket is already
+     in a started state and this session doesn't own its branch or PR: release
+     the claim and stop `BLOCKED`. Don't overwrite the state.
+   - Any other exit: the claims tool is broken. Note it and carry on (fail open).
+
+   Then assign the Linear issue to yourself and move it to **In Progress**:
 
    ```bash
    linear-cli issues update TEAM-123 --state "In Progress" --assignee me \
@@ -215,23 +229,32 @@ remote GitHub checks, review feedback, comments, or threads.
 
 ## Phase 6: Commit, push, and open the PR
 
-1. Ensure only intended files are changed.
-2. Commit logical changes with a concise message that includes or clearly
+1. Just before pushing and creating the PR, check nobody else has the ticket:
+   - `claim renew ticket:TEAM-123 --holder "LABEL"`; exit 3 means stop
+     `BLOCKED` with the holder;
+   - re-read the ticket's state and comments for changes since the claim;
+   - `gh pr list --repo OWNER/REPO --state open --search TEAM-123`, and check
+     open PRs that touch the same files.
+
+   If another session or person is already doing it, stop `BLOCKED` with the
+   evidence. Don't push a competing PR.
+2. Ensure only intended files are changed.
+3. Commit logical changes with a concise message that includes or clearly
    corresponds to the ticket.
-3. Push only the ticket branch with upstream tracking.
-4. Create a ready-for-review, non-draft pull request targeting `main`. Use a
+4. Push only the ticket branch with upstream tracking.
+5. Create a ready-for-review, non-draft pull request targeting `main`. Use a
    temporary Markdown file and `gh pr create --body-file`; never encode
    multiline Markdown as escaped newlines in `--body`.
-5. The PR title should identify the ticket and change. The body must include:
+6. The PR title should identify the ticket and change. The body must include:
    - ticket link when applicable
    - summary
    - implementation details and key decisions
    - validation commands and results
    - risks or caveats
    - screenshots or recordings for visible UI changes
-6. Immediately read the PR body back with `gh pr view` and fix malformed
-   formatting.
-7. Verify the branch is pushed, record the exact remote head SHA, and ensure the
+7. Immediately read the PR body back with `gh pr view` and fix malformed
+   formatting. Put the PR in the claim's note with `claim renew --note`.
+8. Verify the branch is pushed, record the exact remote head SHA, and ensure the
    worktree has no uncommitted intended changes.
 
 GitHub reads here are one-off. This skill never waits on a PR; if a caller later
@@ -252,6 +275,9 @@ a push to a PR that was already ready doesn't start one. Post
 feedback after the ready-for-review PR and current head are verified.
 
 ## Completion report
+
+Release the ticket claim when you finish, including on `BLOCKED`, unless a
+caller such as `yolo-ticket` keeps holding it.
 
 Return:
 

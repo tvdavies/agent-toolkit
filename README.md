@@ -53,6 +53,20 @@ The installer refuses to overwrite unmanaged directories or externally owned sym
 
 Pi discovers `~/.agents/skills` automatically. If `~/.pi/agent/settings.json` explicitly lists `~/.claude/skills`, the installer prints a migration warning but never edits the settings file.
 
+### Claims
+
+The `claims` skill (`skills/general/claims`) ships a `claim` CLI that gives agent
+sessions atomic, leased claims on tickets, red-main fixes and PRs, so two sessions
+don't do the same work. `start-ticket`, `yolo-ticket`, the PR-readiness protocol,
+`workstream` and `sweep` use it. It needs Node.js 22.13 or later and stores claims
+in SQLite at `${AGENT_CLAIMS_DB:-~/.local/state/agent-claims/claims.db}`; that
+local backend is a prototype until a shared service replaces it. To put it on
+PATH:
+
+```bash
+ln -s ~/.agents/skills/claims/scripts/claim ~/.local/bin/claim
+```
+
 ### Code-writer delegation
 
 The package also exposes a native pi-subagents `code-writer` role (`agents/code-writer.md`)

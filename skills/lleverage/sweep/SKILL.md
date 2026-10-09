@@ -56,12 +56,20 @@ when all of these hold:
 - it isn't listed under Exclusions in `STATE.md`, and Tom hasn't said another
   session owns it;
 - no local worktree or branch from another session exists for it (`git worktree list`);
+- no live claim holds it (`claim show ticket:<ID>`; see the `claims` skill);
 - it meets the readiness bar in `issues.md`. If not, it goes to a `prepare-ticket`
   subagent, not to an implementer.
 
-When you start a ticket, set it In Progress at once (yolo-ticket does this). That
-is the claim. If a ticket you were about to start changes state underneath you,
-drop it. Never move another session's ticket back to To Do.
+When you start a ticket, claim it and set it In Progress at once (yolo-ticket
+does both through start-ticket; give each implementer the holder label
+`<your label> impl <ID>`). Linear is the signal people see; the claim is the
+lock. If the claim is held, or a ticket you were about to start changes state
+underneath you, drop it. Never move another session's ticket back to To Do.
+Release a stopped implementer's claim yourself, and run
+`claim release-all --holder <your label>` when the sweep ends.
+
+At start-up and on each health tick, run `claim list --stale` and report any
+stale claims once.
 
 Don't claim a parent to work its children from a sweep. A ticket big enough to
 need slicing is a `/workstream` candidate: slice it only if Tom's mandate allows,
