@@ -82,6 +82,10 @@ turn, and the run stops there.
    can select `Changes Required` instead. A failed verification is `BLOCKED`.
 3. Reuse the same dedicated worktree, branch, and PR throughout the entire yolo
    run. Do not start a second implementation or create a competing PR.
+   Keep the `ticket:<ID>` claim from `start-ticket` (see the `claims` skill)
+   until the PR merges. Before each blocking wait, renew it with a `--ttl` longer
+   than the wait's timeout (at most 2h). If a renew exits 3, stop `BLOCKED` with
+   the holder.
 4. Continue only after `start-ticket` reports `PR READY FOR REVIEW` and fresh
    evidence confirms:
    - the intended implementation is committed and pushed;
@@ -254,3 +258,6 @@ Completion is one of:
   state, and next safe action.
 
 Never finish yolo-ticket merely because the PR is `READY TO MERGE`.
+
+On every exit state, release the ticket claim
+(`claim release ticket:<ID> --holder LABEL`).

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Wrapper so `claim` can be symlinked onto PATH. See claim.mjs for usage.
+# If node itself is missing or too old for node:sqlite, exit 1 so callers fail open.
+here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd -P)"
+if ! command -v node >/dev/null 2>&1; then
+  echo "claim: warning: node not found; proceed without a lock" >&2
+  exit 1
+fi
+exec node "$here/claim.mjs" "$@"

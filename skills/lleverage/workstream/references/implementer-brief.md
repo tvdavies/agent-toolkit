@@ -21,6 +21,8 @@ Follow ~/.claude/skills/yolo-ticket/SKILL.md for the flow, with these rules on t
 
 ## Linear
 - Set the ticket In Progress when you start (exact state name), and comment the PR link.
+  start-ticket claims `ticket:<your ticket>` first (claims skill); use the holder
+  label `<orchestrator label> impl <your ticket>`.
   PR titles start with the ticket id.
 - Every `gh pr`/`gh issue`/`gh api repos/...` command names its repository
   explicitly (`-R OWNER/REPO` or the full API path). Never rely on the current

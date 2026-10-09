@@ -46,9 +46,14 @@ is verified, and production is healthy".
    session didn't start it, another session may own it. Look for open PRs and
    worktrees from other sessions. If it is ambiguous, ask Tom once before
    proceeding.
-3. **Claim:** set `ROOT` to In Progress, assigned to Tom. This is the only claim
-   signal. `/sweep` sessions skip every descendant of a started issue. Keep `ROOT`
-   In Progress for the whole run. Track parents inside the tree also move to In
+3. **Claim:** first take the lock with the `claims` skill:
+   `claim acquire ticket:ROOT --holder LABEL --ttl 2h --note "workstream ROOT"`.
+   Exit 3 means another session owns it: stop and report the holder. Renew it
+   with `--ttl 2h` every time the loop wakes. Then set `ROOT` to In Progress,
+   assigned to Tom. Linear is the signal people see, and `/sweep` sessions skip
+   every descendant of a started issue; the claim is the lock. Implementers claim
+   their own tickets through `start-ticket`, using the holder label in `brief.md`.
+   Keep `ROOT` In Progress for the whole run. Track parents inside the tree also move to In
    Progress while their children are being worked.
 4. Create `WS_DIR=~/.local/state/workstreams/<root-id-lowercase>` and write
    `STATE.md` with the mandate, the stop condition and the exclusions. Exclusions
@@ -115,12 +120,13 @@ The workstream is done when the stop condition holds:
    to carry.
 2. Close `umbrella-done` parents and ROOT, each with a short acceptance note.
 3. Make sure the ledger is empty, no worktrees are dirty, and agents are stopped.
-   Remove merged worktrees.
+   Remove merged worktrees. Run `claim release-all --holder LABEL`, and release
+   any ticket claim a stopped implementer left behind.
 4. Post the summary: delivered, verified, carried or parked, issues created vs
    closed, incidents, and what's left for Tom.
 
 At a cycle boundary mid-run, apply `issues.md`, Cycle closeout, to this tree only.
 
 If the run must stop early (a decision is blocking the critical path, a usage cap,
-an incident), write `STATE.md`, leave ROOT In Progress, and report the exact
-resume point.
+an incident), write `STATE.md`, leave ROOT In Progress, release your claims, and
+report the exact resume point.
