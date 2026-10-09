@@ -1,0 +1,21 @@
+/* Styles for the chapters in chapters.js that are not product components: the trigger event card (inside the
+   app, in app pixels) and the speed chapter's table and chips (on the brand layer, in --u). */
+.evt { position: absolute; width: 330px; border-radius: 10px; background: hsl(230 35% 15%); color: hsl(48 33% 92%); padding: 14px 16px; font: 12px/19px "Roboto Mono", monospace; box-shadow: 0 12px 30px rgb(0 0 0 / .2); opacity: 0; z-index: 5; white-space: pre; }
+.evt .k { color: hsl(24 84% 63%); }
+
+.wf { background: var(--ll-color-white); border: 1.5px solid var(--ll-color-grey-300); border-radius: calc(20 * var(--u)); padding: calc(30 * var(--u)) calc(40 * var(--u)); }
+.wf .hdr { display: flex; justify-content: space-between; font-family: var(--mv-mono); font-size: calc(17 * var(--u)); letter-spacing: .1em; text-transform: uppercase; color: var(--ll-text-kicker); padding-bottom: calc(14 * var(--u)); border-bottom: 1.5px solid var(--mv-hair); }
+.wf .r { display: grid; grid-template-columns: calc(300 * var(--u)) 1fr; align-items: center; gap: calc(24 * var(--u)); padding: calc(13 * var(--u)) 0; border-bottom: 1px solid var(--ll-color-grey-300); opacity: 0; }
+.wf .r:last-child { border-bottom: 0; }
+.wf .r b { display: block; font-size: calc(28 * var(--u)); font-weight: 600; }
+.wf .r small { display: block; font-size: calc(19 * var(--u)); color: var(--mv-muted); margin-top: calc(4 * var(--u)); }
+.wf .track { position: relative; height: calc(44 * var(--u)); display: flex; gap: 6px; align-items: center; }
+.wf .seg { height: calc(34 * var(--u)); border-radius: 6px; background: var(--ll-color-grey-400); display: grid; place-items: center; font-family: var(--mv-mono); font-size: calc(14 * var(--u)); letter-spacing: .06em; text-transform: uppercase; color: var(--ll-color-grey-800); overflow: hidden; white-space: nowrap; flex: none; }
+.wf .seg.srv { background: var(--mv-accent); color: #fff; }
+.wf .done { position: absolute; right: 0; font-family: var(--mv-mono); font-size: calc(16 * var(--u)); letter-spacing: .08em; text-transform: uppercase; color: var(--mv-accent); opacity: 0; }
+.chips { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: calc(20 * var(--u)); }
+.chip { flex: 1; border-radius: calc(16 * var(--u)); background: var(--mv-dark); color: var(--mv-on-dark); padding: calc(22 * var(--u)) calc(28 * var(--u)); font-size: calc(26 * var(--u)); font-weight: 600; opacity: 0; }
+.tall .wf .r, .square .wf .r { padding: calc(6 * var(--u)) 0; }
+.tall .wf .r small, .square .wf .r small { display: none; }
+.tall .wf, .square .wf { padding: calc(16 * var(--u)) calc(24 * var(--u)); }
+.chip small { display: block; font-family: var(--mv-mono); font-weight: 400; font-size: calc(16 * var(--u)); letter-spacing: .1em; text-transform: uppercase; color: var(--mv-accent); margin-bottom: calc(8 * var(--u)); }
