@@ -60,21 +60,35 @@ ticket. The steps below are for an attended session.
 - Normal behaviour, confirmed by a human: `baseline.sh accept <key> --note "<why>"`.
 - Unsure: mention it in the report and let it run another tick.
 
-## Linear ticket body
+## Linear ticket
+
+Follow "Writing tickets" in `../../workstream/references/issues.md`. The title
+names the symptom as a user would see it, in a few words. The description stays
+short:
 
 ```markdown
-**Symptom.** <what is failing, in one sentence, as a user would see it>
+## Problem
+<what is failing, as a user would see it>. <who, how many orgs, what breaks>. SEV<n>.
+Started <first seen>, after <from→to, PR #…, LLE-…>.
 
-**Evidence (prod-health, <env>, <start>–<end> UTC).**
+## Next step
+<revert / fix-forward idea / investigate with root-cause>
+
+Evidence: [<ID> prod-health evidence](<Linear document URL>)
+```
+
+Put the evidence in a Linear document on the issue
+(`bash ~/.claude/skills/linear-cli/scripts/issue-document.sh ID evidence.md -T "ID prod-health evidence"`):
+
+```markdown
+**prod-health, <env>, <start>–<end> UTC**
 - <signal>: <count> in <window> vs baseline <rate>/h (<ratio>x) — key `<finding key>`
 - Organisations: <Name (org-short)>, … (<n> total)
 - Query: `<LogQL / SQL / HogQL from the finding>`
-
-**Started.** <first seen>. Deploys just before: <from→to, PR #…, LLE-…>.
-
-**Impact.** <who, how many, what breaks>. Severity: SEV<n>.
-
-**Next step.** <revert / fix-forward idea / investigate with root-cause>.
+- Deploys in the window: <from→to, PR #…>
 ```
 
-Never paste secrets, database URLs or customer payloads. Session and org ids are fine.
+`followup.sh` creates the ticket first, so attach the document straight after and
+add its link to the description. Never paste secrets, database URLs or customer
+payloads, and never use files.myslop.app or another public host for evidence.
+Session and org ids are fine.

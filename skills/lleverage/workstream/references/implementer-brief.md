@@ -20,8 +20,11 @@ Follow ~/.claude/skills/yolo-ticket/SKILL.md for the flow, with these rules on t
   (`pnpm turbo build --filter=<pkg>^...`). If `cd` fails, stop; never fall back to cwd.
 
 ## Linear
-- Set the ticket In Progress when you start (exact state name), and comment the PR link.
-  PR titles start with the ticket id.
+- Set the ticket In Progress when you start (exact state name). PR titles start
+  with the ticket id, so Linear links the PR; don't comment the link.
+- Anything you write on a ticket follows "Writing tickets" in
+  ~/.claude/skills/workstream/references/issues.md: update the description
+  rather than commenting, and comment only to ask or notify someone.
 - Every `gh pr`/`gh issue`/`gh api repos/...` command names its repository
   explicitly (`-R OWNER/REPO` or the full API path). Never rely on the current
   checkout: running from the wrong repo edits someone else's PR with the same

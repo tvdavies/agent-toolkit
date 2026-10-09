@@ -64,7 +64,9 @@ Be precise and constructive. Explain what changed and whether anything remains. 
 
 ### Linear
 
-Give enough context to support the decision or status change. State why the issue is being closed, reopened, reassigned, or left open. Separate related work from the issue being discussed.
+Before writing a Linear comment, check that it asks a named person a real question or notifies someone who needs a ping. Status, verdicts, decisions and "what changed" belong in the ticket description instead. Ticket titles, descriptions and evidence follow "Writing tickets" in the `workstream` skill's `references/issues.md`. Linear doesn't render raw HTML such as `<details>`, so use plain Markdown.
+
+When a comment is warranted, give enough context to support the decision or status change. State why the issue is being closed, reopened, reassigned, or left open. Separate related work from the issue being discussed.
 
 ### Slack
 

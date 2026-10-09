@@ -1,16 +1,75 @@
-# Issues: readiness, slicing, follow-ups, done
+# Issues: writing, readiness, slicing, follow-ups, done
 
 Last week's lesson: 358 issues were created in five days. Half were closed within
 four hours of creation, and the next cycle opened with 83 tickets, 68 of them
 created during the run. Creating issues isn't wrong, but each one costs board
 attention. Create one only when it carries something the board needs.
 
+## Writing tickets
+
+Tom's rules for every Linear ticket a skill creates or rewrites. Someone scanning
+Triage should get the problem at a glance. Other skills point here rather than
+repeating them.
+
+- **Title:** short but descriptive, about 60 characters at most. Name the symptom
+  or the change, not the mechanism: "Billing emails never sent", not "Billing
+  emails never sent: notification-service billing Postmark client posts to
+  https://undefined via egress proxy".
+- **Description:** simple and compressed, with just enough to understand the
+  problem and fix it. Short lines and bullets, no paragraphs, plain words, nothing
+  flowery. Use this shape and leave out any section that is empty or adds
+  nothing:
+
+  ```markdown
+  **Status:** <Ready | Needs decision | Blocked on X> (<date>)
+
+  ## Problem
+  <1–3 lines: what's wrong, who is affected, since when>
+
+  ## Acceptance
+  - [ ] <checkable outcome: a test, query or smoke step confirms it>
+
+  ## Cause
+  <1–2 lines with file:line (for a change, "Where": the files and contracts);
+  related tickets and PRs>
+
+  ## Decisions
+  - Made: <decision> — <who>, <date>
+  - Open: <question>. Options: (a) …; (b) …
+
+  Size: <S | M | L, with the split for L>
+
+  Evidence and original report: [<document title>](<Linear document URL>)
+  ```
+
+- **Evidence goes in an attached document.** Supporting evidence (log and query
+  excerpts, per-organisation counts, reproduction detail), long investigation
+  notes and the reporter's original words go in a Linear document on the issue,
+  linked from the description:
+  `bash ~/.claude/skills/linear-cli/scripts/issue-document.sh ID evidence.md -T "ID evidence and original report"`.
+  Logs, CSVs and screenshots can be uploaded to the issue with the same skill's
+  `upload-attachment.sh`. Use only Linear-hosted storage. Never use
+  files.myslop.app or any other public host: ticket evidence often contains
+  customer and organisation data.
+- **Keep the reporter's words** verbatim in that document, never inline and never
+  deleted.
+- **No raw HTML.** Linear shows `<details>`, `<summary>`, `<br>` and other tags as
+  escaped text. Use plain Markdown only.
+- **Update the description, not the comments.** When the status, a verdict, a
+  decision or "what changed" moves on, edit the description; Linear keeps its
+  history. Comment only to ask a named person a real question or to notify
+  someone who needs a ping, and write it with `writing-for-humans`. Don't comment
+  a PR link: Linear links PRs whose branch or title carries the ticket ID.
+- **Someone else may be editing.** Re-read the description immediately before
+  you write, and keep anything added since you last read it.
+
 ## Readiness
 
 A ticket is ready when all of these hold:
 
 - the problem and the expected behaviour are stated, with reproduction or evidence
-  for bugs;
+  for bugs (in the attached document when it's long);
+- the ticket follows Writing tickets above;
 - acceptance criteria can be checked (by a test, a query or a smoke step);
 - the affected code is located (files, contracts, consumers);
 - product decisions are made and recorded on the ticket. Ask Tom **before**
@@ -21,7 +80,7 @@ A ticket is ready when all of these hold:
 
 Getting a ticket ready is investigation work. Follow `../../prepare-ticket/SKILL.md`
 (from a subagent: "Run the prepare-ticket skill on ID"), which writes the findings
-into the ticket description, not just a comment, and returns a verdict.
+into the ticket description rather than a comment, and returns a verdict.
 Bug causes come from `../../root-cause/SKILL.md`.
 
 ## Planning a top-level issue
@@ -65,7 +124,8 @@ When review, testing or investigation turns something up, decide in this order:
    Reviewer suggestions: fold in, push back with a reply, or follow up. Most
    should be the first two.
 2. **Add it to an existing open ticket** (`followup.sh` reports likely duplicates
-   and exits 3; comment on the match instead).
+   and exits 3). Add the finding to the match's description or evidence
+   document, and comment only when its owner needs to be told.
 3. **Create a follow-up** with `scripts/followup.sh`, which applies Tom's placement rules:
    - default: To Do, assigned to Tom, **current cycle**, parented under the
      workstream issue it came from, inheriting its project;
@@ -76,8 +136,8 @@ When review, testing or investigation turns something up, decide in this order:
    - batch several related small findings into one ticket with a checklist rather
      than one ticket each.
 
-Every follow-up states why it exists, where it came from (PR or review link) and
-what done looks like. Report the net figure (created vs closed in `issues.log`)
+Every follow-up follows Writing tickets and states why it exists, where it came
+from (PR or review link) and what done looks like. Report the net figure (created vs closed in `issues.log`)
 in every status summary. If created runs ahead of closed for a day, slow down
 creation and fold more in.
 

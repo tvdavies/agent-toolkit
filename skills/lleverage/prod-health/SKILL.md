@@ -89,10 +89,13 @@ Scripts live in `scripts/` (run any with `--help`):
      ticket you create, sub-issues and follow-ups included. Don't add the label to
      an existing ticket you dedupe onto or comment on.
 
-   On exit code 3 (a possible duplicate), comment on the existing ticket instead.
-   The body follows the template in `references/triage.md`: the symptom, the
-   window, counts against the baseline, the exact queries, organisations named by
-   name, the candidate deploys and PRs, and the impact.
+   On exit code 3 (a possible duplicate), add the new occurrence to the existing
+   ticket's evidence document or description instead, and comment only when its
+   owner needs to know it recurred. Tickets follow "Writing tickets" in
+   `../workstream/references/issues.md`, with the body in `references/triage.md`:
+   a short symptom title and a few lines on the ticket (symptom, impact, start,
+   suspected deploy, next step), with the window, counts against the baseline,
+   exact queries and organisations by name in the attached evidence document.
 7. **Teach the baseline.** When Tom or the ticket owner confirms that a finding
    is normal, run `scripts/baseline.sh accept <finding-key> --note "<why>"`,
    which raises that key's baseline rate. Use `baseline.sh noise add '<glob>'
@@ -135,8 +138,9 @@ Fix forward means: the Triage ticket filed through `followup.sh`, then
 `prepare-ticket` on it, then `yolo-ticket` if it is Ready. The caller runs those;
 the run that found the problem only files and returns.
 
-If `prepare-ticket` later says Needs decision or Blocked, park the ticket with a
-comment saying what is needed and return the decision to the caller.
+If `prepare-ticket` later says Needs decision or Blocked, park the ticket with
+what is needed in its description (Status and Decisions) and return the decision
+to the caller.
 
 ## Investigating a finding
 

@@ -87,6 +87,9 @@ Lead with the answer, then the evidence:
 Separate facts from inference everywhere. "Probably" belongs only in
 **Not established**.
 
-If the user asked for it, or the investigation started from a ticket, post the
-findings as a Linear comment using `writing-for-humans`. Change ticket state only
-when asked.
+If the user asked for it, or the investigation started from a ticket, record the
+findings on the ticket following "Writing tickets" in
+`../workstream/references/issues.md`: the cause in one or two lines with
+file:line in the description, and this full report in the ticket's evidence
+document. Comment only when someone has to be asked or told, using
+`writing-for-humans`. Change ticket state only when asked.

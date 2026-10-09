@@ -19,7 +19,9 @@ after a compaction:
 
 - `../workstream/references/orchestration.md`: state, the loop, capacity, the
   PR watcher, the human queue, the empty-queue procedure, and communication
-- `../workstream/references/issues.md`: readiness, slicing, follow-ups, done, closeout
+- `../workstream/references/issues.md`: writing tickets, readiness, slicing,
+  follow-ups, done, closeout. Every ticket a sweep creates or rewrites follows
+  its "Writing tickets" rules.
 - `../workstream/references/merge-and-review.md`
 - `../workstream/references/verification.md`
 - `../workstream/references/implementer-brief.md`

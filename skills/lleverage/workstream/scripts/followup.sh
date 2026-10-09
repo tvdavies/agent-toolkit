@@ -14,6 +14,9 @@ Options:
   --triage          A separate bug unrelated to the workstream: Triage, unassigned, no cycle.
   -p, --priority N  1 urgent, 2 high, 3 normal (default), 4 low.
   -d, --description TEXT   Markdown body. Say why it exists and what done looks like.
+                    Keep the title short and the body lean, with evidence in an
+                    issue document: see references/issues.md, Writing tickets.
+                    Raw <details>/<summary> HTML is refused (Linear shows it escaped).
   -l, --label NAME|ID  Label by name or id (repeatable). A name resolves to a
                     workspace label or one of the team's; an id is used as is.
   --project NAME    Project name (overrides the parent's).
@@ -51,6 +54,9 @@ done
 [ -n "$title" ] || { usage >&2; exit 2; }
 $later && $triage && die "--later and --triage are exclusive"
 [[ "$priority" =~ ^[1-4]$ ]] || die "priority must be 1-4"
+if printf '%s' "$desc" | grep -qiE '</?(details|summary)([[:space:]>]|$)'; then
+  die "the description has raw <details>/<summary> HTML, which Linear shows as escaped text. Put long evidence and the original report in an issue document instead (references/issues.md, Writing tickets)"
+fi
 
 lq() { linear-cli api query "$@" --output json --compact --quiet; }
 lm() { linear-cli api mutate "$@" --output json --compact --quiet; }
