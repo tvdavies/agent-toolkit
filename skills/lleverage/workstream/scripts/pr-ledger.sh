@@ -121,12 +121,14 @@ status() { # repo pr -> one-line status via gh, or ERROR text on stderr with non
 
 # Adds each complete snapshot in a prwatch status array to the caller's `got` map.
 # Incomplete snapshots are partial data: leave them out so they report as errors.
+# The JSON is piped, not passed as a here-string: bash spools a here-string larger
+# than a pipe buffer to a file in $TMPDIR or /tmp, and a full /tmp would break the read.
 collect_prwatch() {
   local ref line
   while IFS=$'\t' read -r ref line; do
     [ -n "$ref" ] && got["$ref"]="$line"
-  done < <(jq -r "$FMT $FROM_PRWATCH"'.[] | select(.incomplete | not)
-    | "\("\(.owner)/\(.repo)#\(.number)" | ascii_downcase)\t\(norm | fmt)"' <<<"$1")
+  done < <(printf '%s' "$1" | jq -r "$FMT $FROM_PRWATCH"'.[] | select(.incomplete | not)
+    | "\("\(.owner)/\(.repo)#\(.number)" | ascii_downcase)\t\(norm | fmt)"')
 }
 
 # Every ledger row as "repo<TAB>pr<TAB>ticket<TAB>owner<TAB>status", where status is
@@ -150,18 +152,22 @@ status_all() {
   while IFS=$'\t' read -r repo pr _; do
     [ -n "$repo" ] && valid_ref "$repo" "$pr" && refs+=("$repo#$pr")
   done < "$LEDGER"
-  err="$(mktemp "${TMPDIR:-/tmp}/pr-ledger-err.XXXXXX")"
+  # prwatch's stderr names the PRs that failed. Keep it in the workstream's own state
+  # directory, not /tmp: a full /tmp (tmpfs, which can also run out of inodes) must not
+  # break the watcher. If even this file can't be made, read status without the error
+  # detail rather than failing the pass.
+  err="$(mktemp "$CACHE/.status-err.XXXXXX" 2>/dev/null)" || err=/dev/null
   # Exits non-zero when any PR failed; the others are still printed. A failure of
   # the whole call (no array back) would hide every PR, so then read them one by one.
   if [ "${#refs[@]}" -gt 0 ]; then
     out="$(prwatch status --json "${refs[@]}" 2>"$err")" || true
-    if jq -e 'type == "array"' <<<"$out" >/dev/null 2>&1; then
+    if printf '%s' "$out" | jq -e 'type == "array"' >/dev/null 2>&1; then
       collect_prwatch "$out"
     elif [ "${#refs[@]}" -gt 1 ]; then
       : > "$err"
       for ref in "${refs[@]}"; do
         out="$(prwatch status --json "$ref" 2>>"$err")" || true
-        jq -e 'type == "array"' <<<"$out" >/dev/null 2>&1 && collect_prwatch "$out"
+        printf '%s' "$out" | jq -e 'type == "array"' >/dev/null 2>&1 && collect_prwatch "$out"
       done
     fi
   fi
@@ -181,7 +187,7 @@ status_all() {
     fi
     printf '%s\t%s\t%s\t%s\t%s\n' "$repo" "$pr" "$ticket" "$owner" "$s"
   done < "$LEDGER"
-  rm -f "$err"
+  [ "$err" = /dev/null ] || rm -f "$err"
 }
 
 # One pass over the ledger: print CHANGE/ATTENTION/MERGED/CLOSED/ERROR lines.
@@ -229,7 +235,7 @@ stop_events() {
 }
 watch_prwatch() {
   local evfd ev_set="" want line settle args
-  EV_FIFO="$(mktemp -u "${TMPDIR:-/tmp}/pr-ledger-events.XXXXXX")"
+  EV_FIFO="$(mktemp -u "$CACHE/.events-fifo.XXXXXX")"
   mkfifo -m 600 "$EV_FIFO"
   exec {evfd}<>"$EV_FIFO"
   trap 'stop_events; rm -f "$EV_FIFO"' EXIT
