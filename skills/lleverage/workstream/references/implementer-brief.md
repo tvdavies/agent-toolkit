@@ -22,6 +22,10 @@ Follow ~/.claude/skills/yolo-ticket/SKILL.md for the flow, with these rules on t
 ## Linear
 - Set the ticket In Progress when you start (exact state name), and comment the PR link.
   PR titles start with the ticket id.
+- Every `gh pr`/`gh issue`/`gh api repos/...` command names its repository
+  explicitly (`-R OWNER/REPO` or the full API path). Never rely on the current
+  checkout: running from the wrong repo edits someone else's PR with the same
+  number.
 - Branch names and PR titles carry only your own (leaf) ticket id, never ROOT
   (<ROOT>) or any parent. Linear links an issue whose id is in the branch name or
   title and marks it Done when the PR merges, which drops the workstream's claim.
