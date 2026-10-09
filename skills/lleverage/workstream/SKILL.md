@@ -72,6 +72,11 @@ invariants as tests. Use read-only investigators (`sol-investigator`,
 Ask for decisions only when they are Tom's to make. Answer your own open questions
 by investigating.
 
+If ROOT was built with `/epicify`, phases 1 and 2 are mostly done: its Decisions
+and Open questions sections are the starting point. Check that nothing has moved
+since (new PRs, changed code, answers Tom left in Linear) rather than planning
+again, and treat edits Tom made to the tree as decisions.
+
 ## Phase 2: slice and ready
 
 Create sub-issues per `issues.md`, Slicing: value-sized slices, lanes for shared
