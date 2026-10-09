@@ -37,13 +37,18 @@ ADB=$(grep '^DATABASE_URL=' .env | tail -n 1 | cut -d= -f2- | sed -e 's/^"//' -e
 psql "$SDB" -c "SELECT count(*) AS sessions, max(last_activity_at) AS latest FROM sessions;"
 ```
 
-If the window you need to analyse is newer than `latest`, either refresh the backup (takes a few minutes, drops and recreates the local DBs, requires `gcloud auth application-default login` and `cloud-sql-proxy`):
+If the window you need to analyse is newer than `latest`, either refresh the backup (takes a few minutes, drops and recreates the local DBs, needs `cloud-sql-proxy` and Google Cloud credentials that can read the two prod DB secrets; see [Google Cloud access](#google-cloud-access)):
 
 ```bash
 tooling/scripts/prod-db-to-local.sh --database session   # add --database all to refresh the main DB too
 ```
 
 …or fall back to Loki for the recent window and say so in your findings.
+
+### Google Cloud access
+
+- **Under Sal** (a Sal conversation or worker): Sal's service account is already set up. `GOOGLE_APPLICATION_CREDENTIALS`, `CLOUDSDK_CONFIG` and `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE` point gcloud and `cloud-sql-proxy` at its key, so the script works as is. Never run `gcloud auth login` or `gcloud auth application-default login`. If gcloud says Sal's key is missing, or access is denied, stop and report it: Tom fixes it with `scripts/gcp/create-sal-service-account.sh` in tvdavies/sal (its `docs/guides/google-cloud.md`).
+- **Interactively, as yourself**: `gcloud auth login` and `gcloud auth application-default login`.
 
 ## Resolving scope
 
