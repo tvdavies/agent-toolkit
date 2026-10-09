@@ -87,3 +87,20 @@ describe("followup.sh labels", () => {
     expect(result.created[0].labelIds).toBeUndefined();
   });
 });
+
+describe("followup.sh descriptions", () => {
+  test("raw <details> HTML is refused because Linear renders it escaped", () => {
+    const desc = "## Problem\nBroken.\n\n<details><summary>Original report</summary>\n\nWords\n</details>";
+    const result = run(["--triage", "-d", desc, "Billing emails never sent"]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("Writing tickets");
+    expect(result.created).toHaveLength(0);
+  });
+
+  test("plain Markdown with angle-bracket placeholders is accepted", () => {
+    const desc = "## Problem\nThe `<id>` route fails for `Map<string, Detail>`.\n\nEvidence: [LLE-1 evidence](https://linear.app/x/document/y)";
+    const result = run(["--triage", "-d", desc, "Route fails"]);
+    expect(result.status).toBe(0);
+    expect(result.created[0].description).toBe(desc);
+  });
+});

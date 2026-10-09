@@ -12,7 +12,8 @@ source "$(dirname "$0")/_check-deps.sh"
 #   --no-cycle          Do not add the issue to the current cycle
 #   --triage            Create in Triage, unassigned and without a cycle
 #   -l, --label LABEL   Label to add (can repeat)
-#   -d, --description   Description (markdown)
+#   -d, --description   Description (markdown). Keep it lean and free of raw HTML;
+#                       put evidence in issue-document.sh (workstream issues.md, Writing tickets)
 #   --due DATE          Due date (today, tomorrow, +3d, +1w, YYYY-MM-DD)
 #   -e, --estimate N    Estimate in points
 #   --project NAME      Add to a project
@@ -65,7 +66,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-cycle          Do not add to the current cycle"
             echo "  --triage            Create in Triage, unassigned and without a cycle"
             echo "  -l, --label LABEL   Label (repeatable)"
-            echo "  -d, --description   Description (markdown)"
+            echo "  -d, --description   Description (markdown). Keep it lean, no raw HTML;"
+            echo "                      evidence goes in issue-document.sh (issues.md, Writing tickets)"
             echo "  --due DATE          Due date"
             echo "  -e, --estimate N    Estimate in points"
             echo "  --project NAME      Add to project"

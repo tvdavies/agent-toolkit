@@ -7,6 +7,10 @@ description: Upload a local file (screenshot, recording, log, HTML artifact) to 
 
 Upload files to https://files.myslop.app and get back a permanent URL.
 
+The URL is public. Never use it for Linear ticket evidence or anything holding
+customer or organisation data: attach those to the issue with the `linear-cli`
+skill's `issue-document.sh` or `upload-attachment.sh` instead.
+
 ## Token
 
 Resolve the API token in this order:

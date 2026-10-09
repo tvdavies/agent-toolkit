@@ -58,7 +58,9 @@ When running `linear-cli` commands:
 
 Standard agent flags: `--output json --compact --no-pager --quiet`
 
-## Human-Facing Comments
+## Writing Tickets and Comments
+
+Ticket titles, descriptions, evidence and comments follow "Writing tickets" in the `workstream` skill's `references/issues.md`: a short title, a lean description, evidence and the original report in a Linear document on the issue (`scripts/issue-document.sh`), no raw HTML such as `<details>` (Linear shows it escaped), and description edits rather than status comments. Never put ticket evidence on files.myslop.app or any other public host.
 
 Before creating or updating a Linear comment, load the installed `writing-for-humans` skill by name and apply its send-ready process to the final draft. Complete that pass before running `linear-cli issues comment`. Preserve issue identifiers, links, mentions, and technical details that affect the decision or next action.
 
@@ -76,6 +78,7 @@ Helper scripts are in `scripts/` within this skill directory. They accept both h
 | `quick-create` | Create issue with common defaults |
 | `get-issue-context` | Extract all media from an issue: screenshots, Loom video frames, transcripts |
 | `upload-attachment` | Upload a LOCAL file and attach it to an issue (handles Linear's `fileUpload` flow) |
+| `issue-document` | Create a Linear document on an issue from a Markdown file (ticket evidence, original report) and print its URL |
 
 Run any script with `--help` for usage.
 
@@ -135,7 +138,13 @@ bash scripts/quick-create.sh TEAM "Title" -p 3
 bash scripts/quick-create.sh TEAM "Title" --triage -l bug
 ```
 
-### Step 2a: Attaching Local Files to Issues
+### Step 2a: Attaching Evidence and Local Files to Issues
+
+For ticket evidence, long investigation notes or the reporter's original words, create a Linear document on the issue and link it from the description:
+
+```bash
+bash scripts/issue-document.sh LLE-123 ./evidence.md -T "LLE-123 evidence and original report"
+```
 
 `linear-cli attachments create` can only link an **existing `--url`** — it cannot upload a
 local file. To attach a real file (markdown plan, PDF, screenshot, CSV, …) use the wrapper,
@@ -327,7 +336,7 @@ Actions:
 User says: "Create a bug for the login page not loading"
 Actions:
 1. Use LLE unless the user specifies another team (LEG, LLEV, DES, EDU, FDE).
-2. For an internally raised bug, run `bash scripts/quick-create.sh LLE "Login page not loading" -l bug -p 2 --json`. This creates it in To Do, assigns it to me, and adds it to the current cycle.
+2. Keep the title short and the description lean, per "Writing tickets and comments" above. For an internally raised bug, run `bash scripts/quick-create.sh LLE "Login page not loading" -l bug -p 2 --json`. This creates it in To Do, assigns it to me, and adds it to the current cycle.
 3. Only if it is externally raised and needs triage, run `bash scripts/quick-create.sh LLE "Login page not loading" --triage -l bug -p 2 --json`.
 4. Report the created issue ID and link.
 

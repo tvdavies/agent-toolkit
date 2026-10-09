@@ -16,7 +16,9 @@ subagents write the code. Read these before starting, and again after a compacti
 
 - `references/orchestration.md`: state, the loop, capacity, the PR watcher,
   the human queue, the empty-queue procedure, and communication
-- `references/issues.md`: readiness, planning, slicing, follow-ups, done, closeout
+- `references/issues.md`: writing tickets, readiness, planning, slicing,
+  follow-ups, done, closeout. Every ticket you create or rewrite follows its
+  "Writing tickets" rules.
 - `references/merge-and-review.md`: merge policy, review economics, main health
 - `references/verification.md`: health ticks, smoke tests, staged rollout, incidents
 - `references/implementer-brief.md`: the brief every implementer follows

@@ -106,7 +106,12 @@ Resolve exactly one ticket identifier before proceeding.
    or the command's exit code is not verification. If the named state is missing
    or either field differs, stop `BLOCKED`; do not choose another started state,
    continue implementation, or repeatedly overwrite a concurrent status change.
-5. If required ticket retrieval or the state update fails after transient
+5. Anything you write on the ticket (description edits, follow-ups, comments)
+   follows "Writing tickets" in the `workstream` skill's `references/issues.md`
+   when that skill is installed: edit the description rather than commenting
+   status, no raw HTML, and evidence in a Linear document on the issue, never
+   on a public host.
+6. If required ticket retrieval or the state update fails after transient
    retries, stop and report the exact command and error. Do not begin code
    changes against incomplete authoritative context.
 
