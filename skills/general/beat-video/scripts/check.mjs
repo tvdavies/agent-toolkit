@@ -12,7 +12,7 @@ import { openVideo } from "./lib/page.mjs";
 
 const dir = path.resolve(process.argv[2] || ".");
 const { browser, page, errors } = await openVideo(dir);
-const issues = errors.map((e) => ({ level: "error", t: "-", msg: `page: ${e}` }));
+const issues = [];
 
 const meta = await page.evaluate(() => ({ end: window.DURATION, scenes: window.SCENES, bars: window.BEATS.bars }));
 // Coverage: exactly one scene on screen at every moment.
@@ -22,7 +22,8 @@ for (let t = 0; t < meta.end; t += 0.05) {
 }
 const first = meta.scenes.find((s) => s.from <= 0 && s.to > 0);
 issues.push({ level: "info", t: "0", msg: `frame 0 (the thumbnail) is #${first ? first.id : "nothing"}` });
-for (const s of meta.scenes) if (s.from > 0.5 && !meta.bars.some((b) => Math.abs(b - s.from) < 0.03)) issues.push({ level: "warn", t: s.from.toFixed(2), msg: `#${s.id} starts off the bar grid` });
+for (const s of meta.scenes) if (s.from >= meta.end) issues.push({ level: "error", t: s.from.toFixed(2), msg: `#${s.id} starts after the end (${meta.end.toFixed(1)}s): it never shows; shorten the plan or raise window.END` });
+for (const s of meta.scenes) if (s.from > 0.5 && s.from < meta.end && !meta.bars.some((b) => Math.abs(b - s.from) < 0.03)) issues.push({ level: "warn", t: s.from.toFixed(2), msg: `#${s.id} starts off the bar grid` });
 
 const layout = () => {
   const out = [], frame = document.querySelector(".mv-frame").getBoundingClientRect();
@@ -36,7 +37,8 @@ const layout = () => {
   const generic = new Set(["serif", "sans-serif", "monospace", "system-ui", "ui-sans-serif", "ui-monospace", "ui-serif", "cursive", "-apple-system"]);
   for (const el of texts) {
     const fam = getComputedStyle(el).fontFamily.split(",")[0].trim().replace(/["']/g, "");
-    if (!generic.has(fam) && !loaded.has(fam) && !document.fonts.check(`16px "${fam}"`)) out.push(["error", `font "${fam}" is not loaded (falls back): ${name(el)}`]);
+    // document.fonts.check() is true for families nobody declared, so require a loaded @font-face instead.
+    if (!generic.has(fam) && !loaded.has(fam)) out.push(["error", `font "${fam}" is not a loaded @font-face (it falls back; declare it locally or lead with a generic family): ${name(el)}`]);
   }
   const rect = (el) => { const r = el.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom }; };
   for (const el of texts) {
@@ -58,7 +60,7 @@ const layout = () => {
   }
   return out;
 };
-for (const s of meta.scenes) {
+for (const s of meta.scenes.filter((x) => x.from < meta.end)) {
   const seen = new Set();
   for (const f of [0.25, 0.5, 0.97]) {
     const t = +(s.from + (s.to - s.from) * f).toFixed(2);
@@ -66,6 +68,8 @@ for (const s of meta.scenes) {
     for (const [level, msg] of await page.evaluate(layout)) if (!seen.has(msg)) { seen.add(msg); issues.push({ level, t, msg: `#${s.id}: ${msg}` }); }
   }
 }
+// Errors from loading and from every seek above (render code, missing icons and assets).
+for (const e of errors) issues.push({ level: "error", t: "-", msg: `page: ${e}` });
 await browser.close();
 const order = { error: 0, warn: 1, info: 2 };
 issues.sort((a, b) => order[a.level] - order[b.level]);

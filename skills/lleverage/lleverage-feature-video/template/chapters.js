@@ -115,7 +115,7 @@ const CHAPTERS = (() => {
     app: () => `<main class="panel both"><div class="wa">${card("r1", ["passed", "Submitted"], "14 November 2026")}<div id="r2w">${card("r2", ["running", "New response"], "21 November 2026")}</div></div>
       ${UI.resubmitDialog("dlg", "Supplier order confirmation")}</main>`,
     cam: (c) => [[c.bar(0), 640, 290, 1.3], [c.bar(3), 640, 290, 1.3]],
-    init(el, c) { this.cur = MV.cursor($(".ch-stage", el), [[c.b(0, 1), 980, 760], [c.b(0, 2.6), $("#r1-btn")], [c.b(0, 3), $("#r1-btn"), true], [c.b(1, 2.4), $("#dlg-ok")], [c.b(1, 3), $("#dlg-ok"), true], [c.b(2, 1), 1060, 780]]); },
+    init(el, c) { this.cur = MV.cursor($(".ch-stage", el), [[c.b(0, 1), 980, 760], [c.b(0, 2.6), $("#r1-btn")], [c.b(0, 3), $("#r1-btn"), true], [c.b(1, 2.4), $("#dlg-ok")], [c.b(1, 3), $("#dlg-ok"), true], [c.b(2, 1), 1060, 780]], c.cam); },
     render(t, el, c) {
       this.cur(t);
       const q = MV.out(p(t, c.b(0, 3.1), c.b(0, 3.4))) * (1 - p(t, c.b(1, 3.1), c.b(1, 3.3)));

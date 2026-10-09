@@ -76,22 +76,29 @@ const MV = (() => {
   // (x, y) = the point of el centred in the viewport.
   function camera(el, vw, vh, keys) {
     el.style.transformOrigin = "0 0";
-    const f = (t) => {
+    const state = (t) => {
       let [, x, y, s] = keys[0];
       for (let i = 0; i < keys.length - 1; i++) {
         const [a, ax, ay, as] = keys[i], [z, bx, by, bs] = keys[i + 1];
         if (t > z) { x = bx; y = by; s = bs; continue; }
         if (t >= a) { const e = io(p(t, a, z)); x = lerp(ax, bx, e); y = lerp(ay, by, e); s = Math.exp(lerp(Math.log(as), Math.log(bs), e)); }
       }
-      el.style.transform = `translate(${vw / 2 - x * s}px, ${vh / 2 - y * s}px) scale(${s})`;
+      return { x, y, s };
     };
+    const f = (t) => { const { x, y, s } = state(t); el.style.transform = `translate(${vw / 2 - x * s}px, ${vh / 2 - y * s}px) scale(${s})`; };
+    f.el = el;
+    // Where a point of el (in its own, untransformed coordinates) appears in the viewport at time t.
+    f.map = (t, px, py) => { const { x, y, s } = state(t); return [vw / 2 + (px - x) * s, vh / 2 + (py - y) * s]; };
     return f;
   }
   // Centre of el relative to host, as laid out now (after the camera has moved).
   function at(el, host) { const r = el.getBoundingClientRect(), h = host.getBoundingClientRect(); return [r.left - h.left + r.width / 2, r.top - h.top + r.height / 2]; }
-  // Cursor inside host: keys [[t, x, y, click?], ...]. x may be an element (or a function returning one or [x, y]);
-  // targets are measured on the first frame the cursor draws, so they follow the camera and layout.
-  function cursor(host, keys) {
+  // Cursor inside host: keys [[t, x, y, click?], ...]. x may be an element (or a function returning one or [x, y]),
+  // with the click flag in the y slot: [t, el, true]. With a camera (cursor(host, keys, cam), host = the camera's
+  // viewport), an element inside the camera is measured in the camera element's own coordinates, which no transform
+  // changes, and mapped through the camera at the key's time, so every frame is the same whichever is drawn first.
+  // Targets must be laid out (not display:none) when the cursor first draws.
+  function cursor(host, keys, cam) {
     const el = document.createElement("div");
     el.className = "mv-cursor";
     el.innerHTML = `<div class="ring"></div><svg viewBox="0 0 24 24" width="40" height="40"><path d="M3 2l7 19 2.6-7.4L20 11z" fill="#141413" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
@@ -101,7 +108,10 @@ const MV = (() => {
     return (t) => {
       if (!pts) pts = keys.map(([kt, x, y, click]) => {
         let v = typeof x === "function" ? x() : x;
-        if (v instanceof Element) v = at(v, host);
+        if (v instanceof Element && cam && cam.el.contains(v)) {
+          const c = cam.el.getBoundingClientRect(), r = v.getBoundingClientRect(), k = c.width / cam.el.offsetWidth;
+          v = cam.map(kt, (r.left - c.left + r.width / 2) / k, (r.top - c.top + r.height / 2) / k);
+        } else if (v instanceof Element) v = at(v, host);
         return Array.isArray(v) ? [kt, v[0], v[1], y === true || click] : [kt, x, y, click];
       });
       let x = pts[0][1], y = pts[0][2];

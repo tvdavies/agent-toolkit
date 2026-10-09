@@ -23,6 +23,8 @@ cpSync(template, dir, { recursive: true });
 for (const f of ["mv.js", "mv.css", "kinds.js", "kinds.css"]) cpSync(path.join(here, "..", "engine", f), path.join(dir, f));
 const index = path.join(dir, "index.html");
 writeFileSync(index, readFileSync(index, "utf8").replace(/window\.FORMAT = "[^"]*"/, `window.FORMAT = "${size}"`));
+// No credit until music.mjs writes one (a silent video has none); the end card then shows no credit line.
+if (!existsSync(path.join(dir, "credit.js"))) writeFileSync(path.join(dir, "credit.js"), "window.CREDIT = null;\n");
 writeFileSync(path.join(dir, "format.json"), JSON.stringify({ size }, null, 1) + "\n");
 writeFileSync(path.join(dir, ".gitignore"), "music.mp3\nout/\ncheck/\n*.parts/\n");
 console.log(`video folder ${dir} at ${size} from ${template}

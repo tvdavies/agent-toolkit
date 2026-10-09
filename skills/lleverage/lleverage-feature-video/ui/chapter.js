@@ -15,7 +15,8 @@
       ${o.app ? `<div class="ch-stage" data-crop><div class="app"></div></div>` : `<div class="ch-body">${o.body || ""}</div>`}
       <div class="ch-foot"><span>lleverage.ai</span><span>${o.foot || "Live now"}</span></div>`);
     let cam = null;
-    const local = (c) => ({ ...c, b: (i, n = 0) => MV.b(c.bar0 + i, n), bar: (i) => MV.bar(c.bar0 + i) });
+    // c.cam is the chapter camera: pass it to MV.cursor(stage, keys, c.cam) so cursor targets follow it.
+    const local = (c) => ({ ...c, cam, b: (i, n = 0) => MV.b(c.bar0 + i, n), bar: (i) => MV.bar(c.bar0 + i) });
     return {
       el,
       init(c) {
@@ -31,7 +32,7 @@
           const keys = (o.cam ? o.cam(cc) : [[0, 640, 400, 0.86]]).map(([t, x, y, s]) => [t, x, y, s * k]);
           cam = MV.camera($(".app", el), vw, vh, keys);
         }
-        o.init && o.init(el, cc);
+        o.init && o.init(el, local(c));
       },
       render(t, c) {
         const cc = local(c);

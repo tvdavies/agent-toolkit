@@ -27,7 +27,7 @@ describe("beat-video", () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), "bv-")), "video");
     const r = run(path.join(beat, "scripts/new.mjs"), [dir, "--format", "1080x1350"]);
     expect(r.status, r.stderr).toBe(0);
-    for (const f of ["index.html", "content.js", "theme.css", "mv.js", "mv.css", "kinds.js", "kinds.css", "format.json", ".gitignore"]) expect(readdirSync(dir)).toContain(f);
+    for (const f of ["index.html", "content.js", "theme.css", "mv.js", "mv.css", "kinds.js", "kinds.css", "format.json", ".gitignore", "credit.js"]) expect(readdirSync(dir)).toContain(f);
     expect(readFileSync(path.join(dir, "index.html"), "utf8")).toContain('window.FORMAT = "1080x1350"');
     expect(readFileSync(path.join(dir, ".gitignore"), "utf8")).toContain("music.mp3");
     const again = run(path.join(beat, "scripts/new.mjs"), [dir]);

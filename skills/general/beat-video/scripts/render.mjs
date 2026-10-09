@@ -6,8 +6,8 @@
 //      POSTER (second for the thumbnail, default 0: the cover), DRAFT=1 (30 fps, CRF 24, fast preset).
 // Writes <out>.png beside the video (the thumbnail). A 2-minute 1080p60 video takes about 9 minutes on 8 workers.
 import { spawn } from "node:child_process";
-import { cpus } from "node:os";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpus, tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { browser, ffmpeg } from "./lib/deps.mjs";
 import { openVideo } from "./lib/page.mjs";
@@ -32,8 +32,8 @@ if (probe.errors.length) console.warn("page errors:\n  " + probe.errors.join("\n
 
 const FROM = Number(process.env.FROM) || 0, UNTIL = Math.min(Number(process.env.UNTIL) || END, END);
 const f0 = Math.round(FROM * FPS), f1 = Math.round(UNTIL * FPS), total = f1 - f0;
-const tmp = out.replace(/\.mp4$/, "") + ".parts";
-rmSync(tmp, { recursive: true, force: true }); mkdirSync(tmp, { recursive: true });
+// Parts live in a temporary directory with a safe name: the concat list never has to quote a user's path.
+const tmp = mkdtempSync(path.join(tmpdir(), "beat-video-"));
 console.log(`${w}x${h} @ ${FPS} fps, ${(total / FPS).toFixed(1)}s, ${total} frames on ${WORKERS} workers`);
 
 let done = 0, last = Date.now();
@@ -64,7 +64,8 @@ const parts = (await Promise.all(Array.from({ length: WORKERS }, (_, i) => [f0 +
 await b.close();
 
 const list = path.join(tmp, "list.txt");
-writeFileSync(list, parts.map((f) => `file '${f}'`).join("\n"));
+// Part names are ours (part-NN.mp4) and relative to the list, so no path needs quoting.
+writeFileSync(list, parts.map((f) => `file '${path.basename(f)}'`).join("\n"));
 const thumb = out.replace(/\.mp4$/, ".png");
 writeFileSync(thumb, poster);
 const dur = total / FPS, fade = Number(process.env.FADE ?? 3);

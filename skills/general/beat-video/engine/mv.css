@@ -3,7 +3,7 @@
 :root {
   --mv-bg: #f7f6f2; --mv-ink: #16181c; --mv-muted: #6b6b66; --mv-accent: #e8742a; --mv-dark: #15191f; --mv-on-dark: #f7f6f2;
   --mv-on-dark-muted: #9a9a95; --mv-hair: #d9d8d2;
-  --mv-display: Georgia, "Times New Roman", serif; --mv-sans: system-ui, -apple-system, "Segoe UI", sans-serif; --mv-mono: ui-monospace, Menlo, monospace;
+  --mv-display: ui-serif, Georgia, serif; --mv-sans: system-ui, sans-serif; --mv-mono: ui-monospace, Menlo, monospace;
   --mv-wipe: var(--mv-accent);
 }
 * { box-sizing: border-box; }
