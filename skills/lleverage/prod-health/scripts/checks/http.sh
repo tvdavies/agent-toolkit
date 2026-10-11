@@ -7,6 +7,8 @@
 #   - Loki structured request logs: JSON lines with status/statusCode plus
 #     endpoint/url/path/route (app, credential-service, gotenberg, ...), and
 #     uvicorn access lines ("GET /path HTTP/1.1" 401). Routes are normalised.
+#     JSON lines with a status but no path and no method aren't requests
+#     (Kubernetes API retries, outbound-call failures, metric lines) and are skipped.
 # Health checks, metrics scrapes and kube probes are excluded.
 set -uo pipefail
 . "$(dirname "$0")/../lib/common.sh"
@@ -45,34 +47,12 @@ if ph_ensure_loki; then
   PROBE='(?i)"(url|path|endpoint|uri)":"/(health|healthz|ready|readyz|live|livez|metrics)[/"?]'
   json_q="sum by (namespace, method, endpoint, url, path, route, uri, status, statusCode) (count_over_time($SEL |~ \`\"(status|statusCode)\":\\s*\"?[45][0-9]{2}\\b\` !~ \`$PROBE\` | json method=\"method\", endpoint=\"endpoint\", url=\"url\", path=\"path\", route=\"route\", uri=\"uri\", status=\"status\", statusCode=\"statusCode\" | __error__=\"\" [$W]))"
   acc_q="sum by (namespace, method, path, status) (count_over_time($SEL |~ \`\" [45][0-9]{2} \` !~ \`/(health|metrics|ready|live)\` | regexp \`\"(?P<method>[A-Z]+) (?P<path>\\S+) HTTP/[0-9.]+\" (?P<status>[45][0-9]{2})\` | __error__=\"\" [$W]))"
-  rows="$(ph_tmp)/routes.tsv"
-  {
-    ph_loki_metric "$json_q" | jq -r '.[] | .metric as $m | [($m.namespace // ""), ($m.method // ""),
-        ($m.endpoint // $m.route // $m.path // $m.url // $m.uri // "?"), ($m.status // $m.statusCode // ""), (.value[1])] | @tsv' \
-      || ph_unavailable "Loki structured request-log query failed"
-    ph_loki_metric "$acc_q" | jq -r '.[] | .metric as $m | [($m.namespace // ""), ($m.method // ""), ($m.path // "?"), ($m.status // ""), (.value[1])] | @tsv' \
-      || ph_unavailable "Loki access-log query failed"
-  } >"$rows"
-  agg="$(python3 - "$rows" "$PH_LIB_DIR" <<'PY'
-import sys, json
-sys.dont_write_bytecode = True
-sys.path.insert(0, sys.argv[2])
-from normalise import route
-agg = {}
-for line in open(sys.argv[1], encoding="utf-8"):
-    parts = line.rstrip("\n").split("\t")
-    if len(parts) != 5 or not parts[3] or parts[3][0] not in "45":
-        continue
-    ns, method, path, status, n = parts
-    cls = "org-*" if ns.startswith("org-") else ns
-    a = agg.setdefault((cls, method, route(path), status), {"n": 0, "nss": {}})
-    a["n"] += int(float(n))
-    a["nss"][ns] = a["nss"].get(ns, 0) + int(float(n))
-for (cls, method, r, status), a in sorted(agg.items(), key=lambda kv: -kv[1]["n"]):
-    top = max(a["nss"], key=a["nss"].get)
-    print(json.dumps({"cls": cls, "ns": top, "nss": a["nss"], "method": method, "route": r, "status": status, "n": a["n"]}))
-PY
-)"
+  jres="$(ph_tmp)/routes-json.json"; ares="$(ph_tmp)/routes-access.json"
+  ph_loki_metric "$json_q" >"$jres" || { echo '[]' >"$jres"; ph_unavailable "Loki structured request-log query failed"; }
+  ph_loki_metric "$acc_q" >"$ares" || { echo '[]' >"$ares"; ph_unavailable "Loki access-log query failed"; }
+  out="$(PYTHONDONTWRITEBYTECODE=1 python3 "$PH_LIB_DIR/normalise.py" http-routes "$jres" "$ares")"
+  agg="$(grep -v '"skipped_no_path"' <<<"$out")"
+  ph_data http_skipped_no_path "$(grep '"skipped_no_path"' <<<"$out" | jq '.skipped_no_path' 2>/dev/null || echo 0)"
   nroutes=0
   while read -r a; do
     [ -n "$a" ] || continue
@@ -83,10 +63,10 @@ PY
       *) o='{"min_new":20,"min_spike":30,"hint":"low"}' ;; esac
     ph_series "http.route:$cls|$(jq -r '"\(.method) \(.route)|\(.status)"' <<<"$a" | sed 's/^ //')" "$(jq -r .n <<<"$a")" \
       "$(jq -r '"HTTP \(.status) on \(if (.nss | length) > 1 then "\(.cls) (\(.nss | length) ns)" else .ns end) \(.method) \(.route)"' <<<"$a" | sed 's/  / /')" \
-      "$(jq -c --arg ns "$ns" --arg q "{namespace=\"$ns\"} |= \"$(jq -r .route <<<"$a" | sed 's#/:.*##')\" |~ \"$st\"" --argjson nss "$(jq -c .nss <<<"$a")" \
+      "$(jq -c --arg ns "$ns" --arg q "$(jq -r .query <<<"$a")" --argjson nss "$(jq -c .nss <<<"$a")" \
         '. + {rules:["new","spike"], namespace:$ns, evidence:{query:$q, namespaces:$nss}}' <<<"$o")"
   done <<<"$agg"
-  ph_data routes "$(echo "$agg" | jq -sc '.[:15]')"
+  ph_data routes "$(echo "$agg" | jq -sc '[.[:15][] | del(.query)]')"
 else
   ph_unavailable "Loki port-forward failed; route-level view skipped"
 fi

@@ -1,0 +1,4 @@
+{"status":"success","data":{"resultType":"vector","result":[
+  {"_line":"INFO:     10.244.1.5:51234 - \"PUT / HTTP/1.1\" 409 Conflict",
+   "metric":{"method":"PUT","namespace":"example-api","path":"/","status":"409"},"value":[1791752400,"21"]}
+]}}
