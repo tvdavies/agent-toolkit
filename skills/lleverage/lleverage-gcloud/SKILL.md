@@ -1,7 +1,7 @@
 ---
 name: lleverage-gcloud
 description: Run gcloud against Lleverage's GCP projects as the agent service account named by $LLEVERAGE_GCP_SERVICE_ACCOUNT, which never needs a re-login. Covers which identity agents use and what it can do, Cloud Logging for the retained GCP services (Cloud Run logging-service, Cloud SQL, Cloud Build), Cloud Build history and CI re-runs, session files in the per-organisation workflow buckets, and setting the identity up on a new machine. Use for any gcloud or gsutil command, "gcloud isn't authenticated" or "Reauthentication failed" errors, Cloud Run/Cloud SQL/Cloud Build logs, or granting the agent account a new GCP permission. Kubernetes, app and pod logs are in Loki, not here.
-compatibility: Requires bash, jq and the gcloud CLI. Expects LLEVERAGE_GCP_SERVICE_ACCOUNT, CLOUDSDK_CONFIG and GOOGLE_APPLICATION_CREDENTIALS in the environment (see Setup).
+compatibility: Requires bash, jq and the gcloud CLI. Expects LLEVERAGE_GCP_SERVICE_ACCOUNT, CLOUDSDK_CONFIG, CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE and GOOGLE_APPLICATION_CREDENTIALS in the environment (see Setup).
 metadata:
   author: tvd
   version: 1.0.0
@@ -17,6 +17,7 @@ which one through environment variables, normally set in the `env` block of
 | -------------------------------- | -------------------------------------------------------- |
 | `LLEVERAGE_GCP_SERVICE_ACCOUNT`  | The service account email agents act as                  |
 | `CLOUDSDK_CONFIG`                | Its own gcloud config dir, separate from `~/.config/gcloud` |
+| `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE` | Its key; wins over any `--account`, so tools that name another account still run as it |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Its key, for client libraries                            |
 | `CLOUDSDK_CORE_PROJECT`          | `lleverage`                                              |
 
@@ -40,7 +41,7 @@ Check the identity with:
 
 ```bash
 echo "$LLEVERAGE_GCP_SERVICE_ACCOUNT"
-gcloud auth list --format='value(account)' --filter=status:ACTIVE   # should match
+gcloud config get account   # with the override set, every command runs as the key's account
 ```
 
 ## What the service account can do

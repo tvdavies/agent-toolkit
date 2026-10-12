@@ -20,8 +20,8 @@ Usage: $(basename "$0") [--key <path>] [--config-dir <dir>] [--claude-settings]
   --config-dir <dir>   gcloud config dir for the service account
                        (default: \$CLOUDSDK_CONFIG, else ~/.config/gcloud-agent)
   --claude-settings    Add LLEVERAGE_GCP_SERVICE_ACCOUNT, CLOUDSDK_CONFIG,
-                       GOOGLE_APPLICATION_CREDENTIALS and CLOUDSDK_CORE_PROJECT
-                       to the env block of ~/.claude/settings.json
+                       CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE, GOOGLE_APPLICATION_CREDENTIALS
+                       and CLOUDSDK_CORE_PROJECT to the env block of ~/.claude/settings.json
 
 The service account is read from the key. If LLEVERAGE_GCP_SERVICE_ACCOUNT is
 set, the key must belong to that account.
@@ -59,6 +59,7 @@ export CLOUDSDK_CONFIG="$CONFIG_DIR"
 unset CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE
 gcloud auth activate-service-account "$SA" --key-file="$KEY" --quiet
 gcloud config set project lleverage --quiet
+gcloud config set builds/region europe-west2 --quiet
 gcloud config set disable_usage_reporting true --quiet
 
 if [[ "$WRITE_CLAUDE_SETTINGS" == 1 ]]; then
@@ -67,7 +68,7 @@ if [[ "$WRITE_CLAUDE_SETTINGS" == 1 ]]; then
   cp "$settings" "$settings.bak-gcloud"
   tmp="$(mktemp)"
   jq --arg sa "$SA" --arg dir "$CONFIG_DIR" --arg key "$KEY" \
-    '.env = ((.env // {}) + {LLEVERAGE_GCP_SERVICE_ACCOUNT: $sa, CLOUDSDK_CONFIG: $dir, GOOGLE_APPLICATION_CREDENTIALS: $key, CLOUDSDK_CORE_PROJECT: "lleverage"})' \
+    '.env = ((.env // {}) + {LLEVERAGE_GCP_SERVICE_ACCOUNT: $sa, CLOUDSDK_CONFIG: $dir, CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: $key, GOOGLE_APPLICATION_CREDENTIALS: $key, CLOUDSDK_CORE_PROJECT: "lleverage"})' \
     "$settings" > "$tmp"
   mv "$tmp" "$settings"
   echo "Updated $settings (backup at $settings.bak-gcloud). New sessions pick it up."
