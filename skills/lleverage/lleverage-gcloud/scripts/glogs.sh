@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_NAME="$(basename "$0")"
 PROJECT="lleverage"
 LIMIT=100
-GCLOUD_ACCOUNT=""
+GCLOUD_ACCOUNT="${LLEVERAGE_GCP_SERVICE_ACCOUNT:-}"
 FROM=""
 TO=""
 COMMAND=""
@@ -30,7 +30,7 @@ Options:
   --from "<time>"            Start time: relative ("2h ago", "30m ago") or ISO 8601
   --to "<time>"              End time (default: now)
   --limit <n>                Max results (default: 100)
-  --account <email>          gcloud account (default: the active account, sal-agent in agent sessions)
+  --account <email>          gcloud account (default: $LLEVERAGE_GCP_SERVICE_ACCOUNT, else the active account)
   --build-id <id>            Restrict cloudbuild logs to a specific build ID
   --database-id <id>         Restrict cloudsql logs to a database ID substring (default: lleverage)
   -h, --help                 Show this help

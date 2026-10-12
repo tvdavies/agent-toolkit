@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Grant sal-agent the project roles agents on this machine need.
+# Grant the agent service account ($LLEVERAGE_GCP_SERVICE_ACCOUNT) the project
+# roles agents on this machine need.
 # Run this yourself: it uses your own (tom@) gcloud login, not the service account.
 # Agents add roles here (with the task that needs them); Tom runs it.
 set -euo pipefail
 
 PROJECT=lleverage
-SA=sal-agent@lleverage.iam.gserviceaccount.com
+SA="${LLEVERAGE_GCP_SERVICE_ACCOUNT:?Set LLEVERAGE_GCP_SERVICE_ACCOUNT to the agent service account email}"
 
-# Use Tom's default gcloud config even if the shell points at the sal-agent one.
+# Use your default gcloud config even if the shell points at the agent one.
 export CLOUDSDK_CONFIG="$HOME/.config/gcloud"
 unset CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE GOOGLE_APPLICATION_CREDENTIALS
 
