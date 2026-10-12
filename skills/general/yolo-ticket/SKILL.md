@@ -244,9 +244,32 @@ Do not busy-poll with agent turns. After roughly three cycles that repeat the
 same failure or cannot preserve auto-merge without new evidence, stop `BLOCKED`
 instead of looping forever.
 
+## Repository notes
+
+These record repository policy as Tom set it. Re-read the ruleset (`gh api
+repos/OWNER/REPO/rules/branches/BRANCH`) at Phase 4 and stop `BLOCKED` if it no
+longer matches.
+
+- **lleverage-ai/lleverage** (`main`): no code owners. A merge needs one approving
+  review (Cerbie's, `cerbieai[bot]`, counts), the `ci (lleverage)` check, every
+  review thread resolved, and approval of the last push; a push dismisses earlier
+  approvals, and the only allowed method is squash. Cerbie reviews each new head
+  by itself. When Cerbie requests changes, handle them as babysit-pr says (fix,
+  validate, push, reply, resolve), then keep watching for Cerbie's review of the
+  new head. Repeat until Cerbie approves the current head; that approval is the
+  review babysit-pr waits for, so don't ask a human for one. The same no-progress
+  bound applies: three rounds that repeat the same finding are `BLOCKED`.
+- **lleverage-ai/infrastructure**: Tom merges these himself. Take the PR to
+  `READY TO MERGE` as above, but don't enable auto-merge. Finish with
+  `READY FOR OWNER MERGE`.
+
 ## Exit states
 
 Completion is one of:
+
+- `READY FOR OWNER MERGE` — only for repositories whose notes above say the
+  owner merges: exact ticket, PR URL, ready head and validation summary, with
+  auto-merge left off;
 
 - `MERGED` — exact ticket, PR URL, final head, merge commit when available,
   selected method, and validation/remediation summary;
@@ -256,4 +279,5 @@ Completion is one of:
 - `INTERRUPTED` — report the preserved worktree, branch, PR, head, auto-merge
   state, and next safe action.
 
-Never finish yolo-ticket merely because the PR is `READY TO MERGE`.
+Never finish yolo-ticket merely because the PR is `READY TO MERGE`, except with
+`READY FOR OWNER MERGE` in a repository where the owner merges.

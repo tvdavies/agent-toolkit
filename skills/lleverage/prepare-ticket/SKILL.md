@@ -30,6 +30,7 @@ reproducible", or grants `--split` (permission to create sub-issues) or
   started ticket counts as claimed (see the `workstream-claim-and-followup-policy`
   memory), and preparing a ticket isn't claiming it. If the ticket is already
   started by someone else, report only and suggest the edits instead of making them.
+  The one exception is the Human Required state in a sweep run (below).
 - Don't change code, open branches or create worktrees. A throwaway worktree is
   acceptable only to run a test that reproduces a bug, and must be removed
   afterwards.
@@ -128,6 +129,39 @@ Then:
   or needs to know (for example, the reporter when the ticket is Not needed).
   Write it with the `writing-for-humans` skill and @-mention them.
 
+## 5a. Sweep runs: Ready or Human Required
+
+When the brief says the run is for the continuous sweep (`Cycle sweep: prepare
+ID`), every ticket must end in exactly one of two states, so the sweep never
+prepares it again:
+
+- **Ready.** The verdict is Ready, the size is S or M (XS counts as S), the
+  description's Status line says `**Status:** Ready (<date>)` and the description
+  has a `Size:` line. Set the Linear estimate too (t-shirt: XS, S or M). Leave the
+  state (To Do) and the assignee as they are. The sweep's gate reads only these
+  two lines and the estimate, so write them exactly.
+- **Human Required.** Anything else. Write the question on the ticket: the Status
+  line says `**Status:** Human Required (<date>): <the question in one line>`, and
+  the Decisions section lists it with its options. Then move the ticket to the
+  team's `Human Required` state (it's a started state, so the sweep and every
+  workstream skip it from then on). Keep the assignee. Cases:
+  - Needs decision: the open product or technical questions.
+  - Size L or bigger: "Too big for one PR; slice it or run it as a workstream?",
+    with the proposed split. Never create sub-issues in a sweep run, even with
+    `--split`.
+  - Blocked on a person, access or data: what is needed and from whom.
+  - Not needed: "Close as not needed?", with the evidence. Use the Duplicate
+    state instead only when you are sure it is a duplicate.
+  - Not well scoped enough to judge: what is missing.
+
+  The one other ending: blocked by another open Linear ticket. Set the `blocks`
+  relation and the Status line `Blocked on <ID>`, and leave the state alone; the
+  queue reports it as blocked until that ticket closes, then the sweep looks at it
+  again.
+
+Use only the Status line, the Decisions section, the estimate and the state for
+this. Don't comment unless a named person other than Tom must answer.
+
 ## 6. Report
 
 Return:
@@ -138,4 +172,6 @@ Return:
 - the ticket link.
 
 When called from `/workstream` or `/sweep`, also return the size, the files
-touched (for lane planning) and any shared resource it needs.
+touched (for lane planning) and any shared resource it needs. A sweep run also
+returns the state it left the ticket in (Ready, Human Required with the question,
+Duplicate, or blocked by which ticket).

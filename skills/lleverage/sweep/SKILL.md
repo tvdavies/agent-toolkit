@@ -1,6 +1,6 @@
 ---
 name: sweep
-description: Autonomously work through the current cycle. Finds high-value, ready Linear tickets that nobody is working on and that don't sit under an in-progress parent, gets unready ones ready, and delivers them through parallel yolo-ticket subagents with one PR watcher and prod health checks. Safe to run alongside /workstream sessions. Use only when the user explicitly invokes /sweep or explicitly asks to yolo or sweep the cycle.
+description: Autonomously work through the current cycle. Finds discrete, well-scoped S or M Linear tickets that nobody is working on and that have no open parent, gets unready ones ready (Ready or Human Required), and delivers them through yolo-ticket to merged PRs. Runs continuously under Sal through a model-free gate, or by hand. Safe to run alongside /workstream sessions. Use only when the user explicitly invokes /sweep, explicitly asks to yolo or sweep the cycle, or a Sal sweep task names this skill.
 compatibility: Requires git, GitHub CLI, jq, linear-cli, and the workstream, prod-health, yolo-ticket, start-ticket and babysit-pr skills.
 disable-model-invocation: true
 metadata:
@@ -26,7 +26,9 @@ after a compaction:
 - `../workstream/references/verification.md`
 - `../workstream/references/implementer-brief.md`
 
-Scripts: `../workstream/scripts/{linear-queue.sh,pr-ledger.sh,followup.sh}`.
+Scripts: `../workstream/scripts/{linear-queue.sh,pr-ledger.sh,followup.sh}`, and
+`scripts/sweep-gate.sh` (the continuous mode's gate; `--dry-run` shows what it
+would start now).
 PR waiting goes through prwatch (install: `npm i -g @tvdavies/prwatch@^0.1.3`; upgrade:
 `npm i -g @tvdavies/prwatch@latest && prwatch daemon restart`): the
 ledger watcher uses it when installed, and agents wait with `prwatch wait --since`
@@ -37,6 +39,15 @@ writes (merge, auto-merge, comments, review requests) still use `gh`. See
 checks: the `prod-health` skill (`../prod-health/scripts/prod-health.sh`), run at
 start-up, after merge bursts and every two hours, with its severity response.
 
+## Continuous mode (Sal)
+
+Sal runs the sweep continuously: a gate with no model checks every 15 minutes
+whether there is anything to do, and each sweep queues at most five tickets as
+ordinary Docket worker subtasks on Sal's worker pool. The gate, the loop, the Sal
+configuration and the worker briefs are in `references/continuous.md`. A worker
+given a `Cycle sweep: deliver ID` or `Cycle sweep: prepare ID` task follows that
+file, not the rest of this one.
+
 ## Arguments
 
 Optional scope: a team key (default `LLE`), `--all-assignees` (default: issues
@@ -45,16 +56,25 @@ assigned to Tom), a project name, or extra exclusions. Any further text is manda
 ## Eligibility
 
 Re-evaluate eligibility from fresh data immediately before every dispatch, using
-`linear-queue.sh cycle [--team T] [--all-assignees]`. A ticket is eligible only
-when all of these hold:
+`linear-queue.sh cycle [--team T] [--all-assignees] --json`. A ticket is eligible
+only when all of these hold:
 
+- it is in the current cycle and in an unstarted state (To Do or Backlog);
 - its verdict is `eligible`, meaning:
   - no ancestor is in a started state (In Progress, Technical Review, …). That
     tree is claimed by a workstream or a person;
-  - it isn't started itself;
+  - it isn't started itself. Every agent session acts in Linear as Tom, so any
+    In Progress ticket is taken, whoever it is assigned to (a duplicate PR,
+    #8113, came from treating Tom's In Progress tickets as free);
   - no open PR mentions it;
   - it has no open blocker;
   - it isn't a parent with open children;
+- it has no open parent at all (`openAncestor` is false). Judge by the parent
+  tree, not the Linear project: every ticket is in a project. Anything under an
+  open parent belongs to that larger piece of work;
+- it is unassigned or assigned to Tom, never assigned to someone else;
+- it is sized S or M (XS counts as S). L and bigger are never swept;
+- it isn't in Human Required (a started state, so the verdict already excludes it);
 - it isn't listed under Exclusions in `STATE.md`, and Tom hasn't said another
   session owns it;
 - no local worktree or branch from another session exists for it (`git worktree list`);
@@ -65,10 +85,9 @@ When you start a ticket, set it In Progress at once (yolo-ticket does this). Tha
 is the claim. If a ticket you were about to start changes state underneath you,
 drop it. Never move another session's ticket back to To Do.
 
-Don't claim a parent to work its children from a sweep. A ticket big enough to
-need slicing is a `/workstream` candidate: slice it only if Tom's mandate allows,
-and then run that tree as a workstream (claim the parent, follow the workstream
-phases) inside this sweep, recorded in `STATE.md`.
+A sweep never slices a ticket and never runs a workstream. Don't claim a parent
+to work its children. A ticket big enough to need slicing goes to Human Required
+with the proposed split, for Tom to decide (`prepare-ticket`, "Sweep runs").
 
 ## Selection
 

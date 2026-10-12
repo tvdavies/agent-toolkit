@@ -23,7 +23,11 @@ Verdicts (sweep rules; tree mode reports them too):
   umbrella-done  all of its children are closed. Check its acceptance and close it.
   eligible     none of the above. Readiness still needs a human-level check.
 
---json prints one JSON object per issue instead of TSV.
+--json prints one JSON object per issue instead of TSV. It also carries the facts the
+continuous sweep's gate filters on: assignee and assignedToMe, openAncestor (any
+ancestor still open, whatever its state), stateType, size (XS..XL from the estimate,
+else the description's "Size:" line, else null) and prepared (the description's
+"**Status:**" verdict written by prepare-ticket, such as Ready, else null).
 Tracked repos for PR detection: $WS_REPOS (space separated), default
 "lleverage-ai/lleverage lleverage-ai/infrastructure lleverage-ai/agent-sdk".
 EOF
@@ -53,6 +57,7 @@ done
 
 FIELDS='identifier title priority estimate url
   state{name type} labels{nodes{name}} project{name} cycle{number}
+  assignee{name isMe} description
   parent{identifier state{name type} parent{identifier state{name type} parent{identifier state{name type}}}}
   inverseRelations(first:20){nodes{type issue{identifier state{type}}}}
   children(first:50){nodes{identifier state{type}}}'
@@ -107,10 +112,19 @@ jq -c --rawfile prs "$tmp/prs.tsv" '
      | map(split("\t")[0])) as $pr
   | [$i.inverseRelations.nodes[] | select(.type == "blocks" and (.issue.state.type | openish)) | .issue.identifier] as $blk
   | [$i.children.nodes[] | select(.state.type | openish)] as $kids
+  | ($i.description // "") as $desc
+  # Linear t-shirt estimates are stored on the Fibonacci scale.
+  | ({"1": "XS", "2": "S", "3": "M", "5": "L", "8": "XL"}[($i.estimate // 0 | tostring)]
+     // ($desc | [match("(?m)^\\s*\\**Size:?\\**:?\\s*\\**\\s*(XS|S|M|L|XL)\\b"; "g") | .captures[0].string] | last)) as $size
+  | ($desc | [match("(?m)^\\s*\\*\\*Status:\\*\\*\\s*(Ready|Needs decision|Blocked|Not needed|Human Required)"; "gi") | .captures[0].string] | first) as $prepared
   | {
-      id: $i.identifier, title: $i.title, priority: $i.priority, estimate: $i.estimate,
-      state: $i.state.name, cycle: ($i.cycle.number // null), project: ($i.project.name // null),
+      id: $i.identifier, title: $i.title, url: $i.url, priority: $i.priority, estimate: $i.estimate,
+      state: $i.state.name, stateType: $i.state.type,
+      cycle: ($i.cycle.number // null), project: ($i.project.name // null),
       labels: [$i.labels.nodes[].name],
+      assignee: ($i.assignee.name // null), assignedToMe: ($i.assignee.isMe // false),
+      openAncestor: ($anc | any(.state.type | openish)),
+      size: $size, prepared: $prepared,
       ancestry: [$anc[] | "\(.identifier):\(.state.name)"],
       blockers: $blk, prs: $pr, openChildren: ($kids | length),
       verdict: (
