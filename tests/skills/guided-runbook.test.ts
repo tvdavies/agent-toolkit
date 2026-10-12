@@ -1,0 +1,116 @@
+import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const root = path.resolve(import.meta.dir, "../..");
+const skill = path.join(root, "skills/lleverage/guided-runbook");
+const lib = path.join(skill, "scripts/lib/wizard.sh");
+
+function withTmp(fn: (dir: string) => void) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "guided-runbook-"));
+  try { fn(dir); } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+// Runs a script body after sourcing the library, with stub tools on PATH.
+function runWizard(dir: string, body: string, answers = "") {
+  const tty = path.join(dir, "tty");
+  writeFileSync(tty, answers);
+  const script = path.join(dir, "runbook.sh");
+  writeFileSync(script, `. "${lib}"\nwiz_init "Test" 2\n${body}\n`);
+  return spawnSync("bash", [script], {
+    env: { PATH: `${dir}/bin:${process.env.PATH}`, HOME: dir, WIZ_TTY: tty, WIZ_LOG_DIR: dir, OP_AGENT_ENV: path.join(dir, "agent.env") },
+    encoding: "utf8",
+    timeout: 20_000,
+  });
+}
+
+describe("guided-runbook", () => {
+  test("No stops the run cleanly before the change; y lets it through", () => {
+    withTmp((dir) => {
+      const body = `step "Change"\nconfirm_or_stop "Do it?"\necho CHANGED`;
+      const no = runWizard(dir, body, "n\n");
+      expect(no.status).toBe(0);
+      expect(no.stdout).not.toContain("CHANGED");
+      expect(no.stdout).toContain("Run the same command again");
+      const yes = runWizard(dir, body, "y\n");
+      expect(yes.stdout).toContain("CHANGED");
+    });
+  });
+
+  test("dry run answers No even when the terminal would say yes", () => {
+    withTmp((dir) => {
+      const tty = path.join(dir, "tty");
+      writeFileSync(tty, "y\n");
+      const res = spawnSync("bash", ["-c", `. "${lib}"; wiz_init T 1; if ask "x?"; then echo YES; else echo NO; fi`], {
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, HOME: dir, WIZ_LOG_DIR: dir, WIZ_TTY: tty, WIZ_DRY_RUN: "1" },
+      });
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("NO");
+      expect(res.stdout).not.toContain("YES");
+    });
+  });
+
+  test("read-modify-write guards refuse empty reads and removals", () => {
+    withTmp((dir) => {
+      const empty = runWizard(dir, `: >"$WIZ_TMP/a"\nguard_nonempty "$WIZ_TMP/a" "The policy read"\necho WROTE`);
+      expect(empty.status).not.toBe(0);
+      expect(empty.stdout).not.toContain("WROTE");
+
+      const removal = runWizard(dir, `printf 'a\\nb\\n' >"$WIZ_TMP/a"; printf 'a\\nc\\n' >"$WIZ_TMP/b"\nguard_additive "$WIZ_TMP/a" "$WIZ_TMP/b"\necho WROTE`);
+      expect(removal.status).not.toBe(0);
+      expect(removal.stdout).toContain("remove 1 existing lines");
+
+      const additive = runWizard(dir, `printf 'a\\n' >"$WIZ_TMP/a"; printf 'a\\nb\\n' >"$WIZ_TMP/b"\nguard_additive "$WIZ_TMP/a" "$WIZ_TMP/b" && echo CHANGE\ncp "$WIZ_TMP/a" "$WIZ_TMP/c"; guard_additive "$WIZ_TMP/a" "$WIZ_TMP/c" || echo NOTHING`);
+      expect(additive.stdout).toContain("CHANGE");
+      expect(additive.stdout).toContain("NOTHING");
+
+      const raced = runWizard(dir, `printf 'a\\n' >"$WIZ_TMP/a"; printf 'a\\nz\\n' >"$WIZ_TMP/b"\nguard_unchanged "$WIZ_TMP/a" "$WIZ_TMP/b" "The policy"\necho WROTE`);
+      expect(raced.status).not.toBe(0);
+      expect(raced.stdout).toContain("changed while waiting");
+      expect(raced.stdout).not.toContain("WROTE");
+    });
+  });
+
+  test("secrets land in a variable, never in output, and the 1Password token stays in its subshell", () => {
+    withTmp((dir) => {
+      const bin = path.join(dir, "bin");
+      spawnSync("mkdir", [bin]);
+      writeFileSync(path.join(bin, "op"), `#!/usr/bin/env bash\n[[ -n "$OP_SERVICE_ACCOUNT_TOKEN" ]] || exit 9\necho '{"root_token":"s.supersecret"}'\n`);
+      chmodSync(path.join(bin, "op"), 0o755);
+      writeFileSync(path.join(dir, "agent.env"), "export OP_SERVICE_ACCOUNT_TOKEN=ops_test\n");
+      const res = runWizard(dir, `openbao_root_token TOK staging\n[[ "$TOK" == s.supersecret ]] && echo MATCH\n[[ -z "\${OP_SERVICE_ACCOUNT_TOKEN:-}" ]] && echo CLEAN`);
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("MATCH");
+      expect(res.stdout).toContain("CLEAN");
+      expect(res.stdout + res.stderr).not.toContain("supersecret");
+
+      // A wrong jq path on a secret document must not echo the value in jq's error.
+      const wrongPath = runWizard(dir, `op_document_field X item vault '.root_token[]'`);
+      expect(wrongPath.status).not.toBe(0);
+      expect(wrongPath.stdout + wrongPath.stderr).not.toContain("supersecret");
+
+      const traced = runWizard(dir, `set -x\nopenbao_root_token TOK staging`);
+      expect(traced.status).not.toBe(0);
+      expect(traced.stdout + traced.stderr).not.toContain("ops_test");
+      expect(traced.stdout + traced.stderr).toContain("xtrace is on");
+    });
+  });
+
+  test("the checker passes the template and rejects the patterns that caused friction", () => {
+    const template = spawnSync("bash", [path.join(skill, "scripts/check-runbook.sh"), path.join(skill, "templates/runbook.sh")], { encoding: "utf8" });
+    expect(template.stdout).toContain("check-runbook: passed");
+
+    withTmp((dir) => {
+      const bad = path.join(dir, "bad.sh");
+      writeFileSync(bad, `#!/usr/bin/env bash\n. "$HOME/.agents/skills/guided-runbook/scripts/lib/wizard.sh"\nwiz_init "x" 1\nTOKEN="$(jq -r .root_token "$INFRA/generated/staging/openbao-init.json")"\nread -r -p "Continue? " a\nset -o errexit -o xtrace\n`);
+      const res = spawnSync("bash", [path.join(skill, "scripts/check-runbook.sh"), bad], { encoding: "utf8" });
+      expect(res.status).toBe(1);
+      expect(res.stdout).toContain("FAIL no local OpenBao init files");
+      expect(res.stdout).toContain("FAIL no bare read prompts");
+      expect(res.stdout).toContain("FAIL no xtrace");
+    });
+  });
+});
