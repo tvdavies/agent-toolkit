@@ -142,6 +142,53 @@ q="$(ph 0 0 2026-10-07T23:46:46Z)"
 jq -e '.status == "partial" and .findings[0].key == "posthog.silent" and .findings[0].hint == "sev2"' <<<"$q" >/dev/null \
   || fail "silent PostHog: $(jq -c '{status, findings}' <<<"$q")"
 
+# k8s live pods: a pod that a rolling update is draining fails readiness on purpose
+# and is skipped; one still present >5m after its grace period is stuck-terminating;
+# an ordinary pod not ready for >5m is still k8s.notready.
+kbin="$state/kbin"; mkdir -p "$kbin" "$state/infra/generated/production"; : >"$state/infra/generated/production/kubeconfig"
+now="$(date -u +%s)"; at() { date -u -d "@$(( now + $1 ))" +%FT%TZ; }
+pod() {  # pod NS NAME READY_SINCE_S [DELETION_S GRACE_S]
+  jq -nc --arg ns "$1" --arg name "$2" --arg created "$(at -7200)" --arg since "$(at "$3")" \
+    --arg del "${4:+$(at "${4:-0}")}" --argjson grace "${5:-null}" '
+    {metadata: ({namespace: $ns, name: $name, creationTimestamp: $created,
+                 ownerReferences: [{kind: "ReplicaSet", name: "x"}]}
+                + (if $del != "" then {deletionTimestamp: $del, deletionGracePeriodSeconds: $grace} else {} end)),
+     spec: {nodeName: "node-1", terminationGracePeriodSeconds: ($grace // 30)},
+     status: {phase: "Running", conditions: [{type: "Ready", status: "False", reason: "ContainersNotReady", lastTransitionTime: $since}],
+              containerStatuses: [{name: "service", ready: false, state: {running: {}}}]}}'
+}
+{
+  # Deleted 10m ago with a 2100 s grace period: draining, deadline 25m away.
+  pod agent-service agent-service-deployment-ff447cc49-vjxzq -600 1500 2100
+  # Grace period ended 2m ago: within the 5m allowance, still skipped.
+  pod org-aaaa workflow-deployment-6d8f7b9c5d-abcde -540 -120 420
+  # Grace period ended 20m ago: stuck in Terminating.
+  pod org-bbbb workflow-deployment-6d8f7b9c5d-fghij -1620 -1200 420
+  # Not terminating, not ready for 10m: a real not-ready pod.
+  pod credential-service credential-service-deployment-7c9d8f6b5-klmno -600
+} | jq -sc '{items: .}' >"$state/pods.json"
+cat >"$kbin/kubectl" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" version "*) exit 0 ;;
+  *" get pods "*) cat "$FAKE_PODS" ;;
+  *" get deploy "*|*" get rollouts"*) echo '{"items":[]}' ;;
+  *) exit 1 ;;
+esac
+SH
+chmod +x "$kbin/kubectl"
+k="$(PATH="$kbin:$PATH" PH_INFRA_DIR="$state/infra" FAKE_PODS="$state/pods.json" "$here/../scripts/checks/k8s.sh" --raw --window 30m)"
+kk="$(jq -r '[.findings[].key] | sort | join(" ")' <<<"$k")"
+[ "$kk" = "k8s.notready:credential-service/credential-service-deployment k8s.stuck-terminating:org-*/workflow-deployment" ] \
+  || fail "k8s terminating pods: expected notready for credential-service and stuck-terminating for org-bbbb only; got: $kk"
+jq -e '.findings[] | select(.key == "k8s.stuck-terminating:org-*/workflow-deployment") | .hint == "sev3" and .namespace == "org-bbbb"
+       and .evidence.pods[0].pod == "workflow-deployment-6d8f7b9c5d-fghij" and .evidence.pods[0].grace_s == 420 and (.title | test("20m after"))' <<<"$k" >/dev/null \
+  || fail "stuck-terminating finding: $(jq -c '.findings' <<<"$k")"
+jq -e '.findings[] | select(.key == "k8s.notready:credential-service/credential-service-deployment") | .hint == "sev2"' <<<"$k" >/dev/null \
+  || fail "core-namespace not-ready pod should stay sev2: $(jq -c '.findings' <<<"$k")"
+jq -e 'any(.notes[]; test("^2 pod\\(s\\) terminating within their grace period"))' <<<"$k" >/dev/null \
+  || fail "skipped terminating pods should be counted in a note: $(jq -c '.notes' <<<"$k")"
+
 # Normalisation.
 [ "$(python3 "$lib/normalise.py" route /lsq3oanefp/w/my-public-app)" = "/:org/w/:id" ] || fail "public app route"
 [ "$(python3 "$lib/normalise.py" route '/api/public/workflow-session?sessionId=1')" = "/api/public/workflow-session" ] || fail "query string"

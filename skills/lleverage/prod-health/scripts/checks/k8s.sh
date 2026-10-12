@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Kubernetes health: pods not ready, crashloops and restarts in the window,
-# deployments and Argo Rollouts mid-rollout or stuck, and the image tag per workload.
+# Kubernetes health: pods not ready, pods stuck terminating, crashloops and restarts
+# in the window, deployments and Argo Rollouts mid-rollout or stuck, and the image
+# tag per workload.
 # Usage: k8s.sh [--env production|staging] [--window 30m] [--end ISO] [--json] [--raw]
 # Live state comes from kubectl (only when the window ends now); crashloops and
 # restarts inside the window come from kube-state-metrics in VictoriaMetrics, so
@@ -64,9 +65,37 @@ if [ "$PH_LIVE" = 1 ]; then
   # replaced them, so they are counted, not reported.
   nfailed="$(echo "$pods" | jq '[.items[] | select(.status.phase == "Failed")] | length')"
   [ "$nfailed" -gt 0 ] && ph_note "$nfailed failed pod(s) left over (evicted or node shutdown); not counted as unhealthy"
-  # Not ready for more than 5 minutes (ignores completed job pods and fresh pods).
+  # Terminating pods (deletionTimestamp set) are not "not ready": a rolling update
+  # deletes the old ReplicaSet's pods and they fail readiness on purpose while they
+  # drain (agent-service for up to 2100 s, org workflow-deployments 420 s). The API
+  # server sets deletionTimestamp to the deletion time plus the grace period, so a
+  # pod still listed more than 5 minutes after it is stuck in Terminating (lost
+  # node, finalizer, hung preStop) and is reported as k8s.stuck-terminating.
+  nterm="$(echo "$pods" | jq --argjson now "$now" '[.items[] | select(.metadata.deletionTimestamp != null)
+    | select(($now - (.metadata.deletionTimestamp | fromdateiso8601)) <= 300)] | length')"
+  [ "$nterm" -gt 0 ] && ph_note "$nterm pod(s) terminating within their grace period; not counted as not ready"
+  echo "$pods" | jq -c --argjson now "$now" "$WL"'
+    .items[] | select(.metadata.deletionTimestamp != null)
+    | ($now - (.metadata.deletionTimestamp | fromdateiso8601)) as $over
+    | select($over > 300)
+    | {ns: .metadata.namespace, wl: (.metadata.name | wl), pod: .metadata.name, phase: .status.phase, node: (.spec.nodeName // ""),
+       grace_s: (.metadata.deletionGracePeriodSeconds // .spec.terminationGracePeriodSeconds // null), over_s: $over,
+       finalizers: (.metadata.finalizers // [])}' \
+    | jq -sc 'group_by([.ns, .wl])[] | {ns: .[0].ns, wl: .[0].wl, n: length, over_m: ((map(.over_s) | max) / 60 | floor),
+        pods: [.[] | del(.ns, .wl)][:3]}' \
+    | while read -r g; do
+        ns="$(jq -r .ns <<<"$g")"; wl="$(jq -r .wl <<<"$g")"
+        cls="$ns"; [[ "$ns" == org-* ]] && cls='org-*'
+        hint=sev3; [[ "$ns" =~ $CORE_NS ]] && hint=sev2
+        ph_finding "$hint" "k8s.stuck-terminating:$cls/$wl" \
+          "$(jq -r '"\(.n) pod(s) stuck terminating in \(.ns)/\(.wl): still present \(.over_m)m after the grace period ended"' <<<"$g")" \
+          "$(jq -c '{pods}' <<<"$g")" "$ns"
+      done
+  # Not ready for more than 5 minutes (ignores completed job pods, fresh pods and
+  # terminating pods).
   echo "$pods" | jq -c --argjson now "$now" "$WL"'
     .items[] | select(.status.phase != "Succeeded" and .status.phase != "Failed")
+    | select(.metadata.deletionTimestamp == null)
     | select(($now - (.metadata.creationTimestamp | fromdateiso8601)) > 300)
     | select(.metadata.ownerReferences[0].kind? != "Job")
     | . as $p
