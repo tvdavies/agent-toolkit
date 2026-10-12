@@ -26,14 +26,14 @@ created=0
 while IFS=$'\t' read -r kind code envn n orgs; do
   [ -n "$kind" ] || continue
   if [ "$kind" = failed ]; then
-    hint=sev3; [ "$code" = api_execution_uncertain ] && hint=sev2
+    hint=low; [ "$code" = api_execution_uncertain ] && hint=high
     ph_series "dispatch.failed:$code|$envn" "$n" "dispatches failed ($code, $envn) across $orgs org(s)" \
       "$(jq -nc --arg h "$hint" --argjson o "$orgs" '{rules:["new","spike"], min_new:3, min_spike:5, hint:$h, evidence:{orgs:$o}}')"
   else
     created=$(( created + n ))
   fi
 done <<<"$rows"
-ph_series dispatch.created "$created" "dispatches created" '{"rules":["drop"],"drop_hint":"sev3","drop_min_expected":60}'
+ph_series dispatch.created "$created" "dispatches created" '{"rules":["drop"],"drop_hint":"low","drop_min_expected":60}'
 
 if [ "$PH_LIVE" = 1 ]; then
   stuck="$(ph_pg_query session-service session-service-deployment SESSION_DATABASE_URL "
@@ -43,7 +43,7 @@ if [ "$PH_LIVE" = 1 ]; then
      GROUP BY 1" 2>/dev/null)" || ph_unavailable "stuck-dispatch query failed"
   while IFS=$'\t' read -r st n oldest; do
     [ -n "$st" ] || continue
-    ph_finding sev2 "dispatch.stuck:$st" "$n dispatch(es) stuck in $st (oldest created $oldest)" "$(jq -nc --arg s "$st" --argjson n "$n" '{status:$s, count:$n}')"
+    ph_finding high "dispatch.stuck:$st" "$n dispatch(es) stuck in $st (oldest created $oldest)" "$(jq -nc --arg s "$st" --argjson n "$n" '{status:$s, count:$n}')"
   done <<<"$stuck"
 fi
 

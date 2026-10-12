@@ -22,7 +22,8 @@ Scripts live in `scripts/` (run any with `--help`):
   other skills. Exit status 0 means healthy, 3 means there are findings and 4
   means nothing was found but a source wasn't fully checked.
   `--watch` is the contract for unattended watchers: JSON `findings` (`key`,
-  `severity`, `summary`, `status`, `first_seen`, `last_raised`, evidence) plus
+  `severity` (`urgent`, `high`, `medium` or `low`), `summary`, `status`,
+  `first_seen`, `last_raised`, evidence) plus
   each source's status; exit 0 with no findings, 3 with findings, anything else
   is a failed run. `status` is `new`, `escalated`, `reraise` or `unchanged`
   against a state file (`references/watching.md`).
@@ -48,7 +49,8 @@ Scripts live in `scripts/` (run any with `--help`):
    `2h`, after a quiet period or when you're chasing something intermittent. If
    the report says `baseline=none`, run `scripts/baseline.sh capture` first
    (about two minutes), then run the check again.
-2. **Read the report.** The verdict line gives the worst severity hint. Each
+2. **Read the report.** The verdict line gives the worst severity hint, named
+   after Linear's priorities (`VERDICT: Urgent?`, `High?`, `Medium?`, `Low?`). Each
    finding shows the evidence, a query to re-run, and the deploys in or before the
    window that could explain it. The `-- check:` lines summarise each source.
    A source marked `unavailable` or `partial` has **not** been checked. Say so;
@@ -58,33 +60,41 @@ Scripts live in `scripts/` (run any with `--help`):
    signal directly (the `query` in the finding, Loki, the workflow-debugger
    skill) and check that it is real, current and new. Dedupe against open
    tickets and the known issues in `MEMORY.md`.
-4. **Grade it** using `references/triage.md`:
-   - **SEV1**: a customer-facing outage or data loss, errors across many orgs, a
-     crashlooping core service, or a failing deploy pipeline that blocks fixes.
-   - **SEV2**: a real regression that affects some customers, or a degraded feature.
-   - **SEV3**: a low-impact error or noise.
+4. **Grade it** using `references/triage.md`. Severity uses Linear's priority
+   names, so a grade is also the ticket's priority. Never write SEV1/SEV2/SEV3.
+   - **Urgent** (priority 1): a customer-facing outage or data loss, errors
+     across many orgs, a crashlooping core service, or a failing deploy pipeline
+     that blocks fixes.
+   - **High** (priority 2): a real regression that affects some customers, or a
+     degraded feature.
+   - **Medium** (priority 3): a confirmed real defect with limited impact, such
+     as a feature broken for a few users with a workaround, not a regression
+     across customers.
+   - **Low** (priority 4): a low-impact error or noise.
 5. **Respond.** If you can't message Tom yourself (you are a worker, or a
    scheduled or unattended run), follow **Unattended runs** below instead of this
    step's messaging.
-   - **SEV1**: stop merging, and pause auto-merge on your open PRs. Tell Tom
+   - **Urgent**: stop merging, and pause auto-merge on your open PRs. Tell Tom
      immediately with the PushNotification tool, or Slack if that isn't
      available. Give the symptom, the impact, the suspected deploy and PR, and a
      recommendation: **roll back** the suspected release (use the `rollback`
      skill when it exists; until then, propose a revert PR or the previous image
      tag from the `deploys` line and wait for Tom's approval), or **fix forward**
      if the cause is clear and the fix is small. Then file the Linear bug as for
-     SEV2, at priority 1.
-   - **SEV2**: file a Linear bug with the evidence. If it is priority 1 or 2 and
-     ready (cause known, fix scoped, acceptance clear), start it now with
+     High, at priority 1.
+   - **High**: file a Linear bug with the evidence at priority 2. If it is ready
+     (cause known, fix scoped, acceptance clear), start it now with
      `yolo-ticket`. Otherwise it goes to Triage.
-   - **SEV3**: file a Triage ticket if it is a real defect. If a human confirms
-     it is normal, update the baseline (step 7).
+   - **Medium** and **Low**: file a Triage ticket at priority 3 (Medium) or 4
+     (Low) if it is a real defect. No message to Tom. If a human confirms it is
+     normal, update the baseline (step 7).
 6. **File tickets through `followup.sh`.** It is in the workstream skill
    (`../workstream/scripts/followup.sh`) and checks for duplicates before it
    creates anything:
    - use `--triage` for an unrelated bug;
    - use `--parent <ticket>` when a change from the current run caused it;
-   - use `-p 1` or `-p 2` for SEV1 and SEV2;
+   - use the grade's Linear priority: `-p 1` Urgent, `-p 2` High, `-p 3` Medium,
+     `-p 4` Low;
    - in an unattended run for Sal (the production watch), add `-l Sal` to every
      ticket you create, sub-issues and follow-ups included. Don't add the label to
      an existing ticket you dedupe onto or comment on.
@@ -113,26 +123,28 @@ either. Its caller (Sal) tells Tom. A message to Tom is a notification, not the
 response, so the work doesn't stop there: return the finding with a fix-forward
 plan, and the caller starts the fix without waiting for Tom.
 
-- **SEV1.** Stop merging and pause auto-merge on your own open PRs. File the
+- **Urgent.** Stop merging and pause auto-merge on your own open PRs. File the
   Linear bug in Triage at priority 1 through `followup.sh --triage -p 1 -l Sal`
   (it dedupes; on a duplicate, comment on the existing ticket and don't label it). Then end your run
   at once and return to the caller, at the top of your result:
-  `SEV1: <symptom>`, the impact (orgs by name, users, counts), when it started,
+  `Urgent: <symptom>`, the impact (orgs by name, users, counts), when it started,
   the evidence and queries, the suspected deploy and PR, a **rollback
   recommendation** Tom can approve (the previous image tag from the `deploys`
   line, or the PR to revert), a **fix-forward plan** (the ticket, the cause as far
   as known, the scoped fix, and that `prepare-ticket` then `yolo-ticket` should run
   on it at top priority), and the instruction **"stop other automated merges
-  until this is fixed; the SEV1 fix PR is exempt"**. Don't start the fix in the
+  until this is fixed; the Urgent fix PR is exempt"**. Don't start the fix in the
   same run, and never roll back, revert or change config.
-- **SEV2** (a real regression affecting some customers, or a degraded feature).
+- **High** (a real regression affecting some customers, or a degraded feature).
   File the bug in Triage at priority 2 through `followup.sh --triage -p 2 -l Sal`
-  and return the same shape, starting `SEV2: <symptom>`, without the alarm: the
+  and return the same shape, starting `High: <symptom>`, without the alarm: the
   ticket, the evidence, who is affected, the suspected deploy and PR, a rollback
   recommendation for Tom to approve, and the fix-forward plan (`prepare-ticket`,
-  then `yolo-ticket` if Ready). No pause on other merges. A SEV2 that worsens is
-  a SEV1.
-- **SEV3.** As in step 5.
+  then `yolo-ticket` if Ready). No pause on other merges. A High that worsens is
+  Urgent.
+- **Medium** and **Low.** As in step 5: a Triage ticket at `-p 3` or `-p 4`
+  (with `-l Sal`) when it is a real defect, and no alarm. Start the returned
+  result with the priority word, e.g. `Medium: <symptom>`.
 
 Fix forward means: the Triage ticket filed through `followup.sh`, then
 `prepare-ticket` on it, then `yolo-ticket` if it is Ready. The caller runs those;

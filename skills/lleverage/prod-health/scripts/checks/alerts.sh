@@ -37,10 +37,10 @@ while read -r a; do
   key="alert:$name|${ns:-cluster}"
   title="$(jq -r '"\(.sev) alert \(.name)\(if .ns != "" then " in " + .ns else "" end)\(if .n > 1 then " x\(.n)" else "" end)\(if .since != "" then " since " + .since[0:16] else "" end): \(.summary)"' <<<"$a")"
   if [ "$sev" = critical ]; then
-    ph_finding sev2 "alert.critical:$name|${ns:-cluster}" "$title" "$(jq -c '{severity: .sev, since, summary}' <<<"$a")" "$ns"
+    ph_finding high "alert.critical:$name|${ns:-cluster}" "$title" "$(jq -c '{severity: .sev, since, summary}' <<<"$a")" "$ns"
   fi
-  hint=sev3; [ "$sev" = critical ] && hint=sev2
-  [[ "$name" == CloudBuildFailed* ]] && hint=sev2
+  hint=low; [ "$sev" = critical ] && hint=high
+  [[ "$name" == CloudBuildFailed* ]] && hint=high
   presence="$(jq -c --arg k "$key" --arg t "$title" --arg h "$hint" --arg ns "$ns" --argjson a "$a" \
     '. + [{key: $k, title: $t, hint: $h, namespace: $ns, evidence: {severity: $a.sev, since: $a.since}}]' <<<"$presence")"
 done <<<"$grouped"

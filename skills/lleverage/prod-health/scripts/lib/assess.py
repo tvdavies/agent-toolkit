@@ -24,7 +24,21 @@ import re
 import sys
 
 STATE_ROOT = os.environ.get("PH_STATE_ROOT", os.path.expanduser("~/.local/state/prod-health"))
-SEV_ORDER = {"sev1": 0, "sev2": 1, "sev3": 2, "info": 3}
+# Severities use Linear's issue priority names, worst first: urgent (1), high (2),
+# medium (3), low (4). Results and watch state written before the rename say
+# sev1/sev2/sev3; read them as urgent/high/low so stored state keeps ranking.
+SEV_ORDER = {"urgent": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+LEGACY_SEV = {"sev1": "urgent", "sev2": "high", "sev3": "low"}
+DEFAULT_HINT = "low"
+
+
+def norm_sev(sev):
+    """A severity in current terms: legacy sevN mapped, case folded."""
+    if not isinstance(sev, str):
+        return sev
+    s = sev.strip().lower()
+    return LEGACY_SEV.get(s, s)
+
 # Which check owns a series key (used when merging partial captures).
 OWNERS = [("k8s.", "k8s"), ("alert", "alerts"), ("loki.", "loki-errors"), ("http.", "http"), ("wf.", "workflows"),
           ("sentry.", "sentry"), ("posthog.", "posthog"), ("dispatch.", "dispatch")]
@@ -128,6 +142,7 @@ def assess(results, baseline, args):
     def add(f, check):
         f = dict(f)
         f["check"] = check
+        f["hint"] = norm_sev(f.get("hint") or DEFAULT_HINT)
         n = noise_match(noise, f["key"])
         if n:
             f["suppressed_by"] = n.get("pattern")
@@ -144,7 +159,7 @@ def assess(results, baseline, args):
             key, count = s["key"], s.get("count", 0) or 0
             win = s.get("window_s") or r.get("window_s") or 1800
             rules = s.get("rules", ["new", "spike"])
-            hint = s.get("hint", "sev3")
+            hint = s.get("hint", DEFAULT_HINT)
             ev = dict(s.get("evidence") or {})
             ev["count"] = count
             base = rates.get(key)
@@ -177,7 +192,7 @@ def assess(results, baseline, args):
             if base is not None and "drop" in rules and mean_exp >= s.get("drop_min_expected", DEFAULTS["drop_min_expected"]) \
                     and count < DEFAULTS["drop_ratio"] * mean_exp:
                 add({**mk("drop", f"{s['title']} went quiet: {count} vs {mean_exp:.0f} expected"),
-                     "hint": s.get("drop_hint", "sev2")}, check)
+                     "hint": s.get("drop_hint", "high")}, check)
         if r.get("status") != "ok":
             info.append({"check": check, "status": r.get("status"), "notes": r.get("notes", [])})
 
@@ -185,7 +200,7 @@ def assess(results, baseline, args):
         for r in results:
             for p in r.get("data", {}).get("presence", []):
                 if p["key"] not in presence:
-                    add({"hint": p.get("hint", "sev3"), "key": p["key"], "title": f"NEW {p['title']}",
+                    add({"hint": p.get("hint", DEFAULT_HINT), "key": p["key"], "title": f"NEW {p['title']}",
                          "kind": "new", "evidence": p.get("evidence", {}),
                          **({"namespace": p["namespace"]} if p.get("namespace") else {})}, r["check"])
 
@@ -227,7 +242,7 @@ def overall(findings, results=()):
     if not findings:
         # Nothing found is only "healthy" if every source was actually checked.
         return "healthy" if all(r.get("status") == "ok" for r in results) else "incomplete"
-    return min((f.get("hint", "sev3") for f in findings), key=lambda h: SEV_ORDER.get(h, 9))
+    return min((norm_sev(f.get("hint", DEFAULT_HINT)) for f in findings), key=sev_rank)
 
 
 def parse_iso(text):
@@ -238,7 +253,7 @@ def parse_iso(text):
 
 
 def sev_rank(sev):
-    return SEV_ORDER.get(sev, 9)
+    return SEV_ORDER.get(norm_sev(sev), 9)
 
 
 def track(findings, results, path, now, reraise_h, unavailable_min, orgs):
@@ -255,6 +270,10 @@ def track(findings, results, path, now, reraise_h, unavailable_min, orgs):
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = load_json(path, {}) or {}
         keys = state.get("keys", {})
+        for entry in keys.values():  # state written before the rename
+            for field in ("severity", "announced_severity"):
+                if isinstance(entry, dict) and entry.get(field):
+                    entry[field] = norm_sev(entry[field])
         sources = state.get("sources", {})
         forget = dt.timedelta(hours=reraise_h)
         stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -284,7 +303,7 @@ def track(findings, results, path, now, reraise_h, unavailable_min, orgs):
             return item
 
         for f in findings:
-            item = mark(f["key"], f.get("hint", "sev3"), f"{f['check']}: {orgs.label(f['title'])}",
+            item = mark(f["key"], norm_sev(f.get("hint", DEFAULT_HINT)), f"{f['check']}: {orgs.label(f['title'])}",
                         {"check": f["check"], "kind": f.get("kind")})
             f["change"], f["first_seen"] = item["change"], item["first_seen"]
             f["status"], f["last_raised"] = item["status"], item["last_raised"]
@@ -302,7 +321,7 @@ def track(findings, results, path, now, reraise_h, unavailable_min, orgs):
             started = parse_iso(since) or now
             if now - started >= dt.timedelta(minutes=unavailable_min):
                 notes = "; ".join(n for n in r.get("notes", []) if n)[:300]
-                mark(f"source-unavailable:{check}", "sev3", f"{check} has been unavailable since {since}: {notes or 'no detail'}",
+                mark(f"source-unavailable:{check}", "low", f"{check} has been unavailable since {since}: {notes or 'no detail'}",
                      {"check": check, "kind": "unavailable"})
         # Forget what has not been seen for longer than the re-raise period.
         for key in [k for k, e in keys.items() if now - (parse_iso(e.get("last_seen")) or now) > forget]:
@@ -320,7 +339,7 @@ def render_text(results, findings, suppressed, info, deploys, have_baseline, bas
     srcs = {r["check"]: r.get("status") for r in results}
     bad = [f"{c}={s}" for c, s in srcs.items() if s != "ok"]
     v = overall(findings, results)
-    lines.append(f"VERDICT: {v.upper() + '?' if v.startswith('sev') else v}  findings={len(findings)} suppressed={len(suppressed)}"
+    lines.append(f"VERDICT: {v.capitalize() + '?' if v in SEV_ORDER and v != 'info' else v}  findings={len(findings)} suppressed={len(suppressed)}"
                  f"  sources ok={sum(1 for s in srcs.values() if s == 'ok')}/{len(srcs)}" + (f" ({', '.join(bad)})" if bad else ""))
     if findings:
         lines.append("")
