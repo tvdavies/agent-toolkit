@@ -114,7 +114,8 @@ cat >/dev/null
 while [ "$#" -gt 0 ]; do [ "$1" = --data-binary ] && body="$2"; shift; done
 case "$body" in
   *"max(timestamp)"*) echo "{\"results\":[[${FAKE_PV24:-0}, \"2026-10-07T21:12:03.5Z\", ${FAKE_PV2H:-0}]]}" ;;
-  *countIf*) echo '{"results":[[0,0,0]]}' ;;
+  *countIf*) echo "{\"results\":${FAKE_VOL:-[[0,0,0]]}}" ;;
+  *"GROUP BY t, m, p"*) echo "{\"results\":${FAKE_ROWS:-[]}}" ;;
   *) echo '{"results":[]}' ;;
 esac
 SH
@@ -141,6 +142,25 @@ jq -e '(.findings | length) == 0' <<<"$q" >/dev/null || fail "weekend 2h silence
 q="$(ph 0 0 2026-10-07T23:46:46Z)"
 jq -e '.status == "partial" and .findings[0].key == "posthog.silent" and .findings[0].hint == "sev2"' <<<"$q" >/dev/null \
   || fail "silent PostHog: $(jq -c '{status, findings}' <<<"$q")"
+# 12 Oct 2026: one user's ResizeObserver loop held posthog.exceptions at ~7x for
+# hours. Signatures matching a noise pattern stay in the per-signature series but
+# are left out of the total, and the excluded count is reported next to it.
+export FAKE_VOL='[[40,23,3]]' FAKE_ROWS='[["Error","ResizeObserver loop completed with undelivered notifications.","/lsq3oanefp/projects/oy7cot4w/workflows/wrk-1",15,1],
+  ["Error","ResizeObserver loop limit exceeded","/abc1234/agent",3,1],["TypeError","Cannot read properties of null (reading 0)","/abc1234/agent",5,2]]'
+noisecheck() {  # noisecheck WHAT: total 5 of 23, 18 excluded, RO series still emitted
+  jq -e '(.series[] | select(.key == "posthog.exceptions") | .count == 5 and .evidence == {all_exceptions: 23, excluded_noise: 18})
+    and .data.exceptions == {all: 23, excluded_noise: 18, counted: 5} and (.data.summary | test("5 browser exceptions plus 18 known noise"))
+    and ([.series[] | select(.key | startswith("posthog.exc:Error|ResizeObserver loop"))] | length) == 2' <<<"$2" >/dev/null \
+    || fail "$1: $(jq -c '{s: .series, d: .data}' <<<"$2")"
+}
+jq '.noise = [{"pattern": "posthog.exc:Error|ResizeObserver loop*"}]' "$here/fixtures/baseline.json" >"$state/production/baseline.json"
+noisecheck "baseline noise left out of the total" "$(ph 40 7 2026-10-12T13:25:00Z)"
+rm "$state/production/baseline.json"   # no baseline yet: the seed list applies
+noisecheck "seed noise left out of the total" "$(ph 40 7 2026-10-12T13:25:00Z)"
+cp "$here/fixtures/baseline.json" "$state/production/baseline.json"   # its noise list has no PostHog pattern
+q="$(ph 40 7 2026-10-12T13:25:00Z)"
+jq -e '.data.exceptions == {all: 23, excluded_noise: 0, counted: 23}' <<<"$q" >/dev/null || fail "no matching pattern: $(jq -c .data <<<"$q")"
+unset FAKE_VOL FAKE_ROWS
 
 # k8s live pods: a pod that a rolling update is draining fails readiness on purpose
 # and is skipped; one still present >5m after its grace period is stuck-terminating;

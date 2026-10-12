@@ -6,6 +6,10 @@
 # config). Production is host app.lleverage.ai, staging app.staging.llev.dev.
 # Exceptions are grouped by type, masked message and masked path; pageviews are
 # tracked so a sudden drop (blank page, broken bundle) is visible too.
+# The posthog.exceptions total leaves out signatures that match the baseline's
+# noise patterns (data/seed-noise.json when there is no baseline yet), so one
+# user's ResizeObserver loop can't hold it at 7x for hours; the excluded count
+# is reported next to it. Per-signature series are emitted as before.
 set -uo pipefail
 . "$(dirname "$0")/../lib/common.sh"
 [[ " $* " == *" -h "* || " $* " == *" --help "* ]] && { ph_usage "$0"; exit 0; }
@@ -58,19 +62,25 @@ elif [ "${pv:-0}" = 0 ]; then
   ph_unavailable "no pageviews in the window, so browser health can't be confirmed; the newest in the last 24h was at ${lastpv:0:19}Z ($pv24 in 24h)"
 fi
 ph_series posthog.pageviews "$pv" "PostHog pageviews on $APPHOST" '{"rules":["drop"],"drop_hint":"sev2","drop_min_expected":60}'
-ph_series posthog.exceptions "$ex" "browser exceptions on $APPHOST" '{"rules":["spike"],"min_spike":30,"hint":"sev2"}'
 
 rows="$(hogql "SELECT coalesce(properties.\$exception_types[1], properties.\$exception_type, '?') AS t,
     substring(coalesce(properties.\$exception_values[1], properties.\$exception_message, ''), 1, 200) AS m,
     coalesce(properties.\$pathname, '') AS p, count() AS c, uniq(distinct_id) AS u
   FROM events WHERE $RANGE AND event = '\$exception' GROUP BY t, m, p ORDER BY c DESC LIMIT 300")" \
   || ph_unavailable "PostHog exception breakdown failed"
+[ "$(jq 'length' <<<"${rows:-[]}" 2>/dev/null)" = 300 ] \
+  && ph_note "exception breakdown hit its 300-group limit: noise outside it is counted in posthog.exceptions"
 
+# Each signature carries the noise pattern its series key matches (assess.py's
+# own matcher and noise list), so the total below can leave noise out.
 agg="$(jq -c '.[]?' <<<"${rows:-[]}" | python3 -c '
 import json, sys
 sys.dont_write_bytecode = True
 sys.path.insert(0, sys.argv[1])
 from normalise import mask, route
+from assess import load_json, noise_match
+baseline = load_json(sys.argv[2], None)
+noise = baseline["noise"] if isinstance(baseline, dict) and isinstance(baseline.get("noise"), list) else load_json(sys.argv[3], [])
 agg = {}
 for line in sys.stdin:
     t, m, p, c, u = json.loads(line)
@@ -79,8 +89,15 @@ for line in sys.stdin:
     a["n"] += c
     a["users"] += u
 for a in sorted(agg.values(), key=lambda a: -a["n"]):
+    n = noise_match(noise, "posthog.exc:%s|%s|%s" % (a["type"], a["msg"], a["path"]))
+    a["noise"] = n.get("pattern") if n else None
     print(json.dumps(a))
-' "$PH_LIB_DIR")"
+' "$PH_LIB_DIR" "$PH_STATE_DIR/baseline.json" "$(dirname "$0")/../data/seed-noise.json")"
+exn="$(jq -s 'map(select(.noise != null) | .n) | add // 0' <<<"$agg")"
+real=$(( ${ex:-0} > exn ? ${ex:-0} - exn : 0 ))
+ph_series posthog.exceptions "$real" "browser exceptions on $APPHOST, known noise left out" \
+  "$(jq -nc --argjson all "${ex:-0}" --argjson noise "$exn" '{rules:["spike"], min_spike:30, hint:"sev2", evidence:{all_exceptions:$all, excluded_noise:$noise}}')"
+ph_data exceptions "$(jq -nc --argjson all "${ex:-0}" --argjson noise "$exn" --argjson real "$real" '{all:$all, excluded_noise:$noise, counted:$real}')"
 while read -r a; do
   [ -n "$a" ] || continue
   # Public workflow apps (/<org>/w/<slug>) matter most: anonymous users, no other signal.
@@ -90,7 +107,8 @@ while read -r a; do
     "$(jq -c --arg h "$hint" '{rules:["new","spike"], min_new:5, min_spike:10, hint:$h, evidence:{users, sample}}' <<<"$a")"
 done <<<"$agg"
 
-ph_data summary "$(jq -nc --arg pv "$pv" --arg ex "$ex" --arg u "$exu" --arg h "$APPHOST" \
-  --arg top "$(head -3 <<<"$agg" | jq -rs 'map("\(.type) \(.msg[0:50]) x\(.n)") | join("; ")')" \
-  --arg q "$quiet" '"\($h): \($pv) pageviews\($q), \($ex) browser exceptions" + (if $ex != "0" then " from \($u) users" else "" end) + (if $top != "" then " (top: \($top))" else "" end)')"
+ph_data summary "$(jq -nc --arg pv "$pv" --arg ex "$real" --arg n "$exn" --arg u "$exu" --arg h "$APPHOST" \
+  --arg top "$(jq -rs 'map(select(.noise == null))[:3] | map("\(.type) \(.msg[0:50]) x\(.n)") | join("; ")' <<<"$agg")" \
+  --arg q "$quiet" '"\($h): \($pv) pageviews\($q), \($ex) browser exceptions" + (if $n != "0" then " plus \($n) known noise" else "" end)
+    + (if $ex != "0" or $n != "0" then " from \($u) users" else "" end) + (if $top != "" then " (top: \($top))" else "" end)')"
 ph_emit
