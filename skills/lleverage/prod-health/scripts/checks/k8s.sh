@@ -33,7 +33,7 @@ if ph_ensure_vm; then
           reason: ([.[].reason] | unique | if index("CrashLoopBackOff") then "CrashLoopBackOff" else .[0] end)}' \
       | while read -r g; do
           ns="$(jq -r .ns <<<"$g")"; wl="$(jq -r .wl <<<"$g")"; reason="$(jq -r .reason <<<"$g")"
-          hint=sev2; [[ "$ns" =~ $CORE_NS ]] && hint=sev1
+          hint=high; [[ "$ns" =~ $CORE_NS ]] && hint=urgent
           ph_finding "$hint" "k8s.waiting:$ns/$wl:$reason" "$reason in $ns/$wl ($(jq -r '.pods | length' <<<"$g") pod(s), container $(jq -r '.containers | join(",")' <<<"$g"))" \
             "$(jq -c '{pods: .pods[:5]}' <<<"$g")" "$ns"
         done
@@ -48,7 +48,7 @@ if ph_ensure_vm; then
           ns1="$(jq -r '.nss | to_entries | sort_by(-.value) | .[0].key' <<<"$g")"
           ph_series "k8s.restarts:$(jq -r '.cls + "/" + .wl + ":" + .c' <<<"$g")" "$(jq -r .n <<<"$g")" \
             "container restarts $(jq -r 'if (.nss | length) > 1 then "\(.cls) (\(.nss | length) ns)" else (.nss | keys[0]) end' <<<"$g")/$(jq -r '.wl + " (" + .c + ")"' <<<"$g")" \
-            "$(jq -c --arg ns "$ns1" '{rules:["new","spike"], min_new:2, min_spike:3, hint:"sev3", namespace:$ns, evidence:{namespaces:.nss}}' <<<"$g")"
+            "$(jq -c --arg ns "$ns1" '{rules:["new","spike"], min_new:2, min_spike:3, hint:"low", namespace:$ns, evidence:{namespaces:.nss}}' <<<"$g")"
         done
     nrestart="$(echo "$restarts" | jq '[.[]? | .value[1] | tonumber] | add // 0 | round')"
   fi
@@ -86,7 +86,7 @@ if [ "$PH_LIVE" = 1 ]; then
     | while read -r g; do
         ns="$(jq -r .ns <<<"$g")"; wl="$(jq -r .wl <<<"$g")"
         cls="$ns"; [[ "$ns" == org-* ]] && cls='org-*'
-        hint=sev3; [[ "$ns" =~ $CORE_NS ]] && hint=sev2
+        hint=low; [[ "$ns" =~ $CORE_NS ]] && hint=high
         ph_finding "$hint" "k8s.stuck-terminating:$cls/$wl" \
           "$(jq -r '"\(.n) pod(s) stuck terminating in \(.ns)/\(.wl): still present \(.over_m)m after the grace period ended"' <<<"$g")" \
           "$(jq -c '{pods}' <<<"$g")" "$ns"
@@ -107,7 +107,7 @@ if [ "$PH_LIVE" = 1 ]; then
     | while read -r g; do
         ns="$(jq -r .ns <<<"$g")"; wl="$(jq -r .wl <<<"$g")"
         cls="$ns"; [[ "$ns" == org-* ]] && cls='org-*'
-        hint=sev3; [[ "$ns" =~ $CORE_NS ]] && hint=sev2
+        hint=low; [[ "$ns" =~ $CORE_NS ]] && hint=high
         ph_finding "$hint" "k8s.notready:$cls/$wl" "$(jq -r '"\(.n) pod(s) not ready >5m in \(.ns)/\(.wl): \(.phase) \(.why)"' <<<"$g")" "$(jq -c '{pods}' <<<"$g")" "$ns"
       done
 
@@ -125,7 +125,7 @@ if [ "$PH_LIVE" = 1 ]; then
     | while read -r d; do
         ns="$(jq -r .ns <<<"$d")"; name="$(jq -r .name <<<"$d")"
         stuck="$(jq -r 'if .reason == "ProgressDeadlineExceeded" or .age_s > 900 then "stuck" else "rolling" end' <<<"$d")"
-        hint=sev3; [ "$stuck" = stuck ] && { hint=sev2; [[ "$ns" =~ $CORE_NS ]] && hint=sev1; }
+        hint=low; [ "$stuck" = stuck ] && { hint=high; [[ "$ns" =~ $CORE_NS ]] && hint=urgent; }
         cls="$ns"; [[ "$ns" == org-* ]] && cls='org-*'
         if [ "$stuck" = stuck ]; then
           ph_finding "$hint" "k8s.rollout-stuck:$cls/$name" "$(jq -r '"deployment \(.ns)/\(.name) stuck: \(.updated)/\(.want) updated, \(.avail) available, \(.reason) for \((.age_s/60)|floor)m"' <<<"$d")" "$d" "$ns"
@@ -138,7 +138,7 @@ if [ "$PH_LIVE" = 1 ]; then
     | while read -r r; do
         ns="$(jq -r .ns <<<"$r")"
         if jq -e '.phase == "Degraded" or .abort' <<<"$r" >/dev/null; then
-          ph_finding sev2 "k8s.rollout-degraded:$ns/$(jq -r .name <<<"$r")" "$(jq -r '"Argo Rollout \(.ns)/\(.name) \(.phase): \(.msg)"' <<<"$r")" "$r" "$ns"
+          ph_finding high "k8s.rollout-degraded:$ns/$(jq -r .name <<<"$r")" "$(jq -r '"Argo Rollout \(.ns)/\(.name) \(.phase): \(.msg)"' <<<"$r")" "$r" "$ns"
         else
           ph_note "rollout: $(jq -r '"\(.ns)/\(.name) \(.phase) \(.msg)"' <<<"$r")"
         fi

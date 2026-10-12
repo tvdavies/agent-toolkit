@@ -116,6 +116,17 @@ describe("sweep-gate", () => {
     expect(result.out.reason).toContain("Urgent incident is open (TASK-4)");
   });
 
+  test("an incident labelled before the rename (sev1) holds every sweep too; a High one does not", () => {
+    const tasks = [
+      { id: "TASK-5", title: "Production watch", status: "in-progress", assignee: "sal", labels: ["sev1"] },
+      { id: "TASK-6", title: "Production watch", status: "in-progress", assignee: "sal", labels: ["high"] },
+    ];
+    const result = run([ready("LLE-51")], tasks);
+    expect(result.status).toBe(0);
+    expect(result.out.reason).toContain("Urgent incident is open (TASK-5)");
+    expect(result.out.reason).not.toContain("TASK-6");
+  });
+
   test("with nothing ready, unready tickets go to prepare once; the same set waits for a change", () => {
     const issues = [issue("LLE-60"), issue("LLE-61", { size: "S", prepared: "Needs decision" }), issue("LLE-62", { size: "M" })];
     const first = run(issues);

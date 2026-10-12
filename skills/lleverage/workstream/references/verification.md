@@ -6,8 +6,8 @@ Use the `prod-health` skill (`../prod-health/scripts/prod-health.sh`). It covers
 pods, alerts, Loki errors, HTTP 4xx/5xx, workflow failures, Sentry, PostHog,
 deploys and dispatches, compares them with a stored baseline, and attaches the
 deploys in the window to each finding. Its SKILL.md has the severity grading and
-the response (stop merging and alert Tom for SEV1, a deduplicated Linear bug for
-SEV2).
+the response (stop merging and alert Tom for Urgent, a deduplicated Linear bug for
+High). Severity uses Linear's priority names: Urgent, High, Medium, Low.
 
 - At start-up, run `../prod-health/scripts/prod-health.sh --window 30m > $WS_DIR/baseline-health.txt`.
   If it reports `baseline=none`, run `../prod-health/scripts/baseline.sh capture` first.

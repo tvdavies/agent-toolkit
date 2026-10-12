@@ -82,7 +82,7 @@ if ph_have_kube; then
   done < <(echo "$synced" | jq -c 'group_by([.repo, .rev])[] | {repo: .[0].repo, rev: .[0].rev, apps: [.[].app], at: ([.[].at] | max),
       phase: ([.[].phase] | unique | join(","))}')
   echo "$synced" | jq -c '.[] | select(.phase != "Succeeded" and .phase != "Running")' | while read -r f; do
-    ph_finding sev2 "deploy.argo-failed:$(jq -r .app <<<"$f")" "$(jq -r '"Argo sync \(.phase) for \(.app) at \(.at): \(.msg)"' <<<"$f")" "$f"
+    ph_finding high "deploy.argo-failed:$(jq -r .app <<<"$f")" "$(jq -r '"Argo sync \(.phase) for \(.app) at \(.at): \(.msg)"' <<<"$f")" "$f"
   done
   if [ "$PH_LIVE" = 1 ]; then
     bad="$(echo "$apps" | jq -c --argjson now "$(date -u +%s)" '[.items[] | select(.status.health.status == "Degraded" or .status.health.status == "Missing")
@@ -90,7 +90,7 @@ if ph_have_kube; then
         | {app: .metadata.name, health: .status.health.status, sync: .status.sync.status}]')"
     while read -r b; do
       [ -n "$b" ] || continue
-      ph_finding sev3 "deploy.argo-degraded:$(jq -r .app <<<"$b")" "$(jq -r '"Argo app \(.app) is \(.health) (\(.sync))"' <<<"$b")" "$b"
+      ph_finding low "deploy.argo-degraded:$(jq -r .app <<<"$b")" "$(jq -r '"Argo app \(.app) is \(.health) (\(.sync))"' <<<"$b")" "$b"
     done < <(jq -c '.[]' <<<"$bad")
     ph_data argo_out_of_sync "$(echo "$apps" | jq -c '[.items[] | select(.status.sync.status != "Synced") | .metadata.name]')"
   fi
@@ -113,15 +113,15 @@ if [ "$GH_OK" = 1 ]; then
       --jq '[.check_runs[] | select(.app.slug == "google-cloud-build") | {name: (.name | sub(" \\(lleverage\\)$"; "")), status, conclusion}]')" || continue
     builds="$(jq -c --argjson c "$c" --argjson r "$runs" '. + [$c + {runs: $r}]' <<<"$builds")"
   done < <(jq -c '.[]' <<<"$commits")
-  # Newest first. A build failing on the newest two commits blocks fixes: SEV1 hint.
+  # Newest first. A build failing on the newest two commits blocks fixes: urgent hint.
   echo "$builds" | jq -c '[.[] | .sha as $s | .at as $at | .title as $t | .runs[]
       | select(.conclusion == "failure" or .conclusion == "timed_out")
       | {name, sha: $s[0:10], at: $at, title: $t, conclusion}] | group_by(.name)[]
       | {name: .[0].name, n: length, latest: (sort_by(.at) | last)}' | while read -r f; do
     name="$(jq -r .name <<<"$f")"
     newest2="$(jq -r --arg n "$name" '[.[:2][] | [.runs[] | select(.name == $n) | .conclusion][0] // "none"] | join(",")' <<<"$builds")"
-    if [ "$name" = main-tests ]; then hint=sev3; what="main CI red"
-    else hint=sev2; what="deploy build failed"; [ "$newest2" = "failure,failure" ] && hint=sev1; fi
+    if [ "$name" = main-tests ]; then hint=low; what="main CI red"
+    else hint=high; what="deploy build failed"; [ "$newest2" = "failure,failure" ] && hint=urgent; fi
     ph_finding "$hint" "deploy.build:$name" "$what: $name on $(jq -r '"\(.n) commit(s), latest \(.latest.sha) \(.latest.title[0:60]) (\(.latest.conclusion))"' <<<"$f")" \
       "$(jq -c --arg nw "$newest2" '{latest_commit: .latest.sha, failing_commits: .n, newest_two: $nw}' <<<"$f")"
   done

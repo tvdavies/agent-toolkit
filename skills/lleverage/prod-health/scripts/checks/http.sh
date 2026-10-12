@@ -23,9 +23,9 @@ if ph_ensure_vm; then
   if [ -n "$hub" ]; then
     while IFS='|' read -r n ns wl st; do
       [ -n "$ns" ] || continue
-      case "$st" in 5*) cls="$st"; o='{"min_new":5,"min_spike":10,"hint":"sev2"}' ;;
-        401|403|404|429) cls="$st"; o='{"min_new":20,"min_spike":30,"hint":"sev3"}' ;;
-        *) cls=4xx; o='{"min_new":30,"min_spike":50,"hint":"sev3"}' ;; esac
+      case "$st" in 5*) cls="$st"; o='{"min_new":5,"min_spike":10,"hint":"high"}' ;;
+        401|403|404|429) cls="$st"; o='{"min_new":20,"min_spike":30,"hint":"low"}' ;;
+        *) cls=4xx; o='{"min_new":30,"min_spike":50,"hint":"low"}' ;; esac
       ph_series "http.svc:$ns${wl:+/$wl}|$cls" "$n" "HTTP $cls to $ns${wl:+/$wl} (hubble)" \
         "$(jq -c --arg ns "$ns" '. + {rules:["new","spike"], namespace:$ns}' <<<"$o")"
     done < <(echo "$hub" | jq -r '.[] | "\(.value[1] | tonumber | round)|\(.metric.destination_namespace // "")|\(.metric.destination_workload // "")|\(.metric.status)"' \
@@ -79,8 +79,8 @@ PY
     nroutes=$((nroutes + 1))
     st="$(jq -r .status <<<"$a")"; ns="$(jq -r .ns <<<"$a")"; cls="$(jq -r .cls <<<"$a")"
     # Auth failures on one route are usually a broken client or capability flow (LLE-13962).
-    case "$st" in 5*) o='{"min_new":5,"min_spike":10,"hint":"sev2"}' ;; 401|403) o='{"min_new":20,"min_spike":30,"hint":"sev2"}' ;;
-      *) o='{"min_new":20,"min_spike":30,"hint":"sev3"}' ;; esac
+    case "$st" in 5*) o='{"min_new":5,"min_spike":10,"hint":"high"}' ;; 401|403) o='{"min_new":20,"min_spike":30,"hint":"high"}' ;;
+      *) o='{"min_new":20,"min_spike":30,"hint":"low"}' ;; esac
     ph_series "http.route:$cls|$(jq -r '"\(.method) \(.route)|\(.status)"' <<<"$a" | sed 's/^ //')" "$(jq -r .n <<<"$a")" \
       "$(jq -r '"HTTP \(.status) on \(if (.nss | length) > 1 then "\(.cls) (\(.nss | length) ns)" else .ns end) \(.method) \(.route)"' <<<"$a" | sed 's/  / /')" \
       "$(jq -c --arg ns "$ns" --arg q "{namespace=\"$ns\"} |= \"$(jq -r .route <<<"$a" | sed 's#/:.*##')\" |~ \"$st\"" --argjson nss "$(jq -c .nss <<<"$a")" \

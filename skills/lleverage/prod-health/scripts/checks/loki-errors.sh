@@ -26,8 +26,8 @@ for lvl in error warn; do
     || { ph_unavailable "Loki $lvl volume query failed"; continue; }
   while IFS=$'\t' read -r n ns; do
     [ -n "$ns" ] || continue
-    if [ "$lvl" = error ]; then o='{"rules":["new","spike"],"min_new":5,"min_spike":10,"hint":"sev3"}'
-    else o='{"rules":["new","spike"],"min_new":50,"min_spike":100,"hint":"sev3"}'; fi
+    if [ "$lvl" = error ]; then o='{"rules":["new","spike"],"min_new":5,"min_spike":10,"hint":"low"}'
+    else o='{"rules":["new","spike"],"min_new":50,"min_spike":100,"hint":"low"}'; fi
     ph_series "loki.$lvl:$ns" "$n" "$lvl lines in $ns" "$(jq -c --arg ns "$ns" '. + {namespace:$ns}' <<<"$o")"
   done < <(echo "$res" | jq -r '.[] | "\(.value[1])\t\(.metric.namespace // "")"' | sort -rn)
   ph_data "by_ns_$lvl" "$(echo "$res" | jq -c 'map({(.metric.namespace // "?"): (.value[1] | tonumber)}) | add // {}')"
@@ -57,7 +57,7 @@ res="$(ph_loki_metric "sum by (namespace) (count_over_time($UL [$W]))")" || ph_u
 while IFS=$'\t' read -r n ns; do
   [ -n "$ns" ] || continue
   ph_series "loki.errlike:$ns" "$n" "unlabelled error-like lines in $ns" \
-    "$(jq -nc --arg ns "$ns" '{rules:["new","spike"], min_new:20, min_spike:50, hint:"sev3", namespace:$ns}')"
+    "$(jq -nc --arg ns "$ns" '{rules:["new","spike"], min_new:20, min_spike:50, hint:"low", namespace:$ns}')"
 done < <(echo "${res:-[]}" | jq -r '.[] | "\(.value[1])\t\(.metric.namespace // "")"' | sort -rn)
 # Namespaces whose raw log volume makes line sampling time out are counted only.
 SKIP_SAMPLE="${PH_LOKI_SAMPLE_SKIP:-litellm}"
@@ -76,7 +76,7 @@ while read -r s; do
   ns1="$(jq -r '.namespaces | keys_unsorted[0]' <<<"$s")"
   ph_series "loki.sig:$(jq -r .key <<<"$s")" "$(jq -r .count <<<"$s")" \
     "error signature in $(jq -r '.namespaces | keys_unsorted | if length > 3 then (.[:3] | join(",")) + ",+\(length - 3)" else join(",") end' <<<"$s"): $(jq -r .signature <<<"$s")" \
-    "$(jq -c --arg ns "$ns1" '{rules:["new","spike"], min_new:3, min_spike:10, window_s:.cover, hint:(if (.namespaces | length) >= 5 then "sev2" else "sev3" end),
+    "$(jq -c --arg ns "$ns1" '{rules:["new","spike"], min_new:3, min_spike:10, window_s:.cover, hint:(if (.namespaces | length) >= 5 then "high" else "low" end),
         namespace:$ns, evidence:{namespaces:.namespaces, sample:.sample}}' <<<"$s")"
 done <<<"$sigs"
 

@@ -36,14 +36,14 @@ projects="$(sentry "/organizations/$ORG/projects/" 2>/dev/null | jq -c '[.[].slu
 jq -e '.data | type == "array"' <<<"${byproj:-null}" >/dev/null 2>&1 || projects='[]'
 for p in $(jq -r '.[]' <<<"$projects"); do
   n="$(jq -r --arg p "$p" '[.data[]? | select(.project == $p) | .["count()"]] | add // 0' <<<"$byproj")"
-  ph_series "sentry.events:$p" "$n" "Sentry events in project $p (incl. CSP)" '{"rules":["spike","drop"],"min_spike":50,"hint":"sev3","drop_hint":"sev3"}'
+  ph_series "sentry.events:$p" "$n" "Sentry events in project $p (incl. CSP)" '{"rules":["spike","drop"],"min_spike":50,"hint":"low","drop_hint":"low"}'
 done
 
 while read -r i; do
   [ -n "$i" ] || continue
   ph_series "sentry.issue:$(jq -r '.["issue"]' <<<"$i")" "$(jq -r '.["count()"]' <<<"$i")" \
     "Sentry $(jq -r '"\(.project) \(.issue): \(.title[0:120])"' <<<"$i")" \
-    "$(jq -c '{rules:["new","spike"], min_new:5, min_spike:10, hint:"sev3", evidence:{users:.["count_unique(user)"]}}' <<<"$i")"
+    "$(jq -c '{rules:["new","spike"], min_new:5, min_spike:10, hint:"low", evidence:{users:.["count_unique(user)"]}}' <<<"$i")"
 done < <(jq -c '.data[]?' <<<"$byissue")
 
 # Issues first seen inside the window (any count): always worth a look.
@@ -51,7 +51,7 @@ new="$(sentry "/organizations/$ORG/issues/" --data-urlencode "query=is:unresolve
   --data-urlencode limit=25 --data-urlencode statsPeriod=24h)" || ph_unavailable "Sentry issues API failed"
 while read -r i; do
   [ -n "$i" ] || continue
-  ph_finding sev3 "sentry.new:$(jq -r .shortId <<<"$i")" \
+  ph_finding low "sentry.new:$(jq -r .shortId <<<"$i")" \
     "$(jq -r '"new Sentry issue \(.shortId) in \(.project.slug): \(.title[0:120]) (\(.count) events, \(.userCount) users)"' <<<"$i")" \
     "$(jq -c '{link: .permalink, level, firstSeen, culprit: (.culprit // "")[0:120]}' <<<"$i")"
 done < <(jq -c '.[]?' <<<"${new:-[]}")

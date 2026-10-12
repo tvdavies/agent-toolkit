@@ -170,7 +170,8 @@ ph_result_init() {
 }
 
 # ph_finding HINT KEY TITLE [EVIDENCE_JSON] [NAMESPACE]
-# HINT is sev1, sev2 or sev3: the script's suggestion; the agent decides.
+# HINT is urgent, high, medium or low (Linear's priority names, worst first):
+# the script's suggestion; the agent decides.
 ph_finding() {
   jq -nc --arg hint "$1" --arg key "$2" --arg title "$3" --argjson ev "${4:-{\}}" --arg ns "${5:-}" \
     '{hint:$hint, key:$key, title:$title, evidence:$ev} + (if $ns != "" then {namespace:$ns} else {} end)' >>"$PH_FINDINGS"

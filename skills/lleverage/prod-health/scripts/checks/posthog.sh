@@ -47,12 +47,12 @@ silent_q="SELECT count(), max(timestamp) FROM events WHERE event = '\$pageview' 
 if [ "${pv24:-0}" = 0 ]; then
   # Nothing for a whole day on production means capture or this query is broken:
   # the exception counts can't be trusted either, so this source is not checked.
-  ph_finding sev2 posthog.silent "no PostHog pageviews from $APPHOST in the 24h before $PH_END_ISO: capture or the query is broken" \
+  ph_finding high posthog.silent "no PostHog pageviews from $APPHOST in the 24h before $PH_END_ISO: capture or the query is broken" \
     "$(jq -nc --arg h "$APPHOST" --arg q "$silent_q" '{host:$h, lookback:"24h", query:$q}')"
   ph_unavailable "no pageviews from $APPHOST in 24h, so a quiet window can't be told from lost capture"
 elif [ "$PH_ENV" = production ] && [ "$workhours" = 1 ] && [ "${pv2h:-0}" = 0 ]; then
-  # Same key as the 24h case, so a silence that lasts escalates sev3 -> sev2.
-  ph_finding sev3 posthog.silent "no PostHog pageviews from $APPHOST in the 2h before $PH_END_ISO (working hours); last at ${lastpv:0:19}Z: capture or the query may be broken" \
+  # Same key as the 24h case, so a silence that lasts escalates low -> high.
+  ph_finding low posthog.silent "no PostHog pageviews from $APPHOST in the 2h before $PH_END_ISO (working hours); last at ${lastpv:0:19}Z: capture or the query may be broken" \
     "$(jq -nc --arg h "$APPHOST" --arg q "$silent_q" --arg l "${lastpv:0:19}Z" --argjson n "${pv24:-0}" '{host:$h, lookback:"2h", last_pageview:$l, pageviews_24h:$n, query:$q}')"
   ph_unavailable "no pageviews from $APPHOST in the last 2h of working hours"
 elif [ "${pv:-0}" = 0 ]; then
@@ -61,7 +61,7 @@ elif [ "${pv:-0}" = 0 ]; then
   # healthy now, so the source is partial rather than ok.
   ph_unavailable "no pageviews in the window, so browser health can't be confirmed; the newest in the last 24h was at ${lastpv:0:19}Z ($pv24 in 24h)"
 fi
-ph_series posthog.pageviews "$pv" "PostHog pageviews on $APPHOST" '{"rules":["drop"],"drop_hint":"sev2","drop_min_expected":60}'
+ph_series posthog.pageviews "$pv" "PostHog pageviews on $APPHOST" '{"rules":["drop"],"drop_hint":"high","drop_min_expected":60}'
 
 rows="$(hogql "SELECT coalesce(properties.\$exception_types[1], properties.\$exception_type, '?') AS t,
     substring(coalesce(properties.\$exception_values[1], properties.\$exception_message, ''), 1, 200) AS m,
@@ -96,12 +96,12 @@ for a in sorted(agg.values(), key=lambda a: -a["n"]):
 exn="$(jq -s 'map(select(.noise != null) | .n) | add // 0' <<<"$agg")"
 real=$(( ${ex:-0} > exn ? ${ex:-0} - exn : 0 ))
 ph_series posthog.exceptions "$real" "browser exceptions on $APPHOST, known noise left out" \
-  "$(jq -nc --argjson all "${ex:-0}" --argjson noise "$exn" '{rules:["spike"], min_spike:30, hint:"sev2", evidence:{all_exceptions:$all, excluded_noise:$noise}}')"
+  "$(jq -nc --argjson all "${ex:-0}" --argjson noise "$exn" '{rules:["spike"], min_spike:30, hint:"high", evidence:{all_exceptions:$all, excluded_noise:$noise}}')"
 ph_data exceptions "$(jq -nc --argjson all "${ex:-0}" --argjson noise "$exn" --argjson real "$real" '{all:$all, excluded_noise:$noise, counted:$real}')"
 while read -r a; do
   [ -n "$a" ] || continue
   # Public workflow apps (/<org>/w/<slug>) matter most: anonymous users, no other signal.
-  hint="$(jq -r 'if (.path | test("^/:org/w/")) then "sev2" else "sev3" end' <<<"$a")"
+  hint="$(jq -r 'if (.path | test("^/:org/w/")) then "high" else "low" end' <<<"$a")"
   ph_series "posthog.exc:$(jq -r '"\(.type)|\(.msg)|\(.path)"' <<<"$a")" "$(jq -r .n <<<"$a")" \
     "$(jq -r '"browser \(.type) on \(.path): \(.msg)"' <<<"$a")" \
     "$(jq -c --arg h "$hint" '{rules:["new","spike"], min_new:5, min_spike:10, hint:$h, evidence:{users, sample}}' <<<"$a")"

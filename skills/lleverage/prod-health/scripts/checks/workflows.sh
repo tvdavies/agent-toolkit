@@ -36,17 +36,17 @@ CODE="JSONExtractString(eventError, 'code')"
 totals="$(chq "SELECT count() AS total, countIf($FAILED) AS failed, uniqExactIf(organisationId, $FAILED) AS orgs
   FROM default.activity_v1 FINAL WHERE $WHERE")" || ph_bail "ClickHouse query failed (credentials, network or memory)"
 total="$(jq -r .total <<<"$totals")"; failed="$(jq -r .failed <<<"$totals")"; forgs="$(jq -r .orgs <<<"$totals")"
-ph_series wf.total "$total" "workflow completions" '{"rules":["drop"],"drop_hint":"sev2","drop_min_expected":60}'
-ph_series wf.failed "$failed" "workflow failure rate" '{"ratio_of":"wf.total","min_spike":10,"hint":"sev2"}'
+ph_series wf.total "$total" "workflow completions" '{"rules":["drop"],"drop_hint":"high","drop_min_expected":60}'
+ph_series wf.failed "$failed" "workflow failure rate" '{"ratio_of":"wf.total","min_spike":10,"hint":"high"}'
 
 bycat="$(chq "SELECT $CAT AS cat, count() AS n, uniqExact(organisationId) AS orgs, groupUniqArray(5)(organisationId) AS sample_orgs
   FROM default.activity_v1 FINAL WHERE $WHERE AND $FAILED GROUP BY cat ORDER BY n DESC")" || ph_unavailable "category query failed"
 while read -r c; do
   [ -n "$c" ] || continue
   cat="$(jq -r .cat <<<"$c")"
-  hint=sev3
-  case "$cat" in platform_error|platform_interrupted|unknown|status:*) hint=sev2 ;; esac
-  [ "$(jq -r .orgs <<<"$c")" -ge 5 ] && [[ "$cat" == platform_* ]] && hint=sev1
+  hint=low
+  case "$cat" in platform_error|platform_interrupted|unknown|status:*) hint=high ;; esac
+  [ "$(jq -r .orgs <<<"$c")" -ge 5 ] && [[ "$cat" == platform_* ]] && hint=urgent
   ph_series "wf.category:$cat" "$(jq -r .n <<<"$c")" "workflow failures category=$cat across $(jq -r .orgs <<<"$c") org(s)" \
     "$(jq -c --arg h "$hint" '{rules:["new","spike"], min_new:5, min_spike:8, hint:$h, evidence:{orgs:.orgs, sample_orgs:.sample_orgs}}' <<<"$c")"
 done <<<"$bycat"
@@ -57,7 +57,7 @@ bycode="$(chq "SELECT $CAT AS cat, $CODE AS code, count() AS n, uniqExact(organi
 while read -r c; do
   [ -n "$c" ] || continue
   key="$(jq -r '"\(.cat)/\(.code)"' <<<"$c")"
-  hint=sev3; [[ "$key" =~ platform_|api_execution_uncertain|stale_run_reaper ]] && hint=sev2
+  hint=low; [[ "$key" =~ platform_|api_execution_uncertain|stale_run_reaper ]] && hint=high
   ph_series "wf.code:$key" "$(jq -r .n <<<"$c")" "workflow failures $key across $(jq -r .orgs <<<"$c") org(s)" \
     "$(jq -c --arg h "$hint" '{rules:["new","spike"], min_new:5, min_spike:8, hint:$h, evidence:{orgs:.orgs, sample:.msg}}' <<<"$c")"
 done <<<"$bycode"
@@ -68,7 +68,7 @@ byorg="$(chq "SELECT organisationId AS org, countIf($FAILED) AS failed, count() 
 while read -r o; do
   [ -n "$o" ] || continue
   ph_series "wf.org:$(jq -r .org <<<"$o")" "$(jq -r .failed <<<"$o")" "workflow failures in $(jq -r '"\(.org): \(.failed)/\(.total) runs (\(.cats | join(",")))"' <<<"$o")" \
-    "$(jq -c '{rules:["new","spike"], min_new:10, min_spike:15, hint:"sev3", evidence:{total:.total, categories:.cats}}' <<<"$o")"
+    "$(jq -c '{rules:["new","spike"], min_new:10, min_spike:15, hint:"low", evidence:{total:.total, categories:.cats}}' <<<"$o")"
 done <<<"$byorg"
 
 # Org names for the report (cached, read-only app DB via the cloud-sql-proxy sidecar).
