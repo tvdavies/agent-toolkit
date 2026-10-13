@@ -112,9 +112,10 @@ Bug causes come from `../../root-cause/SKILL.md`.
   never gets closed (LLE-13889 and LLE-13890 stayed To Do after all their
   children were done).
 - Set `blocks` relations for real ordering only.
-- One owner per shared resource (SDK releases, migration numbering, staging
-  branch promotion), named in `STATE.md`. Two sessions bumped the SDK release at
-  the same time last week.
+- One owner per shared resource (SDK releases, migration numbering), named in
+  `STATE.md`. Two sessions bumped the SDK release at the same time last week.
+  The app `staging` branch has no owner: sessions share it through the
+  `staging-test` skill, which waits out anyone else's recent push.
 
 ## Follow-ups
 

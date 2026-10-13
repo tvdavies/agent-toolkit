@@ -259,6 +259,15 @@ longer matches.
   new head. Repeat until Cerbie approves the current head; that approval is the
   review babysit-pr waits for, so don't ask a human for one. The same no-progress
   bound applies: three rounds that repeat the same finding are `BLOCKED`.
+- **lleverage-ai/lleverage** (`staging`): when verifying the fix needs a deployed
+  environment, test it on staging with the installed `staging-test` skill before
+  Phase 4, without asking anyone. That skill's fast-forward merges into `staging`
+  are the only pushes it makes; the rules above against force-pushes and pushes
+  to `main` still hold. Arm auto-merge only after the check passed for the head
+  being merged; re-run it when a later push changes the behaviour it tested. If
+  the skill defers the check or needs a staging reset, leave the PR open, ready
+  and with auto-merge off, and finish with `STAGING CHECK PENDING` or
+  `STAGING RESET NEEDED`.
 - **lleverage-ai/infrastructure**: Tom merges these himself. Take the PR to
   `READY TO MERGE` as above, but don't enable auto-merge. Finish with
   `READY FOR OWNER MERGE`.
@@ -271,6 +280,11 @@ Completion is one of:
   owner merges: exact ticket, PR URL, ready head and validation summary, with
   auto-merge left off;
 
+- `STAGING CHECK PENDING` or `STAGING RESET NEEDED` — only for a staging check
+  the `staging-test` skill deferred or for which it requested a reset: exact
+  ticket, PR URL, ready head, the outstanding check, and for a reset the staging
+  SHA and target, with auto-merge left off;
+
 - `MERGED` — exact ticket, PR URL, final head, merge commit when available,
   selected method, and validation/remediation summary;
 - `BLOCKED` — exact permission, policy, unsafe decision, repeated failure, or
@@ -280,4 +294,5 @@ Completion is one of:
   state, and next safe action.
 
 Never finish yolo-ticket merely because the PR is `READY TO MERGE`, except with
-`READY FOR OWNER MERGE` in a repository where the owner merges.
+`READY FOR OWNER MERGE` in a repository where the owner merges, or with
+`STAGING CHECK PENDING` or `STAGING RESET NEEDED` as the staging note says.

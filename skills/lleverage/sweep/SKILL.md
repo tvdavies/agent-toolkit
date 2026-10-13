@@ -113,7 +113,10 @@ re-checked before dispatch.
    procedure).
 2. Read `MEMORY.md` for temporary exceptions. Write `brief.md`. Capture the
    baseline health. Start the PR watcher.
-3. Settle authority questions in one message (staging promotion, infra PRs).
+3. Settle authority questions in one message (infra PRs). Testing on staging is
+   not one: implementers use the `staging-test` skill (`../staging-test/SKILL.md`)
+   without asking. Only a staging reset needs Tom's approval, and the skill
+   requests it on the ticket each time rather than here.
 
 ## Run
 

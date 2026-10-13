@@ -41,9 +41,11 @@ must exercise the real surface:
 
 1. Default off behind a flag or cohort. Additive schemas. The deploy order is in
    the PR body.
-2. Staging first. The infra `staging` branch drives staging Argo; promote the app
-   `staging` branch from main when needed. Whether the orchestrator may promote is
-   recorded in `STATE.md`; ask once at the start.
+2. Staging first. The infra `staging` branch drives staging Argo; the app
+   `staging` branch decides what is built. Put the change on it with the
+   `staging-test` skill (`../../staging-test/SKILL.md`): it merges the change into
+   staging as it is, or merges main first, without asking. Only a reset of
+   staging to main needs Tom's approval, which the skill requests on the ticket.
 3. Test on staging with sessions created the way users create them (in-app, not
    via a test claim path). Mocks bypassed the real path twice last week.
 4. Production for the internal organisation, with a soak: a duration and a call

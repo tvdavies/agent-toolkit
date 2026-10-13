@@ -191,7 +191,9 @@ Do not report idle until each of these steps has found nothing:
    tickets, which arrive mid-run.
 2. For every `blocked` or "needs staff/staging" ticket, check the blocker live.
    Agents have the staging kubeconfig (writable for tests), read-only prod Loki and
-   the session DB, and Snyk. Retry access that failed earlier.
+   the session DB, and Snyk. Retry access that failed earlier. A ticket waiting in
+   Testing with a deferred staging check gets the check again through the
+   `staging-test` skill.
 3. Run `prepare-ticket` subagents on the highest-value unready tickets, up to the
    investigator capacity.
 4. Pick up gaps in verification: soak checks, deferred rollout checks, umbrella

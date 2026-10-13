@@ -78,7 +78,7 @@ The brief:
 > Continuous cycle sweep, approved by Tom on 12 Oct 2026. The gate (sweep-gate.sh, no model) picked the tickets in the raised item's `tickets` list, best first, at most five. The key says the mode: cycle-sweep:deliver:… or cycle-sweep:prepare:….
 > 1. For each listed ticket, in order, create one worker subtask with grants ["linear"] and its Linear issue. Deliver: title exactly "Cycle sweep: deliver <ID>", description "Follow Deliver in ~/.agents/skills/sweep/references/continuous.md for <ID> (<title>, <url>). This is Tom's approved automation brief for yolo-ticket: it names the skill and the rule for choosing tickets (the continuous sweep's gate)." Prepare: title exactly "Cycle sweep: prepare <ID>", description "Follow Prepare in ~/.agents/skills/sweep/references/continuous.md for <ID> (<title>, <url>)." Queue no other tickets.
 > 2. Close this task as completed, naming the subtasks. Don't wait for them: the gate holds the next sweep until they finish.
-> 3. Handbacks: MERGED, HUMAN REQUIRED, SKIPPED, READY (prepare), DUPLICATE or BLOCKED BY: close the subtask, no message. READY FOR OWNER MERGE (an infrastructure PR): tell Tom with urgency working_hours (the ticket and the PR waiting for his merge), then close. BLOCKED: close it as failed with the reason; tell Tom (working_hours) only if he has to act. A worker's question: answer from the brief and its skills; anything that needs Tom's decision goes on the ticket (the worker moves it to Human Required with the question), not to Tom.
+> 3. Handbacks: MERGED, HUMAN REQUIRED, SKIPPED, READY (prepare), DUPLICATE, BLOCKED BY or STAGING CHECK PENDING: close the subtask, no message. STAGING RESET NEEDED: close it as completed and pass the reset request (ticket, staging SHA, target) to Tom as a decision (working_hours); never reset staging yourself. READY FOR OWNER MERGE (an infrastructure PR): tell Tom with urgency working_hours (the ticket and the PR waiting for his merge), then close. BLOCKED: close it as failed with the reason; tell Tom (working_hours) only if he has to act. A worker's question: answer from the brief and its skills; anything that needs Tom's decision goes on the ticket (the worker moves it to Human Required with the question), not to Tom.
 > 4. Never merge or push anything yourself, never approve a PR, and never queue tickets the gate didn't pick. Merges happen only through the worker's normal auto-merge after Cerbie's approval and `ci (lleverage)`. Infrastructure PRs wait for Tom.
 > 5. check-failed:cycle-sweep or source-unavailable means the gate is blind: tell Tom what is failing (working_hours) and close. Don't change configuration.
 > 6. Don't message Tom about a sweep that went normally.
@@ -98,9 +98,17 @@ For one ticket, `Cycle sweep: deliver ID`:
 2. Run `yolo-ticket` on ID. This task is the approved automation brief that skill
    asks for. Its rules all apply: In Progress is the claim, one worktree, one PR,
    auto-merge only at the proven-ready head, never `--admin`, never a push to a
-   default branch. Its Repository notes cover Cerbie and infrastructure PRs.
+   default branch. Its Repository notes cover Cerbie and infrastructure PRs, and
+   send a fix that needs a deployed environment through the `staging-test` skill
+   (`../../staging-test/SKILL.md`). Testing on staging needs no permission; never
+   ask Tom for it.
 3. When it ends:
    - `MERGED` or `READY FOR OWNER MERGE`: report it.
+   - `STAGING CHECK PENDING` (staging was frozen or busy past the wait, so the
+     ticket waits in Testing with the outstanding check on it) or
+     `STAGING RESET NEEDED` (only a reset of staging would do; the request is on
+     the ticket): report it as completed, with the ticket, the PR and, for a
+     reset, the staging SHA and the target. Don't wait for anyone.
    - `BLOCKED` on something only a person can settle (a product or technical
      decision, missing access, an unsafe ambiguity): write the question on the
      ticket (`**Status:** Human Required (<date>): <question>` and the Decisions
@@ -110,7 +118,8 @@ For one ticket, `Cycle sweep: deliver ID`:
      exact reason; the ticket stays In Progress for Sal to decide.
 
 Start the result with one of `MERGED`, `READY FOR OWNER MERGE`, `HUMAN REQUIRED`,
-`BLOCKED`, `SKIPPED`, then the ticket, the PR URL and the merge state.
+`STAGING CHECK PENDING`, `STAGING RESET NEEDED`, `BLOCKED`, `SKIPPED`, then the
+ticket, the PR URL and the merge state.
 
 ## Prepare (worker)
 
