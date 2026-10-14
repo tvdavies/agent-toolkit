@@ -59,9 +59,12 @@ is verified, and production is healthy".
 5. Read `MEMORY.md` for active temporary exceptions and environment notes. Write
    `brief.md` from the template.
 6. Capture `baseline-health.txt`. Start the PR watcher Monitor.
-7. Settle authority questions in **one** message to Tom: staging promotion, infra
-   changes, and whether production flags for this programme may be proposed. Then
-   don't ask again.
+7. Settle authority questions in **one** message to Tom: infra changes, and
+   whether production flags for this programme may be proposed. Then don't ask
+   again. Testing on staging is not one: use the `staging-test` skill
+   (`../staging-test/SKILL.md`), which merges into staging without asking. Only a
+   staging reset needs Tom's approval, and the skill requests it on the ticket
+   each time.
 
 ## Phase 1: understand and plan
 
