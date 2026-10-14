@@ -45,8 +45,13 @@ Sal runs the sweep continuously: a gate with no model checks every 15 minutes
 whether there is anything to do, and each sweep queues at most five tickets as
 ordinary Docket worker subtasks on Sal's worker pool. The gate, the loop, the Sal
 configuration and the worker briefs are in `references/continuous.md`. A worker
-given a `Cycle sweep: deliver ID` or `Cycle sweep: prepare ID` task follows that
-file, not the rest of this one.
+given a `Cycle sweep: deliver ID`, `Cycle sweep: staging ID` or
+`Cycle sweep: prepare ID` task follows that file, not the rest of this one.
+
+The gate also picks up tickets a sweep parked in Testing for a staging check
+(the `staging-test` skill's markers): a deferred check is retried after an hour,
+at most three deferrals in a row; a reset request waits until Tom's approval is
+recorded on the ticket.
 
 ## Arguments
 

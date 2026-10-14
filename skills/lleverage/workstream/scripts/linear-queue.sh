@@ -7,9 +7,16 @@ usage() {
 Usage:
   linear-queue.sh cycle [--team LLE] [--all-assignees] [--json]
   linear-queue.sh tree ROOT-ID [--include-closed] [--json]
+  linear-queue.sh parked [--team LLE] [--state Testing]
 
 cycle  Open issues in the team's active cycle (assigned to me unless --all-assignees).
 tree   ROOT-ID and every open descendant, breadth-first.
+parked The team's issues in the Testing state (any cycle, any assignee), one JSON
+       object per issue with the staging-test markers from its comments, oldest
+       first: markers[] = {kind, at, attrs}. A marker is a comment line
+       "staging-test:<kind> key=value ..." (staging-test SKILL.md, "Markers");
+       kind is pending, reset-needed, reset-approved, reset-done, retry, passed
+       or failed. The continuous sweep's gate re-picks parked tickets from this.
 
 Each row reports: id, priority, state, verdict, blockers, open PR, ancestry, title.
 
@@ -38,11 +45,12 @@ for c in linear-cli gh jq; do command -v "$c" >/dev/null || die "$c not on PATH"
 
 [ "$#" -ge 1 ] || { usage >&2; exit 2; }
 mode="$1"; shift
-team="LLE"; root=""; json=false; mine=true; closed=false
+team="LLE"; root=""; json=false; mine=true; closed=false; parked_state="Testing"
 case "$mode" in
   -h|--help) usage; exit 0 ;;
   cycle) ;;
   tree) [ "$#" -ge 1 ] || die "tree needs ROOT-ID"; root="$(echo "$1" | tr '[:lower:]' '[:upper:]')"; shift ;;
+  parked) ;;
   *) die "unknown mode $mode" ;;
 esac
 while [ "$#" -gt 0 ]; do
@@ -51,6 +59,7 @@ while [ "$#" -gt 0 ]; do
     --all-assignees) mine=false; shift ;;
     --json) json=true; shift ;;
     --include-closed) closed=true; shift ;;
+    --state) parked_state="$2"; shift 2 ;;
     *) die "unknown option $1" ;;
   esac
 done
@@ -67,6 +76,32 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
 lq() { linear-cli api query "$@" --output json --compact --quiet; }
 nodes() { jq -c '(.data.issues // .issues // .data.issue // .issue) | if type == "object" and has("nodes") then .nodes[] else . end'; }
+
+if [ "$mode" = parked ]; then
+  # Only comments that carry a marker, so the query stays small.
+  q="query(\$after:String){ issues(first:50, after:\$after, filter:{team:{key:{eq:\"$team\"}}, state:{name:{eq:\"$parked_state\"}}}){ pageInfo{hasNextPage endCursor} nodes{ identifier title url priority state{name type} assignee{name isMe} comments(first:100, filter:{body:{contains:\"staging-test:\"}}){ nodes{ body createdAt } } } } }"
+  after=""
+  while :; do
+    if [ -n "$after" ]; then out="$(lq "$q" -v after="$after")"; else out="$(lq "$q")"; fi
+    echo "$out" | nodes >> "$tmp/issues.jsonl"
+    [ "$(echo "$out" | jq -r '(.data.issues // .issues).pageInfo.hasNextPage')" = true ] || break
+    after="$(echo "$out" | jq -r '(.data.issues // .issues).pageInfo.endCursor')"
+  done
+  jq -c '
+    {
+      id: .identifier, title, url, priority, state: .state.name, stateType: .state.type,
+      assignee: (.assignee.name // null), assignedToMe: (.assignee.isMe // false),
+      # One marker per comment: its last marker line. Backticks around it are allowed.
+      markers: ([.comments.nodes[]
+        | .createdAt as $at
+        | [.body | match("(?m)^\\W*staging-test:(pending|reset-needed|reset-approved|reset-done|retry|passed|failed)\\b([^`\\n]*)"; "g")] | last
+        | select(. != null)
+        | {kind: .captures[0].string, at: $at,
+           attrs: ([.captures[1].string | scan("([a-z]+)=([^\\s`]+)") | {key: .[0], value: .[1]}] | from_entries)}]
+        | sort_by(.at))
+    }' "$tmp/issues.jsonl"
+  exit 0
+fi
 
 if [ "$mode" = cycle ]; then
   assignee=''

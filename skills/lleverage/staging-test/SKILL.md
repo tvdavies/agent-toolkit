@@ -177,21 +177,55 @@ Staging check for #<PR> at <change short>: passed | failed | deferred | reset ne
 - Staging: <old short> → <new short>, builds passed, rolled out <time>
 - Checked: <what, where, as whom>
 - Result: <the evidence, one or two lines>
+
+`staging-test:passed pr=<PR> staging=<new short>`
 ```
+
+The last line is the marker: `passed` or `failed` here (Markers). Every comment
+this skill writes ends with exactly one.
+
+## Markers
+
+The continuous sweep's gate decides from these lines which parked tickets to pick
+up again (`../sweep/scripts/sweep-gate.sh`, via `linear-queue.sh parked`). Each
+is the last line of its comment, in inline code, `staging-test:<kind>` followed
+by `key=value` pairs. Never put a marker in any other comment, and never quote
+one.
+
+| Marker | Written by | Meaning |
+| --- | --- | --- |
+| `staging-test:passed pr=<PR> staging=<sha>` | the worker, Step 6 | checked on staging; finished |
+| `staging-test:failed pr=<PR> staging=<sha>` | the worker, Step 6 | the check failed and the fix goes back to the PR; finished |
+| `staging-test:pending pr=<PR> staging=<sha>` | the worker, Deferring | the check is outstanding; a later sweep retries it |
+| `staging-test:reset-needed pr=<PR> staging=<sha> main=<sha>` | the worker, Requesting a reset | waits for Tom; never retried without his approval |
+| `staging-test:reset-approved staging=<sha>` | Tom, or Sal relaying Tom's approval | approves one reset of staging at that head (`references/reset.md`) |
+| `staging-test:reset-done pr=<PR> old=<sha> new=<sha> tag=<tag>` | the worker, `references/reset.md` step 5 | the approved reset happened; the approval is used up |
+| `staging-test:retry` | a person | re-arms a check the sweep stopped retrying |
+
+A worker never writes `reset-approved` or `retry` on its own judgement. It writes
+`reset-approved` only when its task brief quotes Tom's approval for that ticket.
+The gate can't tell who wrote a comment (agents comment as Tom's Linear user), so
+this rule is what makes the marker mean Tom said yes.
 
 ## Deferring
 
 When the verdict is `defer`, builds didn't finish, or two push races were lost:
 
 1. Move the ticket to the team's `Testing` state
-   (`linear-cli issues update <TICKET> -s "Testing"`; if the team has no Testing
-   state, leave its state as it is).
+   (`linear-cli issues update <TICKET> -s "Testing"`).
 2. Comment which check is outstanding and why it was deferred (the freeze, the
-   busy staging with `last_push=` and `builds_running=`, or the failing build).
-3. Don't arm auto-merge for a PR whose staging check is outstanding. Leave the PR
+   busy staging with `last_push=` and `builds_running=`, or the failing build),
+   ending with `staging-test:pending pr=<PR> staging=<staging short>`.
+3. Count the `staging-test:pending` markers on the ticket since the last marker
+   of any other kind, this one included. At three, add to the same comment that
+   the sweep has deferred this check three times and won't retry it again, and
+   that a comment ending in `staging-test:retry` re-arms it.
+4. Don't arm auto-merge for a PR whose staging check is outstanding. Leave the PR
    open, ready and with auto-merge off.
-4. Finish as completed with `STAGING CHECK PENDING: <TICKET> <PR> <check>`, so a
-   later run picks it up.
+5. Finish as completed with `STAGING CHECK PENDING: <TICKET> <PR> <check>`. If a
+   sweep delivered the ticket, the sweep's gate picks it up again after an hour
+   (Markers); the retry plans afresh, so the freeze and busy checks run again
+   first.
 
 ## Requesting a reset
 
@@ -203,10 +237,25 @@ When the verdict is `reset-needed`, or tier 2 had to be abandoned:
    `behind_age_hours=`, the conflict counts and files), the current staging SHA,
    the target (`origin/main` at the plan's `main=`), and what the reset would
    take off staging (`git log --oneline --no-merges <main>..<staging>`, at most
-   ten lines and a count).
+   ten lines and a count). End it with
+   `staging-test:reset-needed pr=<PR> staging=<staging short> main=<main short>`.
 4. Leave the PR as in Deferring and finish as completed with
    `STAGING RESET NEEDED: <TICKET> staging <staging short> → main <main short>`,
    stated in the outcome as a decision for Tom.
 
-If Tom approves, a later task carries out `references/reset.md`, which saves the
-old head as a backup tag first, and then runs Steps 3 to 6 on the reset staging.
+Tom approves by a comment on the ticket ending in
+`staging-test:reset-approved staging=<the staging SHA from the request>`, written
+by him or by Sal on his word. Nothing else counts as approval. The sweep's gate
+then picks the ticket up, and that run carries out `references/reset.md`, which
+saves the old head as a backup tag first, and then runs Steps 3 to 6 on the reset
+staging. Without that comment the ticket waits in Testing; the sweep doesn't
+retry it or ask again.
+
+## Running again on a parked ticket
+
+When a later run (a `Cycle sweep: staging <TICKET>` task, or a person) picks up a
+ticket parked in Testing, start again from Step 1 on the PR's current head. If the
+plan says `reset-needed` and the ticket's latest `reset-approved` marker is newer
+than its latest `reset-needed` and `reset-done` markers, follow
+`references/reset.md` with that marker's `staging=` as APPROVED. Otherwise request
+the reset again.
