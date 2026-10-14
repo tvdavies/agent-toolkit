@@ -6,6 +6,7 @@ different sessions, orgs or requests groups together.
 
   normalise.py loki-signatures < lines.jsonl     # {ns,pod,container,line} -> aggregated JSONL
   normalise.py route PATH                        # print the masked route
+  normalise.py http-routes JSON_RESULT ACC_RESULT # Loki vectors -> aggregated route JSONL
 """
 import json
 import re
@@ -116,6 +117,75 @@ def loki_signatures():
         print(json.dumps(a, ensure_ascii=False))
 
 
+PATH_FIELDS = ("endpoint", "route", "path", "url", "uri")
+
+
+def http_route_rows(json_result, acc_result):
+    """Turn the http check's Loki vectors into (ns, method, path, status, n) rows.
+
+    json_result: structured log lines grouped by method, endpoint/route/path/url/uri,
+    status/statusCode. acc_result: access lines ("GET /x HTTP/1.1" 404), which
+    always carry a path. Returns (rows, skipped) where skipped counts JSON lines
+    that had a status but neither a path nor a method. Those aren't request logs
+    (Kubernetes API retries, outbound-call failures, metrics lines), and used to be
+    filed under route '/'. Request logs that give a method but no path (actions-
+    gateway's "HTTP request completed") are kept under '/' as before.
+    """
+    rows, skipped = [], 0
+    for r in json_result or []:
+        m = r.get("metric", {})
+        status = m.get("status") or m.get("statusCode") or ""
+        if not status or status[0] not in "45":
+            continue
+        n = int(float(r.get("value", [0, 0])[1]))
+        path = next((m[f] for f in PATH_FIELDS if m.get(f)), "")
+        method = m.get("method") or ""
+        if not path:
+            if not method:
+                skipped += n
+                continue
+            path = "/"
+        rows.append((m.get("namespace", ""), method, path, status, n))
+    for r in acc_result or []:
+        m = r.get("metric", {})
+        status, path = m.get("status") or "", m.get("path") or ""
+        if not status or status[0] not in "45" or not path:
+            continue
+        rows.append((m.get("namespace", ""), m.get("method") or "", path, status, int(float(r.get("value", [0, 0])[1]))))
+    return rows, skipped
+
+
+def evidence_query(ns, r, status):
+    """A Loki query for the lines behind a route key: the status as a field or
+    after an access-log request line, so ids and timestamps containing the digits
+    don't match, and the route up to its first placeholder. Route '/' gets no
+    route filter: every path contains '/', and request logs without a path
+    (filed under '/') contain none."""
+    prefix = r.split("/:")[0]
+    route_filter = ' |= "%s"' % prefix.replace('"', '\\"') if prefix not in ("", "/") else ""
+    return '{namespace="%s"}%s |~ `"(status|statusCode)":\\s*"?%s\\b|" %s `' % (ns, route_filter, status, status)
+
+
+def http_routes(json_path, acc_path):
+    def load(p):
+        try:
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return []
+    rows, skipped = http_route_rows(load(json_path), load(acc_path))
+    agg = {}
+    for ns, method, path, status, n in rows:
+        a = agg.setdefault((ns_class(ns), method, route(path), status), {"n": 0, "nss": {}})
+        a["n"] += n
+        a["nss"][ns] = a["nss"].get(ns, 0) + n
+    for (cls, method, r, status), a in sorted(agg.items(), key=lambda kv: -kv[1]["n"]):
+        top = max(a["nss"], key=a["nss"].get)
+        print(json.dumps({"cls": cls, "ns": top, "nss": a["nss"], "method": method, "route": r, "status": status,
+                          "n": a["n"], "query": evidence_query(top, r, status)}))
+    print(json.dumps({"skipped_no_path": skipped}))
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__, file=sys.stderr)
@@ -125,6 +195,8 @@ def main():
         loki_signatures()
     elif mode == "route":
         print(route(sys.argv[2] if len(sys.argv) > 2 else ""))
+    elif mode == "http-routes" and len(sys.argv) == 4:
+        http_routes(sys.argv[2], sys.argv[3])
     elif mode == "mask":
         print(mask(sys.argv[2] if len(sys.argv) > 2 else sys.stdin.read()))
     else:

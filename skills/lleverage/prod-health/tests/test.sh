@@ -246,6 +246,37 @@ jq -e '.findings[] | select(.key == "k8s.notready:credential-service/credential-
 jq -e 'any(.notes[]; test("^2 pod\\(s\\) terminating within their grace period"))' <<<"$k" >/dev/null \
   || fail "skipped terminating pods should be counted in a note: $(jq -c '.notes' <<<"$k")"
 
+# HTTP routes: a status with no path and no method isn't a request (agent-sandbox-service
+# "Retrying Kubernetes API operation" 409s, agent-service metadata-lookup 404s) and makes
+# no route key; real requests to / still do. Loki and kubectl are stubbed.
+hbin="$state/hbin"; infra="$state/infra"; mkdir -p "$hbin" "$infra/generated/production"; : >"$infra/generated/production/kubeconfig"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$hbin/kubectl"
+cat >"$hbin/curl" <<SH
+#!/usr/bin/env bash
+q=""; for a in "\$@"; do case "\$a" in query=*) q="\$a" ;; esac; done
+case "\$q" in
+  *"| json method="*) cat "$here/fixtures/http-loki-json.json" ;;
+  *"| regexp "*) cat "$here/fixtures/http-loki-access.json" ;;
+  *) echo '{"data":{"result":[]}}' ;;
+esac
+SH
+chmod +x "$hbin/kubectl" "$hbin/curl"
+http="$(PATH="$hbin:$PATH" PH_INFRA_DIR="$infra" PH_STATE_ROOT="$state" PH_LOKI_URL=http://loki.invalid PH_VM_URL=http://vm.invalid \
+  "$here/../scripts/checks/http.sh" --raw --window 2h --end 2026-10-11T20:20:00Z)"
+hk="$(jq -r '.series[] | "\(.key)=\(.count)"' <<<"$http" | sort | tr '\n' ' ')"
+[ "$hk" = 'http.route:actions-gateway|POST /|400=2 http.route:app|POST /api/public/workflow-session|401=12 http.route:credential-service|GET /|404=52 http.route:example-api|POST /|409=25 http.route:example-api|PUT /|409=21 ' ] \
+  || fail "http route keys: $hk"
+jq -e '.data.http_skipped_no_path == 791' <<<"$http" >/dev/null || fail "pathless non-request lines should be counted as skipped: $(jq -c .data <<<"$http")"
+jq -e '.series[] | select(.key == "http.route:example-api|POST /|409") | .evidence.query == "{namespace=\"example-api\"} |~ `\"(status|statusCode)\":\\s*\"?409\\b|\" 409 `"' <<<"$http" >/dev/null \
+  || fail "evidence query for / should match the status field: $(jq -c '[.series[].evidence.query]' <<<"$http")"
+jq -e '.series[] | select(.key == "http.route:app|POST /api/public/workflow-session|401") | .evidence.query | startswith("{namespace=\"app\"} |= \"/api/public/workflow-session\" |~ ")' <<<"$http" >/dev/null \
+  || fail "evidence query should keep the route prefix: $(jq -c '[.series[].evidence.query]' <<<"$http")"
+hf="$(PH_STATE_ROOT="$state" python3 "$lib/assess.py" --env production --json - <<<"$http" | jq -r '.findings[].key')"
+for k in 'http.route:example-api|POST /|409' 'http.route:example-api|PUT /|409'; do
+  grep -qxF "$k" <<<"$hf" || fail "a real 409 on / should still raise $k; got: $hf"
+done
+! grep -q '|/|' <<<"$hf" || fail "no route key without a method should be raised: $hf"
+
 # Normalisation.
 [ "$(python3 "$lib/normalise.py" route /lsq3oanefp/w/my-public-app)" = "/:org/w/:id" ] || fail "public app route"
 [ "$(python3 "$lib/normalise.py" route '/api/public/workflow-session?sessionId=1')" = "/api/public/workflow-session" ] || fail "query string"

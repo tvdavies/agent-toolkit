@@ -1,0 +1,17 @@
+{"status":"success","data":{"resultType":"vector","result":[
+  {"_line":"agent-sandbox-service, production 11 Oct 2026: {\"severity\":\"WARNING\",\"message\":\"Retrying Kubernetes API operation\",\"service\":\"agent-sandbox-service\",\"operation\":\"create pod agent-sandbox-b41c2421\",\"statusCode\":409,\"attempt\":1,\"delayMs\":250}",
+   "metric":{"namespace":"agent-sandbox-service","statusCode":"409"},"value":[1791752400,"30"]},
+  {"_line":"agent-service, production 9-11 Oct 2026: {\"level\":\"warn\",\"message\":\"[agent] Session-service session metadata lookup failed\",\"sessionId\":\"workflow-agent-v2-3ac5b848f6000ba4a8248170ddff9d2dd37c2dcbe3817e1703601ca1a53e3bf3\",\"status\":404}",
+   "metric":{"namespace":"agent-service","status":"404"},"value":[1791752400,"721"]},
+  {"_line":"org namespace, production: {\"error\":\"{\\\"error\\\":\\\"userId is required to create a session\\\"}\",\"level\":\"error\",\"message\":\"Failed to create workflow session (non-blocking)\",\"status\":400,\"statusText\":\"Bad Request\"}",
+   "metric":{"namespace":"org-oykjinklu8","status":"400"},"value":[1791752400,"40"]},
+  {"_line":"actions-gateway, production 11 Oct 2026: {\"severity\":\"INFO\",\"message\":\"HTTP request completed\",\"component\":\"HttpRequest\",\"correlationId\":\"c62c8aba-2c71-4e18-abd2-01592f2ebed0\",\"method\":\"POST\",\"statusCode\":400,\"durationMs\":225} (a request log without its path: still counted, under /)",
+   "metric":{"method":"POST","namespace":"actions-gateway","statusCode":"400"},"value":[1791752400,"2"]},
+  {"_line":"credential-service, production 11 Oct 2026: {\"level\":\"info\",\"message\":\"HTTP Request\",\"method\":\"GET\",\"statusCode\":404,\"url\":\"/\",\"userAgent\":\"... ModatScanner/1.2\"}",
+   "metric":{"method":"GET","namespace":"credential-service","statusCode":"404","url":"/"},"value":[1791752400,"52"]},
+  {"_line":"a real request to / answered 409: {\"level\":\"info\",\"message\":\"request\",\"method\":\"POST\",\"path\":\"/\",\"status\":409}",
+   "metric":{"method":"POST","namespace":"example-api","path":"/","status":"409"},"value":[1791752400,"25"]},
+  {"_line":"integration-trigger-deployment-service: statusCode nested under error, so Loki extracts no status label",
+   "metric":{"namespace":"integration-trigger-deployment-service"},"value":[1791752400,"4"]},
+  {"metric":{"method":"POST","namespace":"app","endpoint":"/api/public/workflow-session?sessionId=1","status":"401"},"value":[1791752400,"12"]}
+]}}
