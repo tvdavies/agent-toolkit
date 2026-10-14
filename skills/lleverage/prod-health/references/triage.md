@@ -73,10 +73,11 @@ ticket. The steps below are for an attended session.
 ## Linear ticket
 
 Follow "Writing tickets" in `../../workstream/references/issues.md`. The title
-starts with the priority word and names the symptom as a user would see it, in a
-few words (`Urgent: public workflow apps crash on load`). The ticket's Linear
-priority carries the severity; don't add a separate severity label. The description stays
-short:
+names the symptom as a user would see it, in a few words, with no priority or
+severity word in front (`Public workflow apps crash on load`, not `Urgent: public
+workflow apps crash on load`). The ticket's Linear priority field carries the
+severity, so don't repeat it in the title or add a separate severity label. The
+description stays short:
 
 ```markdown
 ## Problem
