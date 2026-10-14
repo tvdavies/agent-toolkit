@@ -103,8 +103,9 @@ Scripts live in `scripts/` (run any with `--help`):
    ticket's evidence document or description instead, and comment only when its
    owner needs to know it recurred. Tickets follow "Writing tickets" in
    `../workstream/references/issues.md`, with the body in `references/triage.md`:
-   a short symptom title and a few lines on the ticket (symptom, impact, start,
-   suspected deploy, next step), with the window, counts against the baseline,
+   a short symptom title with no priority word in front (the `Urgent:` and
+   `High:` lines below start your result, not the ticket title) and a few lines
+   on the ticket (symptom, impact, start, suspected deploy, next step), with the window, counts against the baseline,
    exact queries and organisations by name in the attached evidence document.
 7. **Teach the baseline.** When Tom or the ticket owner confirms that a finding
    is normal, run `scripts/baseline.sh accept <finding-key> --note "<why>"`,

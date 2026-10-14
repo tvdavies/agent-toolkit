@@ -14,7 +14,9 @@ repeating them.
 - **Title:** short but descriptive, about 60 characters at most. Name the symptom
   or the change, not the mechanism: "Billing emails never sent", not "Billing
   emails never sent: notification-service billing Postmark client posts to
-  https://undefined via egress proxy".
+  https://undefined via egress proxy". Never prefix a title with a priority or
+  severity ("Urgent:", "High:", "Medium:", "Low:"): the ticket's priority field
+  already records it.
 - **Description:** simple and compressed, with just enough to understand the
   problem and fix it. Short lines and bullets, no paragraphs, plain words, nothing
   flowery. Use this shape and leave out any section that is empty or adds
