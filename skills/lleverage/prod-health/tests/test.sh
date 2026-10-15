@@ -229,7 +229,8 @@ cat >"$kbin/kubectl" <<'SH'
 case " $* " in
   *" version "*) exit 0 ;;
   *" get pods "*) cat "$FAKE_PODS" ;;
-  *" get deploy "*|*" get rollouts"*) echo '{"items":[]}' ;;
+  *" get deploy "*) if [ -n "${FAKE_DEPS:-}" ]; then cat "$FAKE_DEPS"; else echo '{"items":[]}'; fi ;;
+  *" get rollouts"*) echo '{"items":[]}' ;;
   *) exit 1 ;;
 esac
 SH
@@ -245,6 +246,47 @@ jq -e '.findings[] | select(.key == "k8s.notready:credential-service/credential-
   || fail "core-namespace not-ready pod should stay high: $(jq -c '.findings' <<<"$k")"
 jq -e 'any(.notes[]; test("^2 pod\\(s\\) terminating within their grace period"))' <<<"$k" >/dev/null \
   || fail "skipped terminating pods should be counted in a note: $(jq -c '.notes' <<<"$k")"
+
+# k8s deployments: Progressing's lastUpdateTime is the end of the last rollout, and HPA
+# scaling or a readiness flap never moves it. Once the rollout is complete a shortfall
+# is timed from Available going False, so a scale-up caught mid-flight or a brief flap
+# is no finding (TASK-0221, TASK-0639, TASK-1185); a stalled rollout is still
+# rollout-stuck, and a shortfall that lasts after a complete rollout is
+# replicas-unavailable, high at most.
+dep() {  # dep NS NAME WANT PODS UPDATED AVAIL REASON PROGRESSED_S AVAILABLE AVAILABLE_SINCE_S
+  jq -nc --arg ns "$1" --arg name "$2" --argjson want "$3" --argjson pods "$4" --argjson upd "$5" --argjson avail "$6" \
+    --arg reason "$7" --arg prog "$(at "$8")" --arg av "$9" --arg avsince "$(at "${10}")" --arg created "$(at -864000)" '
+    {metadata: {namespace: $ns, name: $name, generation: 7, creationTimestamp: $created},
+     spec: {replicas: $want, template: {spec: {containers: [{image: "r/\($name):abc"}]}}},
+     status: {observedGeneration: 7, replicas: $pods, updatedReplicas: $upd, readyReplicas: $avail, availableReplicas: $avail,
+              conditions: [{type: "Available", status: $av, lastTransitionTime: $avsince, lastUpdateTime: $avsince},
+                           {type: "Progressing", status: "True", reason: $reason, lastUpdateTime: $prog, lastTransitionTime: $prog}]}}'
+}
+{
+  # TASK-1185: the HPA's 8th pod, 1 s old; the rollout ended 28m ago.
+  dep session-service session-service-deployment 8 8 8 7 NewReplicaSetAvailable -1731 False -1
+  # The same scale-up before the ReplicaSet has created the pod.
+  dep agent-service agent-service-deployment 8 7 7 7 NewReplicaSetAvailable -1731 False -1
+  # A single-replica org deployment whose pod failed readiness a minute ago.
+  dep org-cccc workflow-deployment 1 1 1 0 NewReplicaSetAvailable -3600 False -60
+  # A flap within maxUnavailable: Available stays True (its pod is k8s.notready's job).
+  dep app app-deployment 4 4 4 3 NewReplicaSetAvailable -3600 True -86400
+  # A rollout stalled for 20m with an old pod still serving.
+  dep workflow-service workflow-service-deployment 3 4 1 3 ReplicaSetUpdated -1200 True -86400
+  # Rollout done 2h ago, one replica unavailable for 25m.
+  dep data-service data-service-deployment 2 2 2 1 NewReplicaSetAvailable -7200 False -1500
+} | jq -sc '{items: .}' >"$state/deps.json"
+echo '{"items":[]}' >"$state/nopods.json"
+k="$(PATH="$kbin:$PATH" PH_INFRA_DIR="$state/infra" FAKE_PODS="$state/nopods.json" FAKE_DEPS="$state/deps.json" "$here/../scripts/checks/k8s.sh" --raw --window 30m)"
+kk="$(jq -r '[.findings[] | "\(.key)=\(.hint)"] | sort | join(" ")' <<<"$k")"
+[ "$kk" = "k8s.replicas-unavailable:data-service/data-service-deployment=high k8s.rollout-stuck:workflow-service/workflow-service-deployment=urgent" ] \
+  || fail "k8s deployments: expected only the stalled rollout (urgent) and the sustained shortfall (high); got: $kk"
+jq -e '.findings[] | select(.key | startswith("k8s.replicas-unavailable")) | .title | test("1/2 available, 2 updated, for 25m")' <<<"$k" >/dev/null \
+  || fail "replicas-unavailable should be timed from Available going False: $(jq -c '.findings' <<<"$k")"
+jq -e '.findings[] | select(.key | startswith("k8s.rollout-stuck")) | .title | test("1/3 updated, 3 available, ReplicaSetUpdated for 20m")' <<<"$k" >/dev/null \
+  || fail "rollout-stuck should still be timed from Progressing: $(jq -c '.findings' <<<"$k")"
+[ "$(jq '[.notes[] | select(startswith("scaling: "))] | length' <<<"$k")" = 4 ] \
+  || fail "scale-ups and flaps should be notes: $(jq -c '.notes' <<<"$k")"
 
 # Normalisation.
 [ "$(python3 "$lib/normalise.py" route /lsq3oanefp/w/my-public-app)" = "/:org/w/:id" ] || fail "public app route"

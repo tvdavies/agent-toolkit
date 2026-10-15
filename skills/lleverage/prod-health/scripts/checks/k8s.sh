@@ -114,19 +114,40 @@ if [ "$PH_LIVE" = 1 ]; then
   deps="$(ph_kubectl get deploy -A -o json 2>/dev/null)" || { ph_unavailable "kubectl get deployments failed"; deps='{"items":[]}'; }
   ros="$(ph_kubectl get rollouts.argoproj.io -A -o json 2>/dev/null)" || { ph_unavailable "kubectl get rollouts failed"; ros='{"items":[]}'; }
   # Deployments mid-rollout or stuck. Workload-ref'd deployments scaled to 0 are skipped.
+  # The last rollout is complete, as the deployment controller itself decides, once every
+  # pod is on the new ReplicaSet and Progressing says NewReplicaSetAvailable. HPA scaling
+  # and readiness flaps after that never update Progressing, so its lastUpdateTime is the
+  # end of the last rollout, not the start of the shortfall. For a complete rollout the
+  # shortfall is timed from Available going False (or ReplicaFailure going True) and a
+  # sustained one is k8s.replicas-unavailable, not k8s.rollout-stuck. A shortfall within
+  # maxUnavailable keeps Available True and has no timestamp; its pods are reported as
+  # k8s.notready after 5 minutes.
   echo "$deps" | jq -c --argjson now "$now" '
     .items[] | select((.spec.replicas // 1) > 0)
     | ([.status.conditions[]? | select(.type == "Progressing")][0]) as $pc
     | select((.status.updatedReplicas // 0) < .spec.replicas or (.status.availableReplicas // 0) < .spec.replicas
              or (.status.observedGeneration // 0) < .metadata.generation or $pc.reason == "ProgressDeadlineExceeded")
+    | ($pc.reason == "NewReplicaSetAvailable" and (.status.replicas // 0) == (.status.updatedReplicas // 0)) as $done
+    | ([.status.conditions[]? | select((.type == "Available" and .status == "False") or (.type == "ReplicaFailure" and .status == "True"))
+        | .lastTransitionTime // empty | fromdateiso8601] | min) as $down
     | {ns: .metadata.namespace, name: .metadata.name, want: .spec.replicas, updated: (.status.updatedReplicas // 0),
-       avail: (.status.availableReplicas // 0), reason: ($pc.reason // ""),
-       age_s: ($now - ($pc.lastUpdateTime // .metadata.creationTimestamp | fromdateiso8601))}' \
+       avail: (.status.availableReplicas // 0), reason: ($pc.reason // ""), complete: $done,
+       age_s: (if $done then (if $down then $now - $down else 0 end)
+               else $now - ($pc.lastUpdateTime // .metadata.creationTimestamp | fromdateiso8601) end)}' \
     | while read -r d; do
         ns="$(jq -r .ns <<<"$d")"; name="$(jq -r .name <<<"$d")"
+        cls="$ns"; [[ "$ns" == org-* ]] && cls='org-*'
+        if jq -e .complete <<<"$d" >/dev/null; then
+          if jq -e '.age_s > 900' <<<"$d" >/dev/null; then
+            hint=low; [[ "$ns" =~ $CORE_NS ]] && hint=high
+            ph_finding "$hint" "k8s.replicas-unavailable:$cls/$name" "$(jq -r '"deployment \(.ns)/\(.name) short of replicas after its rollout completed: \(.avail)/\(.want) available, \(.updated) updated, for \((.age_s/60)|floor)m"' <<<"$d")" "$d" "$ns"
+          else
+            ph_note "scaling: $(jq -r '"\(.ns)/\(.name) \(.updated)/\(.want) updated, \(.avail) available, rollout complete, short for \(.age_s)s"' <<<"$d")"
+          fi
+          continue
+        fi
         stuck="$(jq -r 'if .reason == "ProgressDeadlineExceeded" or .age_s > 900 then "stuck" else "rolling" end' <<<"$d")"
         hint=low; [ "$stuck" = stuck ] && { hint=high; [[ "$ns" =~ $CORE_NS ]] && hint=urgent; }
-        cls="$ns"; [[ "$ns" == org-* ]] && cls='org-*'
         if [ "$stuck" = stuck ]; then
           ph_finding "$hint" "k8s.rollout-stuck:$cls/$name" "$(jq -r '"deployment \(.ns)/\(.name) stuck: \(.updated)/\(.want) updated, \(.avail) available, \(.reason) for \((.age_s/60)|floor)m"' <<<"$d")" "$d" "$ns"
         else
