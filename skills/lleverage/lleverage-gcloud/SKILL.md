@@ -58,6 +58,12 @@ Granted on project `lleverage` by `scripts/grant-roles.sh`:
 | Monitoring              | `monitoring.viewer`          | metrics and dashboards                            |
 | Cloud DNS               | `dns.reader`                 | client email domain records                       |
 
+On one service account, never project-wide:
+
+| Service account                                      | Role                     | Typical use                                        |
+| ---------------------------------------------------- | ------------------------ | -------------------------------------------------- |
+| `815833946946-compute@developer.gserviceaccount.com` | `iam.serviceAccountUser` | run the `ci (lleverage)` trigger, which builds as it |
+
 It cannot read secrets, change IAM or write DNS records. It can also read Cloud
 Build on `lleverage-staging`.
 
@@ -98,6 +104,12 @@ gcloud builds triggers run 6a84b8b8-5c85-440a-a9e9-2c1b63432059 \
   --region=europe-west2 --branch=<branch>
 ```
 
+The trigger builds as `815833946946-compute@developer.gserviceaccount.com`, so
+running it needs `cloudbuild.builds.create` (from `cloudbuild.builds.editor`)
+and `iam.serviceAccounts.actAs` on that account. Without the second it fails
+with "user does not have impersonation permission on the trigger service
+account".
+
 ## Session files
 
 Each organisation's uploads, node inputs/outputs and skill resources sit in
@@ -126,6 +138,7 @@ off the machine.
 ## Granting a new permission
 
 Add the role to `ROLES` in `scripts/grant-roles.sh` with a comment saying which
-task needs it, then have Tom run the script with `LLEVERAGE_GCP_SERVICE_ACCOUNT` set. It uses
-Tom's own login, adds the
-missing bindings and prints the roles the account holds afterwards.
+task needs it (or to `SA_ROLES` for a role on one service account), then have
+Tom run the script with `LLEVERAGE_GCP_SERVICE_ACCOUNT` set. It uses Tom's own
+login, adds only the missing bindings and prints the roles the account holds
+afterwards. `--dry-run` lists the missing bindings and changes nothing.
