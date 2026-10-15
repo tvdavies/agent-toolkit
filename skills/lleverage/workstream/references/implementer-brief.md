@@ -45,6 +45,16 @@ Follow ~/.claude/skills/yolo-ticket/SKILL.md for the flow, with these rules on t
   suites must exit 0; quote commands and counts. Empty output is not a pass.
 - Integration suites skipped in CI (<list>): run them locally via `pnpm test:integration`.
 - If CI fails in code you didn't touch, run that suite on origin/main and report.
+- A flaky `ci (lleverage)` failure (a test outside your change that passes
+  locally and on origin/main): re-run the check on the same head with
+  `gcloud builds triggers run 6a84b8b8-5c85-440a-a9e9-2c1b63432059 --region=europe-west2 --project=lleverage --branch=<your branch>`
+  (lleverage-gcloud skill). A new `ci (lleverage)` check run appears on the same
+  head SHA within a few minutes; the head doesn't change, so there's no new
+  Cerbie round. GitHub's re-run, `/gcbrun` and `gcloud builds retry` don't
+  produce a linked check. Only if the trigger fails (for example
+  PERMISSION_DENIED), fall back to updating the branch from main
+  (`gh api -X PUT repos/<OWNER/REPO>/pulls/<n>/update-branch -f expected_head_sha=<head>`),
+  which makes a new head and can cost another review round.
 
 ## Review
 - Before marking ready: an independent `sol-reviewer`, run in the FOREGROUND
