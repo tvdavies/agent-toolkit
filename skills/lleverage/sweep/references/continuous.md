@@ -31,7 +31,9 @@ else failed). Run `sweep-gate.sh --help` for the full rules. In order:
 3. Eligible tickets, from the queue: verdict `eligible`, To Do or Backlog, no open
    ancestor, unassigned or Tom's, size XS/S/M or unknown, and not named by an open
    Docket task or a sweep task from the last three days.
-4. Any ready (`**Status:** Ready` and a known S/M size): raise
+4. Any ready (`**Status:** Ready` and a known S/M size; `**Status:** Ready from
+   <date>` counts only from that date, and until then, or if the date can't be
+   read, the ticket is listed as waiting and neither delivered nor prepared): raise
    `cycle-sweep:deliver:<hash of the pick>` with up to five tickets, best first
    (priority, then smaller, then older).
 5. Otherwise, unready ones not prepared by a sweep in the last three days: hash

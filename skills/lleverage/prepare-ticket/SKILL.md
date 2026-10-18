@@ -139,7 +139,10 @@ prepares it again:
   description's Status line says `**Status:** Ready (<date>)` and the description
   has a `Size:` line. Set the Linear estimate too (t-shirt: XS, S or M). Leave the
   state (To Do) and the assignee as they are. The sweep's gate reads only these
-  two lines and the estimate, so write them exactly.
+  two lines and the estimate, so write them exactly. If the work can't start
+  before a date, write `**Status:** Ready from <date>` instead, as `14 Nov 2026`
+  or `2026-11-14`: the gate leaves the ticket alone until that date (or, if it
+  can't read the date, until the line is fixed).
 - **Human Required.** Anything else. Write the question on the ticket: the Status
   line says `**Status:** Human Required (<date>): <the question in one line>`, and
   the Decisions section lists it with its options. Then move the ticket to the
