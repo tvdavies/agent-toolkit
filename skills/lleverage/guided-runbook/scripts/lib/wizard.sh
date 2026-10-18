@@ -29,6 +29,7 @@ OP_AGENT_ENV="${OP_AGENT_ENV:-$HOME/.config/op/agent.env}"
 WIZ_TOTAL=0
 WIZ_STEP=0
 WIZ_TMP=""
+_WIZ_PREV_EXIT=""
 
 if [[ -t 1 ]]; then
   _wb=$'\e[1m' _wg=$'\e[32m' _wy=$'\e[33m' _wr=$'\e[31m' _wd=$'\e[2m' _w0=$'\e[0m'
@@ -47,13 +48,20 @@ die()  { printf '\n%sERROR:%s %s\n' "$_wr" "$_w0" "$*" >&2; exit 1; }
 # wiz_init TITLE TOTAL_STEPS
 # Strict mode, a private temp dir removed on exit, and a run log next to the
 # script so Tom can paste it back if something goes wrong.
+# Traps already set by whatever runs the script (the Sal office's runbook
+# helpers report the exit, Ctrl-C and failures from them) are kept: the EXIT
+# trap runs after ours, with the same exit status, and INT/TERM traps stay.
 wiz_init() {
   local title="$1"
   WIZ_TOTAL="${2:-0}"
   WIZ_TMP="$(mktemp -d)"
   chmod 700 "$WIZ_TMP"
+  local prev
+  prev="$(_wiz_trap_of EXIT)"
+  [[ "$prev" == '_wiz_exit $?' ]] || _WIZ_PREV_EXIT="$prev"
   trap '_wiz_exit $?' EXIT
-  trap 'exit 130' INT TERM
+  [[ -n "$(_wiz_trap_of INT)" ]] || trap 'exit 130' INT
+  [[ -n "$(_wiz_trap_of TERM)" ]] || trap 'exit 143' TERM
 
   local script_dir log_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[1]:-$0}")" && pwd)"
@@ -69,14 +77,32 @@ wiz_init() {
   return 0
 }
 
+# _wiz_trap_of SIGNAL: the command of the trap currently set for SIGNAL, or nothing.
+_wiz_trap_of() {
+  local -a t
+  eval "t=($(trap -p "$1"))"
+  printf '%s' "${t[2]:-}"
+}
+
 _wiz_exit() {
   local code="$1"
+  # On the way out, a failing cleanup command must not skip the rest.
+  set +e
   [[ -n "$WIZ_TMP" ]] && rm -rf "$WIZ_TMP"
-  if [[ "$code" -ne 0 && "$code" -ne 130 ]]; then
+  if [[ "$code" -ne 0 && "$code" -ne 130 && "$code" -ne 143 ]]; then
     printf '\n%sStopped with an error (exit %s).%s Fix the cause and run the same command again; finished steps are skipped.\n' "$_wr" "$code" "$_w0" >&2
     [[ -n "${WIZ_LOG:-}" ]] && printf 'Log: %s\n' "$WIZ_LOG" >&2
   fi
+  # The trap that was there before wiz_init, run as if it had the exit to
+  # itself: its $? is the script's exit status.
+  if [[ -n "$_WIZ_PREV_EXIT" ]]; then
+    _wiz_status "$code"
+    eval "$_WIZ_PREV_EXIT"
+  fi
+  return 0
 }
+
+_wiz_status() { return "$1"; }
 
 # step TITLE: numbered section header.
 step() {

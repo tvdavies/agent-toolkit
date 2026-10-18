@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -96,6 +96,27 @@ describe("guided-runbook", () => {
       expect(traced.status).not.toBe(0);
       expect(traced.stdout + traced.stderr).not.toContain("ops_test");
       expect(traced.stdout + traced.stderr).toContain("xtrace is on");
+    });
+  });
+
+  // The Sal office serves runbooks after helpers whose EXIT and INT traps report how the run ended.
+  test("wiz_init keeps the EXIT and signal traps set before it", () => {
+    withTmp((dir) => {
+      const run = (body: string) => {
+        const script = path.join(dir, "runbook.sh");
+        const report = path.join(dir, "report");
+        writeFileSync(report, "");
+        writeFileSync(
+          script,
+          `trap 'echo "exit=$? sig=\${SIG:-}" >>"${report}"' EXIT\ntrap 'SIG=INT; exit 130' INT\ntrap 'SIG=TERM; exit 143' TERM\n. "${lib}"\nwiz_init "Test" 1\n${body}\n`,
+        );
+        const res = spawnSync("bash", [script], { env: { PATH: process.env.PATH, HOME: dir, WIZ_LOG_DIR: dir }, encoding: "utf8", timeout: 20_000 });
+        return { status: res.status, report: readFileSync(report, "utf8").trim(), tmpLeft: res.stdout.includes("TMP=") && existsSync(res.stdout.match(/TMP=(\S+)/)![1]!) };
+      };
+      expect(run(`echo TMP=$WIZ_TMP`)).toEqual({ status: 0, report: "exit=0 sig=", tmpLeft: false });
+      expect(run(`echo TMP=$WIZ_TMP\nfalse`)).toEqual({ status: 1, report: "exit=1 sig=", tmpLeft: false });
+      expect(run(`echo TMP=$WIZ_TMP\nkill -INT $$\nsleep 5`)).toEqual({ status: 130, report: "exit=130 sig=INT", tmpLeft: false });
+      expect(run(`echo TMP=$WIZ_TMP\nkill -TERM $$\nsleep 5`)).toEqual({ status: 143, report: "exit=143 sig=TERM", tmpLeft: false });
     });
   });
 
