@@ -29,7 +29,10 @@ A ticket is eligible when all of these hold:
     sweep task for it was updated in the last --recent-days (default 3).
 It is ready when prepare-ticket's "**Status:** Ready" line is on it and its size
 is known. Human Required tickets are in a started state, so they are never
-eligible and never prepared again.
+eligible and never prepared again. A "**Status:** Ready from <date>" ticket
+(linear-queue's prepared "Ready later") is neither delivered nor prepared until
+that date; one whose date can't be read waits until someone fixes the line. The
+gate lists them under "waiting".
 
 A sweep is in flight while any "Cycle sweep: ..." task is assigned to the worker
 in the ready or in-progress lane and was updated in the last --stale-hours (12).
@@ -111,7 +114,8 @@ bash "$queue" cycle --team "$team" --all-assignees --json > "$tmp/queue.jsonl" 2
 jq -sc --slurpfile d "$tmp/docket-view.json" '
   # Priority (Linear 1 urgent .. 4 low; 0, no priority, last), then smaller first, then older first.
   def rank: [(if .priority == 0 then 5 else .priority end), ({"XS": 0, "S": 1, "M": 2}[.size // ""] // 3), (.id | sub("^[A-Z0-9]+-"; "") | tonumber)];
-  def pick: {id, title, url, priority, size, state, assignee, prepared};
+  def pick: {id, title, url, priority, size, state, assignee, prepared, readyFrom};
+  def later: (.prepared // "" | ascii_downcase) == "ready later";
   ($d[0].taken) as $taken | ($d[0].swept) as $swept
   | [.[] | select(
       .verdict == "eligible"
@@ -120,19 +124,22 @@ jq -sc --slurpfile d "$tmp/docket-view.json" '
       and (.assignee == null or .assignedToMe)
       and (.size == null or (.size | IN("XS", "S", "M")))
       and (.id | IN($taken[]) | not))] as $eligible
+  # Ready from a date still to come: prepared already, so neither delivered nor prepared again.
+  | ($eligible | map(select(later)) | sort_by(rank)) as $waiting
   | ($eligible | map(select(.size != null and ((.prepared // "") | ascii_downcase) == "ready")) | sort_by(rank)) as $ready
-  | ($eligible | map(select((.size != null and ((.prepared // "") | ascii_downcase) == "ready") | not)) | sort_by(rank)) as $unready
+  | ($eligible | map(select((later or (.size != null and ((.prepared // "") | ascii_downcase) == "ready")) | not)) | sort_by(rank)) as $unready
   | {
       eligible: ($eligible | length),
       ready: [$ready[] | pick],
       unready: [$unready[] | pick],
+      waiting: [$waiting[] | pick],
       # Tickets a recent sweep already prepared are not prepared again until --recent-days pass.
       preparable: [$unready[] | select(.id | IN($swept[]) | not) | pick]
     }' "$tmp/queue.jsonl" > "$tmp/sets.json"
 
 ready_n="$(jq '.ready | length' "$tmp/sets.json")"
 unready_ids="$(jq -r '[.preparable[].id] | sort | join(" ")' "$tmp/sets.json")"
-counts="$(jq -c '{eligible, ready: (.ready | length), unready: (.unready | length), preparable: (.preparable | length)}' "$tmp/sets.json")"
+counts="$(jq -c '{eligible, ready: (.ready | length), unready: (.unready | length), preparable: (.preparable | length), waiting: (.waiting | length)}' "$tmp/sets.json")"
 
 finding() { # mode, key hash, summary
   jq -c --arg mode "$1" --arg key "cycle-sweep:$1:$2" --arg summary "$3" --argjson max "$max" --argjson counts "$counts" \

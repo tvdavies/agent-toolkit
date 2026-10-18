@@ -28,6 +28,9 @@ continuous sweep's gate filters on: assignee and assignedToMe, openAncestor (any
 ancestor still open, whatever its state), stateType, size (XS..XL from the estimate,
 else the description's "Size:" line, else null) and prepared (the description's
 "**Status:**" verdict written by prepare-ticket, such as Ready, else null).
+"**Status:** Ready from <date>" (14 Nov 2026, 14 November 2026 or 2026-11-14) sets
+readyFrom to the ISO date and is prepared "Ready" only from that date (UTC);
+before it, or when the date can't be read (readyFrom null), it is "Ready later".
 Tracked repos for PR detection: $WS_REPOS (space separated), default
 "lleverage-ai/lleverage lleverage-ai/infrastructure lleverage-ai/agent-sdk".
 EOF
@@ -105,7 +108,19 @@ done
 jq -c --rawfile prs "$tmp/prs.tsv" '
   def started: . == "started";
   def openish: (. == "completed" or . == "canceled" or . == "duplicate") | not;
-  . as $i
+  # "14 Nov 2026", "14 November 2026" or "2026-11-14" at the start of the string, as YYYY-MM-DD; empty if unreadable.
+  def isodate:
+    ascii_downcase
+    | ((capture("^(?<y>[0-9]{4})-(?<m>[0-9]{2})-(?<d>[0-9]{2})\\b") | "\(.y)-\(.m)-\(.d)")
+       // (capture("^(?<d>[0-9]{1,2})(st|nd|rd|th)?\\s+(?<mon>[a-z]{3,9})\\.?,?\\s+(?<y>[0-9]{4})\\b")
+           | .mon as $mon
+           | (["january","february","march","april","may","june","july","august","september","october","november","december"]
+              | map(startswith($mon)) | index(true)) as $m
+           | select($m != null)
+           | "\(.y)-\($m + 101 | tostring | .[1:])-\(.d | tonumber + 100 | tostring | .[1:])"))
+    | . as $s | select((try (strptime("%Y-%m-%d") | mktime | strftime("%Y-%m-%d")) catch null) == $s);
+  (now | strftime("%Y-%m-%d")) as $today
+  | . as $i
   | [$i.parent, $i.parent.parent?, $i.parent.parent.parent?] | map(select(. != null)) as $anc
   | ($prs | split("\n") | map(select(length > 0))
      | map(select(ascii_downcase | test("\\b" + ($i.identifier | ascii_downcase) + "\\b")))
@@ -116,7 +131,14 @@ jq -c --rawfile prs "$tmp/prs.tsv" '
   # Linear t-shirt estimates are stored on the Fibonacci scale.
   | ({"1": "XS", "2": "S", "3": "M", "5": "L", "8": "XL"}[($i.estimate // 0 | tostring)]
      // ($desc | [match("(?m)^\\s*\\**Size:?\\**:?\\s*\\**\\s*(XS|S|M|L|XL)\\b"; "g") | .captures[0].string] | last)) as $size
-  | ($desc | [match("(?m)^\\s*\\*\\*Status:\\*\\*\\s*(Ready|Needs decision|Blocked|Not needed|Human Required)"; "gi") | .captures[0].string] | first) as $prepared
+  | ($desc | [match("(?m)^\\s*\\*\\*Status:\\*\\*\\s*(Ready|Needs decision|Blocked|Not needed|Human Required)(?:\\s+from:?\\s+([^\\n]*))?"; "gi") | [.captures[].string]] | first) as $status
+  # "Ready from <date>" is Ready only once the date has come; an unreadable date is never Ready.
+  | (if $status != null and ($status[0] | ascii_downcase) == "ready" and $status[1] != null
+     then ([$status[1] | isodate] | first) else null end) as $readyFrom
+  | (if $status == null then null
+     elif ($status[0] | ascii_downcase) == "ready" and $status[1] != null
+       then (if $readyFrom != null and $readyFrom <= $today then "Ready" else "Ready later" end)
+     else $status[0] end) as $prepared
   | {
       id: $i.identifier, title: $i.title, url: $i.url, priority: $i.priority, estimate: $i.estimate,
       state: $i.state.name, stateType: $i.state.type,
@@ -124,7 +146,7 @@ jq -c --rawfile prs "$tmp/prs.tsv" '
       labels: [$i.labels.nodes[].name],
       assignee: ($i.assignee.name // null), assignedToMe: ($i.assignee.isMe // false),
       openAncestor: ($anc | any(.state.type | openish)),
-      size: $size, prepared: $prepared,
+      size: $size, prepared: $prepared, readyFrom: $readyFrom,
       ancestry: [$anc[] | "\(.identifier):\(.state.name)"],
       blockers: $blk, prs: $pr, openChildren: ($kids | length),
       verdict: (

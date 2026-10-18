@@ -145,6 +145,23 @@ describe("sweep-gate", () => {
     expect(changed.out.findings[0].key).not.toBe(first.out.findings[0].key);
   });
 
+  test("Ready later tickets are neither delivered nor prepared, only listed as waiting", () => {
+    const later = issue("LLE-75", { size: "XS", prepared: "Ready later", readyFrom: "2099-11-14" });
+    const delivered = run([later, ready("LLE-76")], [], ["--dry-run"]);
+    expect(delivered.status).toBe(3);
+    expect(delivered.out.findings[0].tickets.map((t: Issue) => t.id)).toEqual(["LLE-76"]);
+    expect(delivered.out.counts).toMatchObject({ ready: 1, waiting: 1 });
+
+    const prepared = run([later, issue("LLE-77")], [], ["--dry-run"]);
+    expect(prepared.out.findings[0].mode).toBe("prepare");
+    expect(prepared.out.findings[0].tickets.map((t: Issue) => t.id)).toEqual(["LLE-77"]);
+
+    const alone = run([later]);
+    expect(alone.status).toBe(0);
+    expect(alone.out.reason).toContain("nothing to work on");
+    expect(alone.out.counts).toMatchObject({ eligible: 1, ready: 0, unready: 0, waiting: 1 });
+  });
+
   test("tickets a recent sweep prepared are not prepared again", () => {
     const tasks = [{ id: "TASK-5", title: "Cycle sweep: prepare LLE-70", status: "done", assignee: "sal" }];
     const result = run([issue("LLE-70"), issue("LLE-71")], tasks);
