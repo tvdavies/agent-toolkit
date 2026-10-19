@@ -78,6 +78,9 @@ only when all of these hold:
 - it isn't listed under Exclusions in `STATE.md`, and Tom hasn't said another
   session owns it;
 - no local worktree or branch from another session exists for it (`git worktree list`);
+- it isn't an old ticket revived only by Jeff (`prepare-ticket`, section 0). Never
+  prepare or deliver one: leave it untouched and park it for Tom with a
+  recommendation to cancel. A problem that is live today gets a fresh ticket;
 - it meets the readiness bar in `issues.md`. If not, it goes to a `prepare-ticket`
   subagent, not to an implementer.
 
