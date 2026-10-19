@@ -10,7 +10,8 @@
 #
 # Worked example: add read paths to staging's external-secrets OpenBao policy.
 # Replace the steps, keep the shape: preflight, then detect -> show -> ask ->
-# change -> verify for each change.
+# change -> verify for each change. Each wiz_step ID is what Sal declares for
+# the step when it serves the script from the office (request_runbook).
 
 # shellcheck source=../scripts/lib/wizard.sh
 . "${WIZARD_LIB:-$HOME/.agents/skills/guided-runbook/scripts/lib/wizard.sh}"
@@ -33,13 +34,13 @@ grants_read() {
 
 wiz_init "Add isolate-sandbox paths to the $ENV $POLICY policy" 3
 
-step "Preflight"
+wiz_step preflight "Preflight"
 need_tools kubectl jq op
 use_cluster "$ENV"
 openbao_root_token ROOT_TOKEN "$ENV"
 openbao_connect ROOT_TOKEN
 
-step "Update the $POLICY policy"
+wiz_step policy "Update the $POLICY policy"
 bao policy read "$POLICY" >"$WIZ_TMP/before.hcl"
 guard_nonempty "$WIZ_TMP/before.hcl" "The $POLICY policy read"
 cp "$WIZ_TMP/before.hcl" "$WIZ_TMP/after.hcl"
@@ -61,7 +62,7 @@ else
   skip "$POLICY already has every path"
 fi
 
-step "Verify"
+wiz_step verify "Verify"
 bao policy read "$POLICY" >"$WIZ_TMP/live.hcl"
 for p in "${NEW_PATHS[@]}"; do
   if grants_read "$WIZ_TMP/live.hcl" "secret/data/$p" && grants_read "$WIZ_TMP/live.hcl" "secret/metadata/$p"; then
