@@ -1,9 +1,9 @@
 ---
 name: reports
-description: Produce consistent, self-contained HTML reports in one consistent house style, with charts and diagrams where they help. Use for technical assessments, investigations, incident reviews, design proposals, benchmark write-ups and status reports, or when asked to "write this up as a report", "turn this into a report", "make a shareable report" or regenerate an existing report in the standard style. Every finished report is uploaded to files.myslop.app and handed over as a link. Authoring goes to the report-writer subagent (Claude Opus 5.5) unless the current model is already Opus 5.5. Not for Slack messages, PR descriptions or short emails.
+description: Produce consistent, self-contained HTML reports in one consistent house style, with charts and diagrams where they help. Use for technical assessments, investigations, incident reviews, design proposals, benchmark write-ups and status reports, or when asked to "write this up as a report", "turn this into a report", "make a shareable report" or regenerate an existing report in the standard style. Also makes ELI5 picture explainers in the same style ("eli5", "explain like I'm five", "explain this simply", "a picture explainer of"). Every finished report is uploaded to files.myslop.app and handed over as a link. Authoring goes to the report-writer subagent (Claude Opus 5.5) unless the current model is already Opus 5.5. Not for Slack messages, PR descriptions or short emails.
 metadata:
   author: tvd
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # Reports
@@ -201,6 +201,15 @@ ref: TR-2026-10-01
 The build handles section and figure numbering, the table of contents, anchors and table
 wrapping. Do not number anything by hand. The full component catalogue is in
 `references/components.md`, and a complete worked example is `assets/example.src.html`.
+
+## ELI5 explainers
+
+For "eli5", "explain like I'm five", "explain this simply" or a picture explainer, set
+`layout: eli5` in the front matter and follow `references/eli5.md`. An explainer is a short
+run of big drawn panels with very few words, each with a closed "Detailed" note, in the same
+house style. It simplifies the explanation, not the vocabulary: it keeps the source's own
+terms and teaches them. It builds, render-checks, gets a card and uploads exactly like a report. When the
+user asks for both, write the full report first and draw the explainer from it, so the two agree.
 
 ## Charts and diagrams
 
