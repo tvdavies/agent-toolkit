@@ -144,6 +144,47 @@ describe("reports build", () => {
   });
 });
 
+describe("ELI5 explainers", () => {
+  const svg = '<svg viewBox="0 0 800 380" role="img" aria-label="A folder on a desk"><rect class="d-box" x="1" y="1" width="9" height="9"/></svg>';
+  const detail = `<details class="detail"><summary>Detailed</summary><p>${"word ".repeat(50)}</p></details>`;
+  const panel = (headline: string, extra = "") => `<section class="panel"><h2>${headline}</h2><figure class="panel-figure">${svg}</figure><p class="caption">A short caption.</p>${extra}${detail}</section>`;
+  const front = "title: Explained\ndate: 2026-10-16\nlayout: eli5";
+
+  test("builds panels with a script-free details switch and no contents list", () => {
+    const body = `<p class="answer">A short answer in a few words.</p>${panel("One")}${panel("Two")}${panel("Three")}<p class="recap">The whole idea.</p>`;
+    const { html, warnings, share } = buildReport(source(body, front));
+    expect(warnings).toEqual([]);
+    expect(html).toContain('<body class="layout-eli5">');
+    expect(html).toContain('id="eli5-all"');
+    expect(html).not.toContain('class="toc"');
+    expect(html).not.toMatch(/<script\b/i);
+    expect(html).not.toContain('class="f-n"');
+    expect(html).toContain('<span class="h-n">03</span>');
+    expect(share.siteName).toBe("Explainer");
+    expect(share.description).toBe("A short answer in a few words.");
+  });
+
+  test("warns when panels break the picture-book limits", () => {
+    const long = "word ".repeat(12).trim();
+    const body = `<p class="answer">${"word ".repeat(16)}</p><section class="panel"><h2>${long}?</h2><p class="caption">${"word ".repeat(31)}</p></section>`;
+    const text = buildReport(source(body, front)).warnings.join("\n");
+    expect(text).toMatch(/answer has 16 words/);
+    expect(text).toMatch(/Panel 1: the headline has 12 words/);
+    expect(text).toMatch(/no questions or exclamation marks/);
+    expect(text).toMatch(/Panel 1 has no drawn figure/);
+    expect(text).toMatch(/Panel 1 has \d+ words outside its Detailed note/);
+    expect(text).toMatch(/Panel 1 has no <details class="detail">/);
+    expect(text).toMatch(/recap/);
+    expect(text).not.toMatch(/summary/);
+  });
+
+  test("table of contents shows entities in headings as text", () => {
+    const { html } = buildReport(source('<section class="summary"><p class="bottom-line">x</p></section><section><h2>Operate &amp; Expand</h2></section><section><h2>B</h2></section><section><h2>C</h2></section>'));
+    expect(html).toContain("<span>Operate &amp; Expand</span>");
+    expect(html).not.toContain("&amp;amp;");
+  });
+});
+
 describe("report-writer agent", () => {
   const file = path.join(root, "agents/report-writer.md");
   const text = readFileSync(file, "utf8");

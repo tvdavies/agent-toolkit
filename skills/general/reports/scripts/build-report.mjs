@@ -160,12 +160,12 @@ function numberHeadings(body, toc) {
       h3n = 0;
       if (unnumbered) {
         current = null;
-        toc.push({ id, n: "", text: stripTags(inner) });
+        toc.push({ id, n: "", text: decode(stripTags(inner)) });
         return `<h2${newAttrs}>${inner}</h2>`;
       }
       const label = explicit ?? String(++h2n).padStart(2, "0");
       current = explicit ?? String(h2n);
-      toc.push({ id, n: label, text: stripTags(inner) });
+      toc.push({ id, n: label, text: decode(stripTags(inner)) });
       return `<h2${newAttrs}><span class="h-n">${esc(label)}</span>${inner}</h2>`;
     }
     if (unnumbered || current == null) return `<h3${newAttrs}>${inner}</h3>`;
@@ -177,6 +177,7 @@ function numberHeadings(body, toc) {
 function numberFigures(body, warnings, counts) {
   let f = 0;
   body = body.replace(/<figure\b([^>]*)>([\s\S]*?)<\/figure>/gi, (match, attrs, inner) => {
+    if (/\bclass="[^"]*\bpanel-figure\b/.test(attrs)) return match;
     if (!/<figcaption\b/i.test(inner)) {
       warnings.push(`A figure has no <figcaption>; every chart or diagram needs a caption that states its point.`);
       return match;
@@ -195,16 +196,57 @@ function numberFigures(body, warnings, counts) {
   return body;
 }
 
-function validate(body, warnings) {
+function validate(body, warnings, eli5) {
   const leftoverScript = body.match(/<script\b[^>]*>/i);
   if (leftoverScript) throw new BuildError(`Scripts are not allowed in reports (found ${leftoverScript[0]}). Use data-chart or data-diagram blocks.`);
   if (/<link\b|<style\b|@import/i.test(body)) throw new BuildError("Do not add <link>, <style> or @import to the body: the house stylesheet is applied by the build. Use the documented component classes.");
   if (/\sstyle="(?![^"]*--v:)[^"]*"/i.test(body)) warnings.push("Inline style attributes found. Prefer component classes so reports stay consistent.");
   const external = body.match(/\b(?:src|href)="(?:https?:)?\/\/[^"]*\.(?:css|js|woff2?|ttf)"/i);
   if (external) throw new BuildError(`External asset reference ${external[0]}: reports must be self-contained.`);
-  if (!/class="summary/.test(body)) warnings.push('No <section class="summary"> found. Reports should open with the bottom line and key findings.');
+  if (eli5) validateExplainer(body, warnings);
+  else if (!/class="summary/.test(body)) warnings.push('No <section class="summary"> found. Reports should open with the bottom line and key findings.');
   if (/<h1\b/i.test(body)) warnings.push("The body contains an <h1>. The title comes from front matter; use <h2> for sections.");
 }
+
+
+// ---------- ELI5 explainers (layout: eli5) ----------
+
+const words = (html) => decode(stripTags(html)).split(/\s+/).filter(Boolean).length;
+
+// The limits that keep an explainer a picture book: the pictures carry the idea, the words
+// only name what the picture shows, and the mechanics wait in a closed "Detailed" note.
+export const ELI5_LIMITS = { answer: 15, headline: 10, panel: 30, detailMin: 40, detailMax: 90 };
+
+function validateExplainer(body, warnings) {
+  const answer = body.match(/<p\b[^>]*class="[^"]*\banswer\b[^"]*"[^>]*>([\s\S]*?)<\/p>/i)?.[1];
+  if (answer == null) warnings.push('No <p class="answer"> found. An explainer opens with a one-sentence answer.');
+  else if (words(answer) > ELI5_LIMITS.answer) warnings.push(`The answer has ${words(answer)} words; keep it to ${ELI5_LIMITS.answer}.`);
+  if (!/<p\b[^>]*class="[^"]*\brecap\b/i.test(body)) warnings.push('No <p class="recap"> found. An explainer ends with the whole idea in one sentence.');
+  const panels = [...body.matchAll(/<section\b[^>]*class="[^"]*\bpanel\b[^"]*"[^>]*>([\s\S]*?)<\/section>/gi)];
+  if (!panels.length) warnings.push('No <section class="panel"> found. An explainer is a sequence of picture panels.');
+  panels.forEach(([, inner], i) => {
+    const n = i + 1;
+    if (!/<figure\b[^>]*class="[^"]*\bpanel-figure\b[^"]*"[^>]*>[\s\S]*?<svg\b/i.test(inner)) warnings.push(`Panel ${n} has no drawn figure (<figure class="panel-figure"> with an inline <svg>).`);
+    if (/<svg\b(?![^>]*\baria-label=)[^>]*>/i.test(inner)) warnings.push(`Panel ${n}: give the <svg> an aria-label that says what it shows.`);
+    const headline = inner.match(/<h2\b[^>]*>([\s\S]*?)<\/h2>/i)?.[1];
+    if (headline == null) warnings.push(`Panel ${n} has no <h2> headline.`);
+    else {
+      if (words(headline) > ELI5_LIMITS.headline) warnings.push(`Panel ${n}: the headline has ${words(headline)} words; keep it to ${ELI5_LIMITS.headline}.`);
+      if (/[!?]\s*$/.test(decode(stripTags(headline)))) warnings.push(`Panel ${n}: headlines state what the panel shows; no questions or exclamation marks.`);
+    }
+    const detail = inner.match(/<details\b[^>]*class="[^"]*\bdetail\b[^"]*"[^>]*>([\s\S]*?)<\/details>/i)?.[1];
+    const shown = inner.replace(/<details\b[\s\S]*?<\/details>/gi, " ");
+    if (words(shown) > ELI5_LIMITS.panel) warnings.push(`Panel ${n} has ${words(shown)} words outside its Detailed note, figure labels included; keep it to about ${ELI5_LIMITS.panel}.`);
+    if (detail == null) warnings.push(`Panel ${n} has no <details class="detail"> note.`);
+    else {
+      const w = words(detail.replace(/<summary\b[\s\S]*?<\/summary>/i, " "));
+      if (w < ELI5_LIMITS.detailMin || w > ELI5_LIMITS.detailMax) warnings.push(`Panel ${n}: the Detailed note has ${w} words; aim for ${ELI5_LIMITS.detailMin}–${ELI5_LIMITS.detailMax}.`);
+    }
+  });
+}
+
+// A script-free "Show all details" switch: a checkbox the stylesheet reads with :has().
+const ELI5_TOGGLE = '<div class="eli5-toggle"><input type="checkbox" id="eli5-all" class="eli5-all"><label for="eli5-all" class="eli5-all-label"></label></div>';
 
 // ---------- Share card (link previews) ----------
 
@@ -221,7 +263,7 @@ function truncate(text, max) {
 // What a link preview shows. Everything comes from content already in the report, so an
 // anonymised report gives an anonymised card.
 export function shareInfo(fm, rawBody) {
-  const bottomLine = rawBody.match(/<p\b[^>]*class="[^"]*\bbottom-line\b[^"]*"[^>]*>([\s\S]*?)<\/p>/i)?.[1];
+  const bottomLine = rawBody.match(/<p\b[^>]*class="[^"]*\b(?:bottom-line|answer)\b[^"]*"[^>]*>([\s\S]*?)<\/p>/i)?.[1];
   const description = truncate(plain(fm.card_description ?? bottomLine ?? fm.standfirst ?? ""), 240);
   const stats = [];
   for (const m of rawBody.matchAll(/<div\b[^>]*class="stat(?:\s+([^"]*))?"[^>]*>([\s\S]*?)<\/div>/gi)) {
@@ -236,7 +278,7 @@ export function shareInfo(fm, rawBody) {
   return {
     title: plain(fm.title),
     eyebrow: plain(fm.eyebrow ?? ""),
-    siteName: fm.series ?? "Technical report",
+    siteName: fm.series ?? defaultSeries(fm),
     date: formatDate(fm.date) ?? "",
     isoDate: /^\d{4}-\d{2}-\d{2}$/.test(fm.date ?? "") ? fm.date : null,
     description,
@@ -276,6 +318,9 @@ function shareMeta(info, cardImage, lang) {
 
 // ---------- Assembly ----------
 
+const isExplainer = (fm) => fm.layout === "eli5";
+const defaultSeries = (fm) => (isExplainer(fm) ? "Explainer" : "Technical report");
+
 export function inlineCss(fonts) {
   let css = fs.readFileSync(path.join(ASSETS, "report.css"), "utf8");
   css = css.replace(/url\("fonts\/([^"]+)"\)/g, (_, file) => {
@@ -292,8 +337,9 @@ function assemble({ fm, body, toc, css, share }) {
   const meta = [];
   for (const key of KNOWN_META) if (fm[key]) meta.push([META_LABELS[key], key === "date" ? date : fm[key]]);
   meta.push(...fm.extra);
-  const series = fm.series ?? "Technical report";
-  const showToc = fm.toc !== "false" && toc.filter((t) => t.n || t.id).length >= 3;
+  const eli5 = isExplainer(fm);
+  const series = fm.series ?? defaultSeries(fm);
+  const showToc = !eli5 && fm.toc !== "false" && toc.filter((t) => t.n || t.id).length >= 3;
   const tocHtml = showToc
     ? `<nav class="toc" aria-label="Contents"><div class="toc-inner"><div class="toc-label">Contents</div><ol>${toc
         .map((t) => `<li><a href="#${esc(t.id)}"><span class="toc-n">${esc(t.n)}</span><span>${esc(t.text)}</span></a></li>`)
@@ -313,7 +359,7 @@ ${share}
 ${css}
 </style>
 </head>
-<body>
+<body${eli5 ? ' class="layout-eli5"' : ""}>
 <header class="masthead"><div class="masthead-inner"><span class="masthead-series">${esc(series)}</span><span class="masthead-meta">${mastMeta}</span></div></header>
 <div class="page${showToc ? "" : " no-toc"}">
 ${tocHtml}
@@ -324,6 +370,7 @@ ${fm.eyebrow ? `<div class="eyebrow">${esc(fm.eyebrow)}</div>` : ""}
 ${fm.standfirst ? `<p class="standfirst">${fm.standfirst}</p>` : ""}
 ${meta.length ? `<dl class="meta">${meta.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>` : ""}
 </header>
+${eli5 ? ELI5_TOGGLE : ""}
 ${body.trim()}
 <footer class="report-footer"><span>${esc(series)}${fm.ref ? ` &nbsp;/&nbsp; ${esc(fm.ref)}` : ""}</span><span>${esc(date ?? "")}</span></footer>
 </main>
@@ -343,7 +390,7 @@ export function buildReport(srcPath, { fonts = true, cardImage } = {}) {
   const share = shareMeta(info, validateCardImage(cardImage), fm.lang);
   let body = renderCharts(rawBody, warnings, counts);
   body = renderDiagrams(body, counts);
-  validate(body, warnings);
+  validate(body, warnings, isExplainer(fm));
   body = inlineImages(body, path.dirname(path.resolve(srcPath)), warnings);
   body = wrapTables(body);
   body = numberHeadings(body, toc);
