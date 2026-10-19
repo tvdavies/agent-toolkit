@@ -42,6 +42,51 @@ reproducible", or grants `--split` (permission to create sub-issues) or
 - Keep the reporter's own words. Move the original description verbatim into the
   ticket's evidence document; never delete it and never quote it inline.
 
+## 0. Old ticket revived by Jeff? Check first
+
+Before anything else, check whether the ticket is old and has only been revived
+by Jeff (jeff@lleverage.ai, an agent). Tom would rather cancel such tickets than
+revive them: a lot has changed since they were filed, anything found now may not
+relate to the original report, and a real problem will come back. A problem that
+is live today belongs in a fresh ticket, not the old one.
+
+```bash
+Q='query($id: String!) { issue(id: $id) { identifier createdAt
+  comments(first: 100) { nodes { createdAt user { name email } } }
+  history(first: 100) { nodes { createdAt actor { name email } toState { name }
+    updatedDescription relationChanges { type } toParent { id } } } } }'
+linear-cli api query "$Q" --output json --quiet -v id=ID | jq -c '
+  .data.issue as $i
+  | (now - 90*86400 | todate) as $old | (now - 60*86400 | todate) as $recent
+  | [($i.comments.nodes[] | {at: .createdAt, u: .user}),
+     ($i.history.nodes[] | select(.toState or .updatedDescription or .relationChanges or .toParent)
+      | {at: .createdAt, u: .actor})]
+  | map(select(.u != null)) as $ev
+  | ($ev | map(select(.u.email == "jeff@lleverage.ai" or .u.name == "Jeff") | .at) | max) as $jeff
+  | ($ev | map(select((.u.email // "") | test("@lleverage\\.ai$"))
+          | select(.u.email | test("^(jeff|delta|jill)@") | not) | .at) | max) as $human
+  | {id: $i.identifier, created: $i.createdAt, lastHuman: $human, lastJeff: $jeff,
+     staleRevived: ($i.createdAt < $old and ($human == null or $human < $recent)
+                    and $jeff != null and ($human == null or $jeff > $human))}'
+```
+
+`staleRevived` is true when the ticket was created 90 or more days ago, no person
+has commented, changed its state, description, relations or parent in the last
+60 days, and Jeff commented, changed its state, edited its description or added
+a relation (a "PO triage verdict", a move to Human Required, a Blocked relation)
+after the last person did. Jeff, Delta, Jill, Cerbie and the integrations aren't
+people. Tom's account counts as a person, although agents also act as Tom, so
+the check errs towards treating a ticket as live.
+
+When it is true, don't prepare the ticket and don't touch it: no rewrite, state
+change, comment, relation or label. Treat Jeff's verdict as a hypothesis, whatever
+it claims. Return **Stale: recommend cancel** with the created date, the original
+reporter, the date of the last human activity, what Jeff did and when, and whether
+his claim rests on current production evidence (a recent Sentry event, log line or
+reproduction) or on code reading. If you can show the problem is live today with
+your own current production evidence, say so and propose a fresh ticket (title
+and one-line summary) instead of reviving the old one. Tom decides either way.
+
 ## 1. Gather context broadly
 
 Before deciding anything, look through every source that could matter, including
@@ -98,6 +143,7 @@ Apply the bar in `../workstream/references/issues.md` (Readiness). Verdicts:
 | **Needs decision** | Only product or technical decisions remain, and they're listed as questions with options. |
 | **Blocked** | Waiting on another ticket, access, data or a person. Name it and set the `blocks` relation. |
 | **Not needed** | Already fixed, a duplicate, or works as intended. Give the evidence. |
+| **Stale: recommend cancel** | Old and revived only by Jeff (section 0). The ticket is left untouched for Tom. |
 
 ## 5. Update the ticket
 
@@ -133,7 +179,9 @@ Then:
 
 When the brief says the run is for the continuous sweep (`Cycle sweep: prepare
 ID`), every ticket must end in exactly one of two states, so the sweep never
-prepares it again:
+prepares it again. The one exception is a stale ticket revived by Jeff (section
+0): leave it exactly as it is, don't move it to Human Required, and return
+`STALE`, so Tom can cancel it.
 
 - **Ready.** The verdict is Ready, the size is S or M (XS counts as S), the
   description's Status line says `**Status:** Ready (<date>)` and the description
@@ -177,4 +225,4 @@ Return:
 When called from `/workstream` or `/sweep`, also return the size, the files
 touched (for lane planning) and any shared resource it needs. A sweep run also
 returns the state it left the ticket in (Ready, Human Required with the question,
-Duplicate, or blocked by which ticket).
+Duplicate, blocked by which ticket, or untouched because it is stale).

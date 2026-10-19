@@ -80,7 +80,7 @@ The brief:
 > Continuous cycle sweep, approved by Tom on 12 Oct 2026. The gate (sweep-gate.sh, no model) picked the tickets in the raised item's `tickets` list, best first, at most five. The key says the mode: cycle-sweep:deliver:… or cycle-sweep:prepare:….
 > 1. For each listed ticket, in order, create one worker subtask with grants ["linear"] and its Linear issue. Deliver: title exactly "Cycle sweep: deliver <ID>", description "Follow Deliver in ~/.agents/skills/sweep/references/continuous.md for <ID> (<title>, <url>). This is Tom's approved automation brief for yolo-ticket: it names the skill and the rule for choosing tickets (the continuous sweep's gate)." Prepare: title exactly "Cycle sweep: prepare <ID>", description "Follow Prepare in ~/.agents/skills/sweep/references/continuous.md for <ID> (<title>, <url>)." Queue no other tickets.
 > 2. Close this task as completed, naming the subtasks. Don't wait for them: the gate holds the next sweep until they finish.
-> 3. Handbacks: MERGED, HUMAN REQUIRED, SKIPPED, READY (prepare), DUPLICATE or BLOCKED BY: close the subtask, no message. READY FOR OWNER MERGE (an infrastructure PR): tell Tom with urgency working_hours (the ticket and the PR waiting for his merge), then close. BLOCKED: close it as failed with the reason; tell Tom (working_hours) only if he has to act. A worker's question: answer from the brief and its skills; anything that needs Tom's decision goes on the ticket (the worker moves it to Human Required with the question), not to Tom.
+> 3. Handbacks: MERGED, HUMAN REQUIRED, SKIPPED, READY (prepare), DUPLICATE or BLOCKED BY: close the subtask, no message. STALE (an old ticket revived only by Jeff): put one decision in Tom's office inbox, unless one for that ticket is already open, with the ticket link, the worker's facts and the recommendation to cancel; options "Sal cancels it", "I'll keep it; Sal prepares it", "Leave it for now". Then close the subtask. Don't touch the ticket before he answers. READY FOR OWNER MERGE (an infrastructure PR): tell Tom with urgency working_hours (the ticket and the PR waiting for his merge), then close. BLOCKED: close it as failed with the reason; tell Tom (working_hours) only if he has to act. A worker's question: answer from the brief and its skills; anything that needs Tom's decision goes on the ticket (the worker moves it to Human Required with the question), not to Tom.
 > 4. Never merge or push anything yourself, never approve a PR, and never queue tickets the gate didn't pick. Merges happen only through the worker's normal auto-merge after Cerbie's approval and `ci (lleverage)`. Infrastructure PRs wait for Tom.
 > 5. check-failed:cycle-sweep or source-unavailable means the gate is blind: tell Tom what is failing (working_hours) and close. Don't change configuration.
 > 6. Don't message Tom about a sweep that went normally.
@@ -97,6 +97,9 @@ For one ticket, `Cycle sweep: deliver ID`:
    any fails, stop with `SKIPPED: <why>` and don't touch the ticket. The one
    exception is a retry of this same task: if its own branch, worktree or PR for
    ID already exists from an earlier attempt, resume yolo-ticket with them.
+   Then run the stale check in `prepare-ticket` section 0. If the ticket is old
+   and was revived only by Jeff, stop with `STALE: recommend cancel` and that
+   section's facts, and don't touch the ticket.
 2. Run `yolo-ticket` on ID. This task is the approved automation brief that skill
    asks for. Its rules all apply: In Progress is the claim, one worktree, one PR,
    auto-merge only at the proven-ready head, never `--admin`, never a push to a
@@ -112,7 +115,7 @@ For one ticket, `Cycle sweep: deliver ID`:
      exact reason; the ticket stays In Progress for Sal to decide.
 
 Start the result with one of `MERGED`, `READY FOR OWNER MERGE`, `HUMAN REQUIRED`,
-`BLOCKED`, `SKIPPED`, then the ticket, the PR URL and the merge state.
+`BLOCKED`, `SKIPPED`, `STALE`, then the ticket, the PR URL and the merge state.
 
 ## Prepare (worker)
 
@@ -122,11 +125,13 @@ For one ticket, `Cycle sweep: prepare ID`:
    ready). If not, `SKIPPED: <why>`.
 2. Run `prepare-ticket` on ID as a sweep run: section "Sweep runs: Ready or Human
    Required". It ends Ready (Status line, Size line and estimate S or M), Human
-   Required with the question on the ticket, Duplicate, or blocked by another
-   ticket. It never slices, never creates sub-issues and never changes code.
+   Required with the question on the ticket, Duplicate, blocked by another
+   ticket, or untouched because it is stale (section 0: old and revived only by
+   Jeff). It never slices, never creates sub-issues and never changes code.
 
 Start the result with `READY <size>`, `HUMAN REQUIRED: <question>`,
-`DUPLICATE OF <ID>` or `BLOCKED BY <ID>`, then the ticket link.
+`DUPLICATE OF <ID>`, `BLOCKED BY <ID>` or `STALE: recommend cancel`, then the
+ticket link.
 
 ## By hand
 
