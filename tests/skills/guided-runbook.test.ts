@@ -120,6 +120,39 @@ describe("guided-runbook", () => {
     });
   });
 
+  // Served by the Sal office, rb-lib.sh defines rb_step and rb_skip; wiz_step reports each step through them.
+  test("wiz_step reports its step to the office's rb_step, and a skip in it to rb_skip once", () => {
+    withTmp((dir) => {
+      const reports = path.join(dir, "reports");
+      const office = `rb_step() { echo "step $1|$2" >>"${reports}"; echo "==> $2"; }\nrb_skip() { echo "skip $1" >>"${reports}"; echo "already done: $1"; }\n`;
+      const body = `wiz_step check "Check access"\nskip "access is there"\nskip "and so is the role"\nwiz_step apply "Apply"\ninfo "part of it is done"\necho APPLIED\nstep "Unreported"\nskip "not a wiz_step step"\nwiz_done`;
+      writeFileSync(path.join(dir, "runbook.sh"), `${office}. "${lib}"\nwiz_init "Test" 3\n${body}\n`);
+      const res = spawnSync("bash", [path.join(dir, "runbook.sh")], { env: { PATH: process.env.PATH, HOME: dir, WIZ_LOG_DIR: dir }, encoding: "utf8", timeout: 20_000 });
+      expect(res.status).toBe(0);
+      expect(readFileSync(reports, "utf8")).toBe("step check|Check access\nskip access is there\nstep apply|Apply\n");
+      expect(res.stdout).toContain("Step 1/3: Check access");
+      expect(res.stdout).toContain("Step 3/3: Unreported");
+      expect(res.stdout).toContain("APPLIED");
+      // The office helpers' own lines are left to the wizard's.
+      expect(res.stdout).not.toContain("==> ");
+      expect(res.stdout).not.toContain("already done:");
+    });
+  });
+
+  test("wiz_step without the office is a plain step; a bad ID stops the run", () => {
+    withTmp((dir) => {
+      const plain = runWizard(dir, `wiz_step check "Check access"\nskip "done already"\necho AFTER`);
+      expect(plain.status).toBe(0);
+      expect(plain.stdout).toContain("Step 1/2: Check access");
+      expect(plain.stdout).toContain("SKIP");
+      expect(plain.stdout).toContain("AFTER");
+      const bad = runWizard(dir, `wiz_step "two words" "Title"\necho AFTER`);
+      expect(bad.status).not.toBe(0);
+      expect(bad.stdout + bad.stderr).toContain("isn't a step ID");
+      expect(bad.stdout).not.toContain("AFTER");
+    });
+  });
+
   test("the checker passes the template and rejects the patterns that caused friction", () => {
     const template = spawnSync("bash", [path.join(skill, "scripts/check-runbook.sh"), path.join(skill, "templates/runbook.sh")], { encoding: "utf8" });
     expect(template.stdout).toContain("check-runbook: passed");

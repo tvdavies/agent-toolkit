@@ -35,6 +35,22 @@ bash /absolute/path/to/the-script.sh
   and what to do when it finishes. Mention that `WIZ_DRY_RUN=1` rehearses it
   only if Tom asks how to check it first.
 
+### Through Sal's office
+
+Sal can hand the same script over as an office runbook instead (its
+`request_runbook` tool): the inbox card gives Tom one command (or, with the
+office's terminal on, runs it there) and ticks the steps off as they run.
+
+- Declare one office step per `wiz_step <id> "<title>"`, with the same IDs.
+  The office refuses a script that doesn't report every declared step, and a
+  plain `step` reports nothing.
+- In a `wiz_step` step, `skip` means the whole step is already done, and the
+  card shows it skipped. Use `info` for a part that is already done.
+- Don't `exit 0` part-way through a step except through `confirm_or_stop`;
+  the office counts it as not finished.
+- Detection and resume are unchanged: a re-run skips finished steps, so
+  **Run again** on the card is the same script.
+
 ## Writing the script
 
 Start from [`templates/runbook.sh`](templates/runbook.sh) and source the
@@ -50,7 +66,8 @@ The shape is fixed:
 1. **Preflight, before any change.** `need_tools`, auth checks (`gh auth
    status`, gcloud identity), `use_cluster`, secrets, `openbao_connect`.
    Anything that can fail without changing state fails here.
-2. **One step per change**, each going *detect, show, ask, change, verify*:
+2. **One step per change**, `wiz_step <id> "<title>"`, each going *detect,
+   show, ask, change, verify*:
    - detect whether it's already done and `skip` if so;
    - show exactly what will change (a diff, the resource, the command);
    - `confirm_or_stop "…?"`. Default is No, and No ends the run cleanly;
@@ -60,7 +77,8 @@ The shape is fixed:
 
 | Helper | Use |
 | --- | --- |
-| `step`, `ok`, `skip`, `info`, `warn`, `die` | Output. `die` exits and tells Tom to re-run once fixed |
+| `wiz_step ID TITLE` | A numbered step with a stable ID; reported to Sal's office when it serves the script. `step TITLE` is the same without the ID, and isn't reported |
+| `ok`, `skip`, `info`, `warn`, `die` | Output. `die` exits and tells Tom to re-run once fixed. In a `wiz_step` step, `skip` marks the whole step done |
 | `ask`, `confirm_or_stop`, `confirm_typed WORD …`, `pause_for` | Prompts, read from `/dev/tty`. Use `confirm_typed production` for production or destructive changes |
 | `need_tools` | Preflight tool check |
 | `op_secret VAR op://…`, `op_document_field VAR ITEM VAULT JQ` | 1Password into a shell variable |

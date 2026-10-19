@@ -30,6 +30,9 @@ WIZ_TOTAL=0
 WIZ_STEP=0
 WIZ_TMP=""
 _WIZ_PREV_EXIT=""
+# The wiz_step step under way, while the Sal office follows the run and it
+# hasn't been reported skipped yet.
+_WIZ_RB_STEP=""
 
 if [[ -t 1 ]]; then
   _wb=$'\e[1m' _wg=$'\e[32m' _wy=$'\e[33m' _wr=$'\e[31m' _wd=$'\e[2m' _w0=$'\e[0m'
@@ -41,7 +44,17 @@ fi
 
 info() { printf '      %s\n' "$*"; }
 ok()   { printf '  %sOK%s  %s\n' "$_wg" "$_w0" "$*"; }
-skip() { printf '  %sSKIP%s %s\n' "$_wd" "$_w0" "$*"; }
+# skip REASON: in a wiz_step step the Sal office follows, this means the whole
+# step is already done, and the office shows it skipped (once per step). Use
+# info for a part of a step that is already done.
+skip() {
+  printf '  %sSKIP%s %s\n' "$_wd" "$_w0" "$*"
+  if [[ -n "$_WIZ_RB_STEP" ]] && declare -F rb_skip >/dev/null; then
+    _WIZ_RB_STEP=""
+    rb_skip "$*" >/dev/null
+  fi
+  return 0
+}
 warn() { printf '  %sWARN%s %s\n' "$_wy" "$_w0" "$*" >&2; }
 die()  { printf '\n%sERROR:%s %s\n' "$_wr" "$_w0" "$*" >&2; exit 1; }
 
@@ -104,13 +117,34 @@ _wiz_exit() {
 
 _wiz_status() { return "$1"; }
 
-# step TITLE: numbered section header.
+# step TITLE: numbered section header. Not reported to the Sal office, which
+# needs a stable ID for each step: use wiz_step for that.
 step() {
   WIZ_STEP=$((WIZ_STEP + 1))
+  _WIZ_RB_STEP=""
   printf '\n%s=== Step %s/%s: %s ===%s\n' "$_wb" "$WIZ_STEP" "$WIZ_TOTAL" "$*" "$_w0"
 }
 
-# wiz_done [MESSAGE]: final summary.
+# wiz_step ID TITLE: step, with the stable ID the Sal office declares for it.
+# When the office serves the script, its helpers (rb-lib.sh) define rb_step
+# and rb_skip, and the step is reported to the inbox card as it starts; a skip
+# in it reports the step as already done. Run anywhere else, it is just step.
+# ID: letters, digits, '-' and '_'.
+wiz_step() {
+  local id="$1"
+  shift
+  [[ "$id" =~ ^[A-Za-z0-9_-]+$ ]] || die "wiz_step: '$id' isn't a step ID (letters, digits, - and _)"
+  step "$*"
+  if declare -F rb_step >/dev/null; then
+    # rb_step prints its own header; the wizard's is already shown.
+    rb_step "$id" "$*" >/dev/null
+    _WIZ_RB_STEP="$id"
+  fi
+  return 0
+}
+
+# wiz_done [MESSAGE]: final summary. Nothing is reported to the Sal office
+# here: the office marks the script's end itself, after its last line.
 wiz_done() {
   printf '\n%sAll steps done.%s %s\n' "$_wg" "$_w0" "${1:-}"
   [[ "$WIZ_DRY_RUN" == 1 ]] && printf '%s(Dry run: nothing was changed.)%s\n' "$_wy" "$_w0"
