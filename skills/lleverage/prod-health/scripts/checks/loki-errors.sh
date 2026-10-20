@@ -37,15 +37,31 @@ lines="$(ph_tmp)/lines.jsonl"; : >"$lines"
 # Loki caps a query at 5000 lines. When a sample hits its cap it covers only the
 # newest part of the window, so each line carries its query's covered span
 # (cover) and signature counts are compared at that span.
+# Samples run in parallel, so each writes its lines and notes to files of its own
+# (annot.NAME.jsonl, notes.NAME) and merge_fetches joins them after `wait`.
+# Parallel appends to one shared file splice lines longer than PIPE_BUF together
+# and pair one namespace with another's message (TASK-2029).
+FETCHED=()
 fetch() {   # fetch NAME LIMIT QUERY [STRICT] [TIMEOUT]
-  local out c; out="$(ph_tmp)/q.${1//[^a-z0-9-]/_}.jsonl"; c="$PH_WIN_S"
+  local id out c; id="${1//[^a-z0-9-]/_}"; out="$(ph_tmp)/q.$id.jsonl"; c="$PH_WIN_S"
+  local PH_NOTES; PH_NOTES="$(ph_tmp)/notes.$id"; : >"$PH_NOTES"
   ph_loki_lines "$3" "$2" "${5:-90}" >"$out" || { ph_unavailable "Loki $1 sample query failed or timed out"; return; }
   if [ "$(wc -l <"$out")" -ge "$2" ]; then
     c=$(( PH_END_S - $(jq -s 'map(.ts) | min' "$out") )); [ "$c" -lt 60 ] && c=60
     ph_note "$1: sample hit the $2-line cap; its signature counts cover the last $(( c / 60 ))m"
   fi
-  jq -c --argjson c "$c" --argjson strict "${4:-false}" '. + {cover: $c, strict: $strict}' "$out" >>"$lines"
+  jq -c --argjson c "$c" --argjson strict "${4:-false}" '. + {cover: $c, strict: $strict}' "$out" >"$(ph_tmp)/annot.$id.jsonl"
 }
+# Append each fetch's lines and notes in the order the fetches were started.
+merge_fetches() {
+  local n id
+  for n in "${FETCHED[@]+"${FETCHED[@]}"}"; do
+    id="${n//[^a-z0-9-]/_}"
+    [ -f "$(ph_tmp)/annot.$id.jsonl" ] && cat "$(ph_tmp)/annot.$id.jsonl" >>"$lines"
+    [ -f "$(ph_tmp)/notes.$id" ] && cat "$(ph_tmp)/notes.$id" >>"$PH_NOTES"
+  done
+}
+FETCHED+=(labelled)
 fetch labelled "$LIMIT" "{$SEL, level=~\"$ERR_LVL\"}"
 
 # Many services log errors without a level label. A cheap literal filter counts
@@ -63,9 +79,11 @@ done < <(echo "${res:-[]}" | jq -r '.[] | "\(.value[1])\t\(.metric.namespace // 
 SKIP_SAMPLE="${PH_LOKI_SAMPLE_SKIP:-litellm}"
 for ns in $(echo "${res:-[]}" | jq -r --arg skip "$SKIP_SAMPLE" '($skip | split(",")) as $s
     | map(select(.metric.namespace as $n | $s | index($n) | not)) | sort_by(-(.value[1] | tonumber)) | .[:10][] | .metric.namespace'); do
+  FETCHED+=("unlabelled:$ns")
   fetch "unlabelled:$ns" 1000 "{$SEL, namespace=\"$ns\", level=\"\"} |~ \`$ERRLIKE\`" true 45 &
 done
 wait
+merge_fetches
 nlines="$(wc -l <"$lines")"
 
 sigs="$(python3 "$PH_LIB_DIR/normalise.py" loki-signatures <"$lines")"
