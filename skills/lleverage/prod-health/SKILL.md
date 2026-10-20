@@ -32,6 +32,9 @@ Scripts live in `scripts/` (run any with `--help`):
   `deploys` and `dispatch`.
 - `baseline.sh` captures the baseline, shows it, accepts confirmed noise and
   manages noise patterns.
+- `query.sh vm|loki '<query>'` is the only way to run an ad-hoc VictoriaMetrics
+  or Loki query. It opens its own port-forward and refuses query shapes that can
+  OOM-kill production. See **Ad-hoc queries** below.
 
 ## When to run
 
@@ -57,8 +60,10 @@ Scripts live in `scripts/` (run any with `--help`):
    don't treat it as healthy. See `references/checks.md` for what each check can
    and can't see.
 3. **Confirm before acting.** A hint is a suggestion, not a verdict. Look at the
-   signal directly (the `query` in the finding, Loki, the workflow-debugger
-   skill) and check that it is real, current and new. Dedupe against open
+   signal directly (re-run the finding's `query` with
+   `scripts/query.sh loki '<query>' --range 30m`, other metrics and logs through
+   `scripts/query.sh` (see **Ad-hoc queries**), the workflow-debugger skill) and
+   check that it is real, current and new. Dedupe against open
    tickets and the known issues in `MEMORY.md`.
 4. **Grade it** using `references/triage.md`. Severity uses Linear's priority
    names, so a grade is also the ticket's priority. Never write SEV1/SEV2/SEV3.
@@ -125,6 +130,11 @@ either. Its caller (Sal) tells Tom. A message to Tom is a notification, not the
 response, so the work doesn't stop there: return the finding with a fix-forward
 plan, and the caller starts the fix without waiting for Tom.
 
+Every VictoriaMetrics or Loki query an unattended run sends, grading included,
+goes through `scripts/query.sh` (**Ad-hoc queries**): no curl, no port-forward of
+its own, no logcli. A refusal means reshape the query into the safe shape it
+names, not find another way to send it.
+
 - **Urgent.** Stop merging and pause auto-merge on your own open PRs. File the
   Linear bug in Triage at priority 1 through `followup.sh --triage -p 1 -l Sal`
   (it dedupes; on a duplicate, comment on the existing ticket and don't label it). Then end your run
@@ -156,11 +166,59 @@ If `prepare-ticket` later says Needs decision or Blocked, park the ticket with
 what is needed in its description (Status and Decisions) and return the decision
 to the caller.
 
+## Ad-hoc queries
+
+Production VictoriaMetrics and Loki have no per-query bound that holds, so one
+bad query takes them down for everyone:
+
+- On 20 Oct 2026 a worker's hand-written range query,
+  `max by (pod)(agent_sandbox_runner_output_sync_consecutive_failures) >= 3` over
+  5 days at step 60, OOM-killed vmsingle. Its memory limiter estimated 2,000
+  groups; the churning runner pods made about 27,600, about 3.2 GB
+  ([LLE-16077](https://linear.app/lleverage/issue/LLE-16077)).
+- On 14 Oct 2026 one LogQL query with an epoch-sized range OOM-killed Loki
+  ([LLE-15393](https://linear.app/lleverage/issue/LLE-15393)).
+
+So every ad-hoc query, in production or staging, goes through `scripts/query.sh`.
+It opens and closes its own port-forward, checks the query before sending it, and
+refuses unsafe shapes (exit 3) with the safe shape in the message. Never curl
+VictoriaMetrics or Loki, open your own port-forward to them, or use logcli or
+Grafana's API instead. When it refuses, reshape the query; don't split it into a
+run of back-to-back smaller ones.
+
+```bash
+# Several days: one instant rollup, aggregated without pod.
+scripts/query.sh vm 'count(max_over_time(agent_sandbox_runner_output_sync_consecutive_failures[5d]) >= 3)'
+scripts/query.sh vm 'topk(10, max_over_time(agent_sandbox_runner_output_sync_consecutive_failures[5d]))'
+# A trend: a range of 24h or less (the step defaults to about 360 points).
+scripts/query.sh vm 'sum by (destination_namespace) (rate(hubble_http_requests_total{status=~"5.."}[5m]))' --range 6h
+# Log lines (newest first) and log counts.
+scripts/query.sh loki '{namespace="app"} |= "error"' --range 30m --limit 50
+scripts/query.sh loki 'sum by (namespace) (count_over_time({namespace=~"org-.*", container="workflow-service"} |= "timeout" [1h]))'
+# Check a query without sending it.
+scripts/query.sh vm '<query>' --dry-run
+```
+
+| Question | Safe shape | Refused |
+| --- | --- | --- |
+| Anything over more than 24h | One instant `[Nd]` rollup (7d at most) under an aggregation without pod: `max(...)`, `count(... >= 3)`, `topk(10, ...)` for the worst pods | `--range` over 24h; `by (pod)`, `by (instance)` or another per-pod label, `without (...)`, or no aggregation on a window over 24h |
+| A trend | `--range` of 24h or less, at most 1440 points per series | A step that makes more points; `[windows]` over 24h inside a range query; subqueries over 1440 points |
+| Per pod | A window of 24h or less | Per-pod grouping over more than 24h |
+| Metrics | A metric name in every selector | `{namespace="x"}` with no metric name; `__name__=~"..."` |
+| Logs | `--range` and LogQL `[ranges]` of 24h or less; an exact namespace, container or app matcher; `--limit` up to 5000 (default 100) | Ranges over 24h; selectors that narrow nothing (`=~".+"`, negations, `job` or `level` alone); a regex-only selector such as `namespace=~"org-.*"` over more than 6h |
+
+Output is one JSON line per series (`{metric, value}`, or `{metric, points, min,
+max, last}` for a range) or per log line, at most `--max-series` (default 50)
+series; `--raw` prints the API's JSON. The guard is a lint, not a full parser, and
+errs towards refusing. If it refuses a query that is genuinely safe, reshape it
+and mention it in your result; don't route around it.
+
 ## Investigating a finding
 
 - `root-cause`: chronology, regression attribution, existing fixes.
-- `loki-logs` (in the infrastructure repo, `.agents/skills/loki-logs`): log
-  queries. Re-run the finding's `query`.
+- `loki-logs` (in the infrastructure repo, `.agents/skills/loki-logs`): labels and
+  where each service logs. Send the queries themselves through `scripts/query.sh`,
+  not logcli; re-run the finding's `query` with `scripts/query.sh loki`.
 - `workflow-debugger` (in the lleverage repo): sessions, failure categories, node
   inputs and outputs.
 - `posthog-debugger`: browser exceptions, replays, 401s seen by users.
@@ -174,6 +232,8 @@ to the caller.
   writes, no flag changes. Database access goes through the cloud-sql-proxy
   sidecar with `default_transaction_read_only=on`. Never print or save database
   URLs or tokens.
+- Ad-hoc VictoriaMetrics and Loki queries go only through `scripts/query.sh`
+  (**Ad-hoc queries**). A read-only query can still take production down.
 - Rollback, revert merges to production and config changes need Tom's explicit
   approval.
 - Don't create tickets for unconfirmed signals, and don't create duplicates.

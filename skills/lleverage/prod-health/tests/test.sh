@@ -339,6 +339,46 @@ sig="$(printf '%s\n' '{"ns":"x","line":"Error: connection refused","strict":true
   '{"ns":"x","line":"  at Error: frame","strict":true}' | python3 "$lib/normalise.py" loki-signatures | jq -s length)"
 [ "$sig" = 2 ] || fail "strict filter kept $sig of 2 column-zero errors"
 
+# Ad-hoc query guard (dry run: nothing is sent). Unsafe shapes exit 3 with the safe shape;
+# safe ones exit 0 with the plan.
+q="$here/../scripts/query.sh"
+refused() { local want="$1" err rc=0; shift
+  err="$("$q" "$@" --dry-run 2>&1 >/dev/null)" || rc=$?
+  [ "$rc" = 3 ] || fail "expected refusal (exit 3, got $rc) for: $*"
+  grep -q -- "$want" <<<"$err" || fail "refusal for '$*' should mention '$want': $err"
+  grep -q 'safe shape:' <<<"$err" || fail "refusal for '$*' gives no safe shape"; }
+allowed() { local want="$1" out; shift
+  out="$("$q" "$@" --dry-run)" || fail "expected '$*' to pass the guard"
+  jq -e "$want" <<<"$out" >/dev/null || fail "plan for '$*' doesn't match $want: $out"; }
+m=agent_sandbox_runner_output_sync_consecutive_failures
+refused 'range query over 5d' vm "max by (pod)($m) >= 3" --range 5d --step 60   # the LLE-16077 query
+refused 'by (pod) on a 5d window' vm "max by (pod)(max_over_time(${m}[5d])) >= 3"
+refused 'by (instance) on a 2d window' vm "max(max_over_time(${m}[2d])) by (instance)"
+refused 'without aggregation' vm "max_over_time(${m}[5d]) >= 3"
+refused 'without (...)' vm 'sum without (le) (rate(foo_bucket[2d]))'
+refused '5760 points' vm 'sum(up)' --range 24h --step 15s
+refused 'subquery makes 7200 points' vm 'max(max_over_time(rate(foo[5m])[5d:1m]))'
+refused 'no metric name' vm 'sum({namespace="app"})'
+refused '__name__=~' vm 'sum({__name__=~"agent_.*"})'
+refused 'limit is 7d' vm 'max(max_over_time(up[30d]))'
+# shellcheck disable=SC2016 # a literal Grafana variable
+refused "can't read the range" vm 'sum(rate(up[$__rate_interval]))'
+refused 'limit is 24h (LLE-15393' loki 'sum(count_over_time({namespace="app"}[1790640242s]))'
+refused 'a 3d query range' loki '{namespace="app"} |= "error"' --range 3d
+refused "doesn't narrow anything" loki '{namespace=~".+"} |= "OOM"'
+refused "doesn't narrow anything" loki '{job="loki.source.kubernetes.pod_logs"}'
+refused 'narrowed only by a regex' loki 'sum(count_over_time({namespace=~"org-.*"} |= "x" [24h]))'
+refused '--limit 20000' loki '{namespace="app"}' --limit 20000
+allowed '.mode == "instant" and .window_s == 432000' vm "count(max_over_time(${m}[5d]) >= 3)"
+allowed '.mode == "instant"' vm "topk(10, max_over_time(${m}[5d]))"
+allowed '.mode == "instant"' vm 'histogram_quantile(0.99, sum by (le) (rate(http_duration_seconds_bucket{job="x", code=~"5.."}[3d])))'
+allowed '.mode == "range" and .step_s == 240' vm "max by (pod)($m)" --range 24h
+allowed '.mode == "logs" and .limit == 50 and .path == "/loki/api/v1/query_range"' \
+  loki '{namespace="app"} |= "error" | json | line_format "{{.msg}}"' --range 30m --limit 50
+allowed '.mode == "instant" and .window_s == 86400' \
+  loki 'sum(count_over_time({namespace=~"org-.*", container="workflow-service"} |= "x" [24h]))'
+allowed '.mode == "range" and .step_s == 60' loki 'sum by (namespace) (count_over_time({namespace="app"} [5m]))' --range 6h
+
 # Tracing never prints credentials.
 trace="$(CLAUDE_CH_PASSWORD=sentinel-secret-123 bash -x -c ". '$lib/common.sh'; ph_secret CLAUDE_CH_PASSWORD >/dev/null; printf 'user = \"%s\"' \"\$(ph_secret CLAUDE_CH_PASSWORD)\" >/dev/null" 2>&1)"
 ! grep -q sentinel-secret-123 <<<"$trace" || fail "xtrace leaked a secret"
