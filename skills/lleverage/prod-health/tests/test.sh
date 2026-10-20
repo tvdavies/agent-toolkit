@@ -288,6 +288,46 @@ jq -e '.findings[] | select(.key | startswith("k8s.rollout-stuck")) | .title | t
 [ "$(jq '[.notes[] | select(startswith("scaling: "))] | length' <<<"$k")" = 4 ] \
   || fail "scale-ups and flaps should be notes: $(jq -c '.notes' <<<"$k")"
 
+# Loki signatures: the per-namespace unlabelled samples are fetched in parallel.
+# On 20 Oct 2026 their concurrent appends to one shared file spliced long lines
+# together, so app's "Cache fetch failed" lines were counted under
+# notification-service and raised a false new signature (TASK-2029). Each sample
+# here is long JSON whose message comes last, so a spliced record would pair one
+# namespace with another's message.
+lbin="$state/lbin"; ldata="$state/loki"; mkdir -p "$lbin" "$ldata"
+lns=(alpha bravo charlie delta echo foxtrot golf hotel)
+pad="$(head -c 6000 /dev/zero | tr '\0' x)"
+for ns in "${lns[@]}"; do
+  python3 - "$ns" "$pad" >"$ldata/$ns.json" <<'PY'
+import json, sys
+ns, pad = sys.argv[1], sys.argv[2]
+line = json.dumps({"pad": pad, "message": f"Error: cache fetch failed in {ns}"})
+vals = [[str(1792486800 - i) + "000000000", line] for i in range(200)]
+print(json.dumps({"data": {"result": [{"stream": {"namespace": ns, "pod": f"{ns}-pod", "container": "service"}, "values": vals}]}}))
+PY
+done
+jq -nc --args '{data: {result: [$ARGS.positional[] | {metric: {namespace: .}, value: [0, "200"]}]}}' "${lns[@]}" >"$ldata/volume.json"
+cat >"$lbin/curl" <<'SH'
+#!/usr/bin/env bash
+while [ "$#" -gt 0 ]; do case "$1" in http*) url="$1" ;; query=*) q="${1#query=}" ;; esac; shift; done
+empty='{"data":{"result":[]}}'
+case "$url" in
+  */query_range) [[ "$q" =~ namespace=\"([a-z]+)\" ]] && cat "$FAKE_LOKI/${BASH_REMATCH[1]}.json" || echo "$empty" ;;
+  */query) if [[ "$q" == *'level=""'* ]]; then cat "$FAKE_LOKI/volume.json"; else echo "$empty"; fi ;;
+  *) exit 22 ;;
+esac
+SH
+chmod +x "$lbin/curl"
+for run in 1 2; do
+  l="$(PATH="$lbin:$PATH" PH_LOKI_URL=http://loki.invalid FAKE_LOKI="$ldata" \
+    "$here/../scripts/checks/loki-errors.sh" --raw --end 2026-10-20T09:00:00Z --window 15m)"
+  jq -e --argjson n "${#lns[@]}" '[.series[] | select(.key | startswith("loki.sig:"))] as $s
+      | ($s | length) == $n and all($s[]; .namespace as $ns | .count == 200 and (.evidence.namespaces | keys) == [$ns]
+        and (.evidence.sample | endswith(" in \($ns)")) and (.key | endswith(" in \($ns)")))
+      and (.data.summary | endswith("\($n) signatures from \($n * 200) lines"))' <<<"$l" >/dev/null \
+    || fail "loki signatures mixed namespaces (run $run): $(jq -c '{s: [.series[] | select(.key | startswith("loki.sig:")) | {key, count, ns: .evidence.namespaces}], sum: .data.summary}' <<<"$l" | head -c 2000)"
+done
+
 # Normalisation.
 [ "$(python3 "$lib/normalise.py" route /lsq3oanefp/w/my-public-app)" = "/:org/w/:id" ] || fail "public app route"
 [ "$(python3 "$lib/normalise.py" route '/api/public/workflow-session?sessionId=1')" = "/api/public/workflow-session" ] || fail "query string"
