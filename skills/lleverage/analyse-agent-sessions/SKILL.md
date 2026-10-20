@@ -268,8 +268,9 @@ LOKIQ=~/.agents/skills/prod-health/scripts/query.sh
 # One session: query each namespace with an exact matcher (a regex-only selector is refused over 6h)
 $LOKIQ loki '{namespace="agent-service"} |= "agent-thread-<id>"' --range 24h --limit 200
 $LOKIQ loki '{namespace="session-service"} |= "agent-thread-<id>"' --range 24h --limit 200
-# Older sessions ran in the org's own namespace
+# Older sessions ran in the org's own namespace (the exact container matcher is what lets org-.* through)
 $LOKIQ loki '{namespace="org-<shortname>", container="workflow-service"} |= "agent-thread-<id>"' --range 24h
+$LOKIQ loki '{namespace=~"org-.*", container="workflow-service"} |= "agent-thread-<id>"' --range 24h
 
 # Errors in the agent runtime for one UTC day: --end is the end of the window
 $LOKIQ loki '{namespace="agent-service"} |~ "(?i)error|exception|failed|timeout"' \
