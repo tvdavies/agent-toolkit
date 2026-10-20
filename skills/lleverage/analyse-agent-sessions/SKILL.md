@@ -18,7 +18,7 @@ This skill is for targeted and aggregate analysis. For deep incident-style debug
 
 1. **Local session database backup** (`SESSION_DATABASE_URL` in the lleverage repo `.env`) — canonical sessions, runs, transcripts, events, state transitions. Always start here.
 2. **Local main app database backup** (`DATABASE_URL` in the same `.env`) — resolve org short names, user emails, project titles to/from IDs.
-3. **Loki** — `agent-service` and `session-service` logs, only when the databases do not answer the question (service-level errors, stack traces, request failures, or activity newer than the backup).
+3. **Loki** — `agent-service` and `session-service` logs, only when the databases do not answer the question (service-level errors, stack traces, request failures, or activity newer than the backup). Every Loki query goes through the `prod-health` skill's `scripts/query.sh loki`; see **Loki logs** below.
 4. Escalate only if needed: production Cloud SQL via `cloud-sql-proxy` (see agent-session-debugger), ClickHouse `managed_model_access` (see workflow-debugger), GCS artefacts.
 
 ## Setup
@@ -243,9 +243,13 @@ If the question becomes "why did this specific session misbehave?", switch to th
 .agents/skills/agent-session-debugger/scripts/session-context-sweep.sh 'agent-thread-...'
 ```
 
+Run the sweep without `GRAFANA_URL` and `GRAFANA_SERVICE_ACCOUNT_TOKEN` (in the environment or the repo `.env`), so it skips its Loki and VictoriaMetrics section. That section sends `{namespace=~".+"}` queries over the session's whole lifetime through Grafana's datasource proxy, bypassing the query guard. Do the Loki part with `query.sh` as in **Loki logs** below.
+
 ## Loki logs (agent-service / session-service)
 
-Use Loki only when the session DB does not answer the question: service-level exceptions, request failures, infra errors, or activity newer than the local backup. Full access details are in the `loki-logs` skill in the infrastructure repo (`~/dev/lleverage-ai/infrastructure/.agents/skills/loki-logs/SKILL.md`).
+Use Loki only when the session DB does not answer the question: service-level exceptions, request failures, infra errors, or activity newer than the local backup. Labels and where each service logs are in the `loki-logs` skill in the infrastructure repo (`~/dev/lleverage-ai/infrastructure/.agents/skills/loki-logs/SKILL.md`); use it for reference only, not for its query recipes.
+
+**Send every Loki query through the `prod-health` skill's `scripts/query.sh loki`.** It opens and closes its own port-forward and refuses query shapes that can OOM-kill Loki; one LogQL query with an oversized range did that to production on 14 Oct 2026 ([LLE-15393](https://linear.app/lleverage/issue/LLE-15393)). Never use logcli, curl, your own `kubectl port-forward` to Loki, or Grafana's datasource proxy, in production or staging. The safe shapes and what is refused are in the prod-health SKILL.md, **Ad-hoc queries** (`~/.agents/skills/prod-health/SKILL.md`). When it refuses a query (exit 3), reshape it into the shape the message names; don't split it into a run of back-to-back smaller queries or find another way to send it.
 
 Where agent logs live:
 
@@ -256,34 +260,34 @@ Where agent logs live:
 | `org-<shortName>` (container `workflow-service`) | workflow/node execution for agent tools, and per-thread agent execution for **older** sessions (pre agent-service extraction) |
 | `agent-sandbox-service` | sandbox acquire/evict/exec lifecycle |
 
-Setup (production; use the staging kubeconfig for staging):
+Production is the default; add `--env staging` for staging. `--range` (24h at most) is the window ending at `--end` (default now), and log lines come back newest first, `--limit` lines (default 100, at most 5000):
 
 ```bash
-export KUBECONFIG=~/dev/lleverage-ai/infrastructure/generated/production/kubeconfig
-kubectl -n loki port-forward --address 127.0.0.1 svc/loki 3100:3100 >/tmp/loki-pf.log 2>&1 &
-PF=$!; trap 'kill $PF 2>/dev/null || true' EXIT; sleep 2
-```
+LOKIQ=~/.agents/skills/prod-health/scripts/query.sh
 
-Scoped queries — always filter, always limit:
+# One session: query each namespace with an exact matcher (a regex-only selector is refused over 6h)
+$LOKIQ loki '{namespace="agent-service"} |= "agent-thread-<id>"' --range 24h --limit 200
+$LOKIQ loki '{namespace="session-service"} |= "agent-thread-<id>"' --range 24h --limit 200
+# Older sessions ran in the org's own namespace (the exact container matcher is what lets org-.* through)
+$LOKIQ loki '{namespace="org-<shortname>", container="workflow-service"} |= "agent-thread-<id>"' --range 24h
+$LOKIQ loki '{namespace=~"org-.*", container="workflow-service"} |= "agent-thread-<id>"' --range 24h
 
-```bash
-# One session, wherever it was handled
-logcli --addr=http://127.0.0.1:3100 query --since=24h --limit=100 --forward --output=raw \
-  '{namespace=~"agent-service|session-service|org-.*"} |= "agent-thread-<id>"'
+# Errors in the agent runtime for one UTC day: --end is the end of the window
+$LOKIQ loki '{namespace="agent-service"} |~ "(?i)error|exception|failed|timeout"' \
+  --end 2026-08-21T00:00:00Z --range 24h --limit 200
 
-# Errors in the agent runtime for a date range (RFC3339, UTC)
-logcli --addr=http://127.0.0.1:3100 query --limit=200 --forward \
-  --from="2026-08-20T00:00:00Z" --to="2026-08-21T00:00:00Z" \
-  '{namespace="agent-service"} |~ "(?i)error|exception|failed|timeout"'
+# How many errors, hour by hour (a count, not lines)
+$LOKIQ loki 'sum(count_over_time({namespace="agent-service"} |~ "(?i)error|exception|failed|timeout" [1h]))' --range 24h
 
 # Org-scoped: per-org namespaces use the org short name; shared services log org IDs in-line
-logcli --addr=http://127.0.0.1:3100 query --since=6h --limit=100 \
-  '{namespace="agent-service"} |= "org-<organisation-id>"'
-logcli --addr=http://127.0.0.1:3100 query --since=6h --limit=100 \
-  '{namespace="org-<shortname>", container="workflow-service"} |= "[agent]"'
+$LOKIQ loki '{namespace="agent-service"} |= "org-<organisation-id>"' --range 6h
+$LOKIQ loki '{namespace="org-<shortname>", container="workflow-service"} |= "[agent]"' --range 6h
+
+# Check a query without sending it
+$LOKIQ loki '<query>' --range 24h --dry-run
 ```
 
-If `GRAFANA_URL` and `GRAFANA_SERVICE_ACCOUNT_TOKEN` are available in the environment, the Grafana datasource proxy (`$GRAFANA_URL/api/datasources/proxy/uid/<loki-uid>/loki/api/v1/query_range`) works without a port-forward — see the sweep script in `agent-session-debugger` for a worked example.
+For a window longer than 24h, first narrow it with the session database (when the session or run happened), then query the day that matters. For a total across several days, use one instant `count_over_time(...[24h])` per day you actually need, not a sweep of every day. Keep each query filtered by an exact namespace and a line filter.
 
 ## Reporting
 
@@ -313,4 +317,5 @@ Translate all IDs to human names (org, project, user) where you resolved them. N
 - Read-only. Never run `INSERT`/`UPDATE`/`DELETE`/DDL against any database.
 - Transcript payloads and tool inputs/outputs can contain customer data and secrets. Query with `left(...)` previews and `LIMIT`; never dump full payloads into the report.
 - Do not paste API keys, tokens, signed URLs, or credentials found in payloads or logs.
+- A read-only Loki query can still take production down: send them only through prod-health's `scripts/query.sh loki`, as in **Loki logs**.
 - Aggregate before you quote: prefer counts and themes over verbatim customer content; quote the minimum excerpt needed as evidence.
