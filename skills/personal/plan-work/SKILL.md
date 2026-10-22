@@ -142,8 +142,9 @@ constraints: the service renders a bounded
 Markdown subset (no raw HTML, no setext headings), and every top-level block is
 an individually commentable anchor — one idea per paragraph or list item, and
 keep unchanged blocks word-stable across versions. For diagrams, export
-SVG/PNG, upload with the file-upload skill, and embed the `files.myslop.app`
-URL as a Markdown image; prefer text and tables unless a diagram genuinely
+SVG/PNG, upload with the file-upload skill using `?visibility=public` (a
+signed-in-only image does not load inside the plan), and embed the
+`files.myslop.app` URL as a Markdown image; prefer text and tables unless a diagram genuinely
 makes the argument.
 
 Before publishing, verify: the title, version, and size are current; every

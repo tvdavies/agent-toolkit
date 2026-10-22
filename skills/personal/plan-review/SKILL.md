@@ -129,8 +129,9 @@ Raw HTML is escaped, not rendered; avoid setext (`===`) headings.
 - Every top-level block is an individually commentable anchor, so keep one
   idea per paragraph or list item, and keep unchanged blocks word-stable
   across versions so comments stay attached.
-- Diagrams: export SVG/PNG, upload with the file-upload skill, embed the
-  `files.myslop.app` URL as a markdown image.
+- Diagrams: export SVG/PNG, upload with the file-upload skill using
+  `?visibility=public` (a signed-in-only image does not load inside the plan),
+  and embed the `files.myslop.app` URL as a markdown image.
 
 ## Workflow
 
