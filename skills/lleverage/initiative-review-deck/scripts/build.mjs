@@ -235,7 +235,7 @@ for (const p of projects) {
     const chunk = tiles.slice(i, i + 12);
     const col = (xs) => xs.join("");
     const body = `<div class="irr-cols" style="position:absolute;left:64px;top:186px;width:1152px;"><div>${col(chunk.slice(0, 6))}</div><div>${col(chunk.slice(6, 12))}</div></div>
-${sources([{ label: `Linear project · ${p.name}`, url: p.url }, ...(p.o.sources ?? [])].concat(hidden ? [{ label: `${hidden} milestones without issues not shown`, url: p.url }] : []))}`;
+${sources([{ label: `Linear project · ${p.name}`, url: p.url }, ...(p.o.sources ?? [])].concat(hidden ? [{ label: `${hidden} ${hidden === 1 ? "milestone" : "milestones"} without issues not shown`, url: p.url }] : []))}`;
     slides.push(titleSlide("Milestones", p.o.title ?? `${p.name}: ${p.counts.done} of ${p.counts.total} issues done, ${p.counts.doneThisWeek} this week`, body));
   }
 }
