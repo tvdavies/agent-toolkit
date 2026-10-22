@@ -328,6 +328,45 @@ for run in 1 2; do
     || fail "loki signatures mixed namespaces (run $run): $(jq -c '{s: [.series[] | select(.key | startswith("loki.sig:")) | {key, count, ns: .evidence.namespaces}], sum: .data.summary}' <<<"$l" | head -c 2000)"
 done
 
+# HTTP routes: a status with no path and no method isn't a request (agent-sandbox-service
+# "Retrying Kubernetes API operation" 409s, agent-service metadata-lookup 404s,
+# workflow-service search_provider_unavailable 503 warns, app outbound Outlook 500s) and
+# makes no route key; real requests to / still do. Real 5xx (Hubble by service, request
+# logs and access lines with a path) still raise. Loki, VictoriaMetrics and kubectl are stubbed.
+hbin="$state/hbin"; infra="$state/infra"; mkdir -p "$hbin" "$infra/generated/production"; : >"$infra/generated/production/kubeconfig"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$hbin/kubectl"
+cat >"$hbin/curl" <<SH
+#!/usr/bin/env bash
+q=""; for a in "\$@"; do case "\$a" in query=*) q="\$a" ;; esac; done
+case "\$q" in
+  *"| json method="*) cat "$here/fixtures/http-loki-json.json" ;;
+  *"| regexp "*) cat "$here/fixtures/http-loki-access.json" ;;
+  *"hubble_http_requests_total{status=~"*) cat "$here/fixtures/http-vm-hubble.json" ;;
+  *"hubble_http_requests_total["*) echo '{"data":{"result":[{"metric":{"destination_namespace":"app"},"value":[1791752400,"90000"]}]}}' ;;
+  *) echo '{"data":{"result":[]}}' ;;
+esac
+SH
+chmod +x "$hbin/kubectl" "$hbin/curl"
+http="$(PATH="$hbin:$PATH" PH_INFRA_DIR="$infra" PH_STATE_ROOT="$state" PH_LOKI_URL=http://loki.invalid PH_VM_URL=http://vm.invalid \
+  "$here/../scripts/checks/http.sh" --raw --window 2h --end 2026-10-11T20:20:00Z)"
+hk="$(jq -r '.series[] | "\(.key)=\(.count)"' <<<"$http" | sort | tr '\n' ' ')"
+[ "$hk" = 'http.route:actions-gateway|POST /|400=2 http.route:app|POST /api/public/workflow-session|401=12 http.route:credential-service|GET /|404=52 http.route:example-api|POST /|409=25 http.route:example-api|PUT /|409=21 http.route:gotenberg|POST /forms/chromium/convert/html|503=6 http.route:litellm|POST /v1/chat/completions|500=7 http.svc:app|502=115 http.svc:workflow-service|500=110 ' ] \
+  || fail "http route keys: $hk"
+jq -e '.data.http_skipped_no_path == 801' <<<"$http" >/dev/null || fail "pathless non-request lines should be counted as skipped: $(jq -c .data <<<"$http")"
+jq -e '.data.http_skipped_no_path_by == {"agent-service|404":721,"org-*|400":40,"agent-sandbox-service|409":30,"workflow-service|503":5,"app|500":5}' <<<"$http" >/dev/null \
+  || fail "skipped lines should be broken down by service and status: $(jq -c .data.http_skipped_no_path_by <<<"$http")"
+jq -e '.series[] | select(.key == "http.route:example-api|POST /|409") | .evidence.query == "{namespace=\"example-api\"} |~ `\"(status|statusCode)\":\\s*\"?409\\b|\" 409 `"' <<<"$http" >/dev/null \
+  || fail "evidence query for / should match the status field: $(jq -c '[.series[].evidence.query]' <<<"$http")"
+jq -e '.series[] | select(.key == "http.route:app|POST /api/public/workflow-session|401") | .evidence.query | startswith("{namespace=\"app\"} |= \"/api/public/workflow-session\" |~ ")' <<<"$http" >/dev/null \
+  || fail "evidence query should keep the route prefix: $(jq -c '[.series[].evidence.query]' <<<"$http")"
+hf="$(PH_STATE_ROOT="$state" python3 "$lib/assess.py" --env production --json - <<<"$http" | jq -r '.findings[].key')"
+for k in 'http.route:example-api|POST /|409' 'http.route:example-api|PUT /|409' \
+         'http.route:gotenberg|POST /forms/chromium/convert/html|503' 'http.route:litellm|POST /v1/chat/completions|500' \
+         'http.svc:workflow-service|500' 'http.svc:app|502'; do
+  grep -qxF "$k" <<<"$hf" || fail "a real request error should still raise $k; got: $hf"
+done
+! grep -q '|/|' <<<"$hf" || fail "no route key without a method should be raised: $hf"
+
 # Normalisation.
 [ "$(python3 "$lib/normalise.py" route /lsq3oanefp/w/my-public-app)" = "/:org/w/:id" ] || fail "public app route"
 [ "$(python3 "$lib/normalise.py" route '/api/public/workflow-session?sessionId=1')" = "/api/public/workflow-session" ] || fail "query string"

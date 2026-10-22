@@ -1,0 +1,6 @@
+{"status":"success","data":{"resultType":"vector","result":[
+  {"_line":"INFO:     10.244.1.5:51234 - \"PUT / HTTP/1.1\" 409 Conflict",
+   "metric":{"method":"PUT","namespace":"example-api","path":"/","status":"409"},"value":[1791752400,"21"]},
+  {"_line":"INFO:     10.244.2.9:40112 - \"POST /v1/chat/completions HTTP/1.1\" 500 Internal Server Error (illustrative)",
+   "metric":{"method":"POST","namespace":"litellm","path":"/v1/chat/completions","status":"500"},"value":[1791752400,"7"]}
+]}}
