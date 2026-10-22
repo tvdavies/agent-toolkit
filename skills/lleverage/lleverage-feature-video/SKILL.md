@@ -52,7 +52,8 @@ Needs a lleverage checkout with `node_modules` (icons, facts, flags; `LLEVERAGE_
    `UI.integration("slug")`, and generates `icons.js` and `integrations/` from your checkout.
 8. **Check, look, render.** `node $B/check.mjs <dir>` (must be clean), `node $B/stills.mjs <dir> --scenes` (look at the
    sheet), a `DRAFT=1` render of a section if motion matters, then `node $B/render.mjs <dir>`.
-9. **Hand over.** Upload with the `file-upload` skill if a link is wanted (it is public). State what was not verified
+9. **Hand over.** Upload with the `file-upload` skill if a link is wanted (signed-in myslop users only by
+   default; add `?visibility=public` to embed it in a PR or share it outside myslop). State what was not verified
    (flags you could not resolve, work not yet deployed).
 
 ## Rules

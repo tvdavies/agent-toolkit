@@ -291,7 +291,7 @@ function validateCardImage(url) {
   if (url == null) return null;
   if (!/^https:\/\/[^\s"<>]+$/i.test(url)) throw new BuildError(`--card-image must be an absolute https URL (got ${url}). Upload the card PNG first and pass the URL it returns.`);
   if (!/\.(png|jpe?g)(\?[^\s]*)?$/i.test(url)) throw new BuildError(`--card-image must point to a PNG or JPEG (got ${url}).`);
-  if (/[?&]private=1\b/.test(url)) throw new BuildError("--card-image cannot be a private upload: Slack's crawler cannot fetch it.");
+  if (/[?&](private=1|visibility=(private|protected))\b/.test(url)) throw new BuildError("--card-image cannot be a private or signed-in-only upload: Slack's crawler cannot fetch it.");
   return url;
 }
 

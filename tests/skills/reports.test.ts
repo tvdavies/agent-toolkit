@@ -46,6 +46,7 @@ describe("share card (link previews)", () => {
     expect(() => buildReport(example, { cardImage: "card.png" })).toThrow(/absolute https URL/);
     expect(() => buildReport(example, { cardImage: "https://x.test/card.svg" })).toThrow(/PNG or JPEG/);
     expect(() => buildReport(example, { cardImage: `${url}?private=1` })).toThrow(/private/);
+    expect(() => buildReport(example, { cardImage: `${url}?visibility=protected` })).toThrow(/signed-in-only/);
   });
 
   test("description falls back from card_description to bottom line to standfirst", () => {
@@ -214,7 +215,7 @@ describe("report-writer agent", () => {
     expect(skill).toContain("### 6. Upload and hand over");
     expect(skill).toContain('"https://files.myslop.app/$(basename "$1")$2"');
     // Card first, then rebuild with its URL, then upload the report and check what Slack sees.
-    const order = ["scripts/card.mjs", "CARD_URL=$(put", '--card-image "$CARD_URL"', 'URL=$(put "$OUT")', "Slackbot-LinkExpanding"].map((s) => skill.indexOf(s));
+    const order = ["scripts/card.mjs", "CARD_URL=$(put", '--card-image "$CARD_URL"', 'URL=$(put "$OUT" "?visibility=public")', "Slackbot-LinkExpanding"].map((s) => skill.indexOf(s));
     expect(order.every((i) => i > 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(skill).toContain("Never upload the card\n  publicly for a private report");

@@ -117,12 +117,12 @@ OUT="$WORK/<slug>-<YYYY-MM-DD>.html"
 
 # a. Render the card (1200×630 PNG) and look at it.
 node "$SKILL/scripts/card.mjs" "$WORK/report.src.html" -o "$WORK/<slug>-<YYYY-MM-DD>.card.png"
-# b. Upload the card. Always public: Slack cannot fetch a private image.
-CARD_URL=$(put "$WORK/<slug>-<YYYY-MM-DD>.card.png")
+# b. Upload the card. Always public: Slack cannot fetch a signed-in-only image.
+CARD_URL=$(put "$WORK/<slug>-<YYYY-MM-DD>.card.png" "?visibility=public")
 # c. Rebuild the report so its meta tags point at the card.
 node "$SKILL/scripts/build-report.mjs" "$WORK/report.src.html" -o "$OUT" --card-image "$CARD_URL"
-# d. Upload the report (pass "?private=1" as the second argument for a private link).
-URL=$(put "$OUT")
+# d. Upload the report (see Visibility below for the second argument).
+URL=$(put "$OUT" "?visibility=public")
 # e. Check what Slack will see: the page loads and the card tags are there.
 curl -sI "$URL" | head -1
 curl -s -A "Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)" "$URL" | grep -o '<meta property="og:image" content="[^"]*"'
@@ -137,18 +137,22 @@ curl -sI "$CARD_URL" | head -1
 - **The preview text.** `og:description` is the summary's bottom line, cut to about 240
   characters (front matter `card_description:` overrides it). The card also shows two
   fields, **Date** and **Reading time**, worked out from the word count.
-- **Private reports get a plain preview.** Slack's crawler cannot open a private link, so
-  it shows only the URL. Skip steps a–c for a private report (build without
-  `--card-image`), and tell the user the link will not unfurl. Never upload the card
-  publicly for a private report: the card shows the title and headline figures.
+- **Private reports get a plain preview.** Slack's crawler cannot open a private or
+  signed-in-only link, so it shows only the URL. Skip steps a–c for a private report (build
+  without `--card-image`), and tell the user the link will not unfurl. Never upload the card
+  publicly for a private report: the card shows the title and headline figures. The same
+  goes for a signed-in-only report.
 - **No Chrome:** if `card.mjs` exits with code 3, build without `--card-image`. The link
   still gets a text preview. Say that the card image was skipped.
 
-- **Visibility.** The default is an unlisted link: public, but under a random prefix that
-  cannot be guessed or listed. Use `?private=1` (only the account owner can open it) when
-  the user or the brief asks for private, or when the report holds credentials, personal
-  data about named individuals, or anything the brief marks Confidential. Customer and
-  project names alone do not require private. When unsure, ask before uploading.
+- **Visibility.** Reports pass `?visibility=public` so they unfurl in Slack: an unlisted
+  link under a random prefix that cannot be guessed or listed. (Files' own default is
+  signed-in-only, so never drop the argument by accident.) Use `?visibility=protected`
+  (anyone signed in to myslop) when the user asks for that. Use `?visibility=private` (only
+  the account owner can open it) when the user or the brief asks for private, or when the
+  report holds credentials, personal data about named individuals, or anything the brief
+  marks Confidential. Customer and project names alone do not require private. When
+  unsure, ask before uploading.
 - **Use the returned URL.** The response body is the permanent URL. Never construct it.
   Check it opens (`curl -sI <url>` returns `200`) before handing it over.
 - **Updates replace the report in place.** Once a report link has been shared, publish fixes
