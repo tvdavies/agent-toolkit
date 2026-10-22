@@ -8,7 +8,8 @@
 #     endpoint/url/path/route (app, credential-service, gotenberg, ...), and
 #     uvicorn access lines ("GET /path HTTP/1.1" 401). Routes are normalised.
 #     JSON lines with a status but no path and no method aren't requests
-#     (Kubernetes API retries, outbound-call failures, metric lines) and are skipped.
+#     (Kubernetes API retries, outbound-call failures, metric lines) and are skipped,
+#     counted in data.http_skipped_no_path(_by) but never series.
 # Health checks, metrics scrapes and kube probes are excluded.
 set -uo pipefail
 . "$(dirname "$0")/../lib/common.sh"
@@ -52,7 +53,11 @@ if ph_ensure_loki; then
   ph_loki_metric "$acc_q" >"$ares" || { echo '[]' >"$ares"; ph_unavailable "Loki access-log query failed"; }
   out="$(PYTHONDONTWRITEBYTECODE=1 python3 "$PH_LIB_DIR/normalise.py" http-routes "$jres" "$ares")"
   agg="$(grep -v '"skipped_no_path"' <<<"$out")"
-  ph_data http_skipped_no_path "$(grep '"skipped_no_path"' <<<"$out" | jq '.skipped_no_path' 2>/dev/null || echo 0)"
+  skip="$(grep '"skipped_no_path"' <<<"$out")"
+  # Counted for the record only: these are data, never series, so they can't raise.
+  sn="$(jq '.skipped_no_path // 0' <<<"$skip" 2>/dev/null)"; sby="$(jq -c '.skipped_no_path_by // {}' <<<"$skip" 2>/dev/null)"
+  ph_data http_skipped_no_path "${sn:-0}"
+  ph_data http_skipped_no_path_by "${sby:-"{}"}"
   nroutes=0
   while read -r a; do
     [ -n "$a" ] || continue

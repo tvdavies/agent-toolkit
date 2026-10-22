@@ -125,13 +125,14 @@ def http_route_rows(json_result, acc_result):
 
     json_result: structured log lines grouped by method, endpoint/route/path/url/uri,
     status/statusCode. acc_result: access lines ("GET /x HTTP/1.1" 404), which
-    always carry a path. Returns (rows, skipped) where skipped counts JSON lines
-    that had a status but neither a path nor a method. Those aren't request logs
-    (Kubernetes API retries, outbound-call failures, metrics lines), and used to be
-    filed under route '/'. Request logs that give a method but no path (actions-
+    always carry a path. Returns (rows, skipped) where skipped counts, by
+    "<ns class>|<status>", JSON lines that had a status but neither a path nor a
+    method. Those aren't request logs (Kubernetes API retries, outbound-call
+    failures such as workflow-service's search_provider_unavailable warns, metric
+    lines), and used to be filed under route '/'. Request logs that give a method but no path (actions-
     gateway's "HTTP request completed") are kept under '/' as before.
     """
-    rows, skipped = [], 0
+    rows, skipped = [], {}
     for r in json_result or []:
         m = r.get("metric", {})
         status = m.get("status") or m.get("statusCode") or ""
@@ -142,7 +143,8 @@ def http_route_rows(json_result, acc_result):
         method = m.get("method") or ""
         if not path:
             if not method:
-                skipped += n
+                k = "%s|%s" % (ns_class(m.get("namespace", "")), status)
+                skipped[k] = skipped.get(k, 0) + n
                 continue
             path = "/"
         rows.append((m.get("namespace", ""), method, path, status, n))
@@ -183,7 +185,8 @@ def http_routes(json_path, acc_path):
         top = max(a["nss"], key=a["nss"].get)
         print(json.dumps({"cls": cls, "ns": top, "nss": a["nss"], "method": method, "route": r, "status": status,
                           "n": a["n"], "query": evidence_query(top, r, status)}))
-    print(json.dumps({"skipped_no_path": skipped}))
+    print(json.dumps({"skipped_no_path": sum(skipped.values()),
+                      "skipped_no_path_by": dict(sorted(skipped.items(), key=lambda kv: -kv[1])[:10])}))
 
 
 def main():
