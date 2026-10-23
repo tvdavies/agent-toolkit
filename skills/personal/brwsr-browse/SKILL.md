@@ -12,8 +12,12 @@ supervisor: plan, supply the values, answer its questions, approve anything
 irreversible.
 
 CLI: `~/dev/tvdavies/brwsr/reflex/bin/reflex` (one JSON object on stdout).
-Needs `BRWSR_API_KEY` and `TYPESAFE_API_KEY` in the environment, or their files
-(`SAL_GRANT_BRWSR_API_KEY_FILE`, `SAL_GRANT_TYPESAFE_API_KEY_FILE`).
+The loop runs inside brwsr, next to the browser, on the brwsr project's own
+Jev key (Settings → Model keys), so the CLI needs only `BRWSR_API_KEY` (or the
+file `SAL_GRANT_BRWSR_API_KEY_FILE` names). `--local` runs the loop on this
+machine instead (slower; needs `TYPESAFE_API_KEY` too). The same API without
+the CLI: `POST https://api.brwsr.dev/brwsr/v1/sessions/S/reflex/run`, `/act`,
+`GET /look`, with `x-bb-api-key`.
 
 ## Flow
 
@@ -67,6 +71,8 @@ are remembered per session (`~/.cache/reflex/`), so a second `run` knows what
 was done.
 
 Share `liveView` (or `https://brwsr.dev/sessions/S`) when Tom wants to watch.
-`--context NAME` on `start` loads a saved brwsr context (logins); `--model clef`
-uses Cloudflare's Clef instead of Jev; `--supervisor gpt-5.4` lets an OpenAI
-model answer escalations itself, for unattended runs.
+`--context NAME` on `start` loads a saved brwsr context (logins);
+`--supervisor gpt-5.4` lets an OpenAI model answer escalations itself, for
+unattended runs (needs an OpenAI key in the project's Model keys);
+`reflex act --session S --instruction "type Tom into the Name field"` does one
+Stagehand-style step on Jev.
