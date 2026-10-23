@@ -66,9 +66,9 @@ reflex act --session S press Enter     # or: goto URL, scroll
 reflex run --session S --goal "<same goal>" --data …   # carry on
 ```
 
-`reflex look --session S` shows the page and its elements at any time. Steps
-are remembered per session (`~/.cache/reflex/`), so a second `run` knows what
-was done.
+`reflex look --session S` shows the page and its elements at any time. brwsr
+remembers each page's steps for as long as the browser lives, so a second
+`run` knows what was done.
 
 Share `liveView` (or `https://brwsr.dev/sessions/S`) when Tom wants to watch.
 `--context NAME` on `start` loads a saved brwsr context (logins);
