@@ -15,6 +15,8 @@ Start services with:
 pnpm dev --filter <service>
 ```
 
+If `GOOGLE_APPLICATION_CREDENTIALS` is already set in your environment (under Sal it points at Sal's Google Cloud service-account key), start services with `env -u GOOGLE_APPLICATION_CREDENTIALS pnpm dev --filter <service>` in every recipe below. The repo's `.env` sets its own local credentials, and `dotenv` never overrides a variable that is already set, so otherwise local services would run as Sal's service account.
+
 Run each service as its own `interactive_shell` background session unless the user explicitly asks for an attached/foreground session.
 
 Prefer `mode: "dispatch"` with `background: true` and `autoExitOnQuiet: false` for long-running dev services:
