@@ -62,6 +62,8 @@ repeating them.
   history. Comment only to ask a named person a real question or to notify
   someone who needs a ping, and write it with `writing-for-humans`. Don't comment
   a PR link: Linear links PRs whose branch or title carries the ticket ID.
+  Another occurrence of a known problem is an update too: tally it in the
+  description (Follow-ups, step 2), never a comment of its own.
 - **Someone else may be editing.** Re-read the description immediately before
   you write, and keep anything added since you last read it.
 
@@ -127,7 +129,11 @@ When review, testing or investigation turns something up, decide in this order:
    should be the first two.
 2. **Add it to an existing open ticket** (`followup.sh` reports likely duplicates
    and exits 3). Add the finding to the match's description or evidence
-   document, and comment only when its owner needs to be told.
+   document. For another occurrence of a known problem, update the running
+   tally there: the count, a count for each mode if relevant, and the latest
+   example. Never comment on an occurrence that healed itself or needs no
+   action; comment only when a person must act, such as a service left behind
+   that needs a re-run, and say what they need to do.
 3. **Create a follow-up** with `scripts/followup.sh`, which applies Tom's placement rules:
    - default: To Do, assigned to Tom, **current cycle**, parented under the
      workstream issue it came from, inheriting its project;

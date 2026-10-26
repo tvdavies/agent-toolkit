@@ -104,10 +104,16 @@ Scripts live in `scripts/` (run any with `--help`):
      ticket you create, sub-issues and follow-ups included. Don't add the label to
      an existing ticket you dedupe onto or comment on.
 
-   On exit code 3 (a possible duplicate), add the new occurrence to the existing
-   ticket's evidence document or description instead, and comment only when its
-   owner needs to know it recurred. Tickets follow "Writing tickets" in
-   `../workstream/references/issues.md`, with the body in `references/triage.md`:
+   On exit code 3 (a possible duplicate), don't create a ticket: update the
+   running tally on the existing one, in its description or in its evidence
+   document if it has one, with the count, a count for each mode if there are
+   several, and the latest example. Never comment on an occurrence that healed
+   itself or needs no action (13 such comments on
+   [LLE-14442](https://linear.app/lleverage/issue/LLE-14442) drew a complaint
+   from its assignee). Comment only when a person must act, such as a service
+   left behind that needs a re-run, and say what they need to do. Tickets follow
+   "Writing tickets" in `../workstream/references/issues.md`, with the body in
+   `references/triage.md`:
    a short symptom title with no priority word in front (the `Urgent:` and
    `High:` lines below start your result, not the ticket title) and a few lines
    on the ticket (symptom, impact, start, suspected deploy, next step), with
@@ -137,7 +143,8 @@ names, not find another way to send it.
 
 - **Urgent.** Stop merging and pause auto-merge on your own open PRs. File the
   Linear bug in Triage at priority 1 through `followup.sh --triage -p 1 -l Sal`
-  (it dedupes; on a duplicate, comment on the existing ticket and don't label it). Then end your run
+  (it dedupes; on a duplicate, update the existing ticket's tally as in step 6, comment only if a
+  person must act, and don't label it). Then end your run
   at once and return to the caller, at the top of your result:
   `Urgent: <symptom>`, the impact (orgs by name, users, counts), when it started,
   the evidence and queries, the suspected deploy and PR, a **rollback

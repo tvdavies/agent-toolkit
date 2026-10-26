@@ -77,7 +77,7 @@ if [ "$n_mine" -gt 0 ]; then
       -v t="$title" -v k="$team" | data | jq -r '.searchIssues.nodes[] | [.identifier, .state.name, .title] | @tsv')
 fi
 if [ -n "$dups" ] && ! $force; then
-  echo "Possible duplicates (nothing created). Reuse or comment on one of these, or rerun with --force:" >&2
+  echo "Possible duplicates (nothing created). Reuse one of these (a repeat occurrence goes in its description tally; comment only if someone must act), or rerun with --force:" >&2
   printf '%s' "$dups" >&2
   exit 3
 fi
