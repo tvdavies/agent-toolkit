@@ -23,6 +23,17 @@ hint. Override hints with judgement, and say why when you do. Older outputs and
 watch state may still say `sev1`, `sev2` or `sev3`; read them as `urgent`, `high`
 and `low`.
 
+Recurring slots (`references/baselines.md`): a burst listed under `recurring`
+(`-- recurring slot, not raised:` in the text report) came at its usual local
+time and was no bigger than the slot allows, so it needs no grade and no ticket.
+A raised finding whose title says `above recurring slot …` is the same key in its
+slot but larger than any burst it was learned from: treat it as a possible real
+incident. Compare the count with the slot's `seen` counts in its evidence, and
+check whether the failures are the usual ones (the same orgs, nodes and error
+messages) or new. A key that keeps bursting at the same local time on most days
+but has no slot is a candidate for `slot learn` once Tom agrees, not for
+`accept`.
+
 Attribution: a finding's `deployed in window` candidates are rollouts in the
 same namespace (org namespaces map to `workflow-service`), then the most recent
 others. Check chronology: the signal should start after the rollout (re-run with

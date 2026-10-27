@@ -1,0 +1,15 @@
+{
+ "version": 1,
+ "slots": [
+  {"key": "http.svc:workflow-service|500", "tz": "Europe/Amsterdam", "at": "10:00", "minutes": 10, "days": "weekdays",
+   "allowance": 12, "by": "learn", "note": "customers' 10:00 scheduled workflows failing in their own nodes (TASK-3354)",
+   "learned": {"at": "2026-10-27T11:30:00Z", "lookback": 10, "measured": 10, "seen": 8, "bar": "its threshold 10", "peak": 12,
+               "counts": {"2026-10-27": 10, "2026-10-26": 12, "2026-10-23": 11, "2026-10-22": 9, "2026-10-21": 11,
+                          "2026-10-20": 10, "2026-10-19": 12, "2026-10-16": 11, "2026-10-15": 9, "2026-10-14": 11}}},
+  {"key": "loki.error:workflow-service", "tz": "Europe/Amsterdam", "at": "10:00", "minutes": 10, "days": "weekdays",
+   "allowance": 19, "by": "learn", "note": "the same failures' error lines",
+   "learned": {"at": "2026-10-27T11:30:00Z", "lookback": 10, "measured": 10, "seen": 8, "bar": "its threshold 10", "peak": 19,
+               "counts": {"2026-10-27": 10, "2026-10-26": 19, "2026-10-23": 15, "2026-10-22": 9, "2026-10-21": 15,
+                          "2026-10-20": 10, "2026-10-19": 16, "2026-10-16": 15, "2026-10-15": 9, "2026-10-14": 16}}}
+ ]
+}
