@@ -367,6 +367,91 @@ for k in 'http.route:example-api|POST /|409' 'http.route:example-api|PUT /|409' 
 done
 ! grep -q '|/|' <<<"$hf" || fail "no route key without a method should be raised: $hf"
 
+# Recurring slots (experimental). Customers' scheduled workflows fire at 10:00
+# Europe/Amsterdam on weekdays and ~10 fail in their own nodes, which raised
+# http.svc:workflow-service|500 (High) and loki.error:workflow-service (Low) on the
+# 15m watch most weekdays from 9 Oct 2026 (TASK-3354). The fixture is that burst,
+# 08:50-09:05Z on Tue 27 Oct, against the live baseline's 11.33/h and 12.17/h.
+rs="$state/slots"; mkdir -p "$rs/production"
+jq '.rates["http.svc:workflow-service|500"] = 11.333 | .rates["loki.error:workflow-service"] = 12.167' \
+  "$here/fixtures/baseline.json" >"$rs/production/baseline.json"
+burst() {  # burst START END [HTTP_COUNT]: the fixture moved to another window
+  jq -c --arg s "$1" --arg e "$2" --argjson n "${3:-10}" '.start = $s | .end = $e
+    | .series |= map(if .key == "http.svc:workflow-service|500" then .count = $n else . end)' "$here/fixtures/recurring-burst.jsonl"; }
+slotrun() {  # slotrun START END [HTTP_COUNT] [assess args...] -> "key=hint ... | recurring: key ..."
+  local s="$1" e="$2" n="${3:-10}"; shift 3 2>/dev/null || shift "$#"
+  burst "$s" "$e" "$n" | PH_STATE_ROOT="$rs" python3 "$lib/assess.py" --env production --json "$@" - \
+    | jq -r '([.findings[] | "\(.key)=\(.hint)"] | join(" ")) + " | recurring: " + ([.recurring[].key] | join(" "))'; }
+http500='http.svc:workflow-service|500'; lerr='loki.error:workflow-service'
+raised="$http500=high $lerr=low | recurring: "; expected=" | recurring: $http500 $lerr"
+# No slots file: unchanged behaviour, both raise.
+r="$(slotrun 2026-10-27T08:50:00Z 2026-10-27T09:05:00Z)"; [ "$r" = "$raised" ] || fail "no slots file should raise as before: $r"
+cp "$here/fixtures/slots.json" "$rs/production/slots.json"
+# Tue 27 Oct 09:00Z is 10:00 CET: inside the weekday slot, so not raised but listed as recurring.
+r="$(slotrun 2026-10-27T08:50:00Z 2026-10-27T09:05:00Z)"; [ "$r" = "$expected" ] || fail "weekday 09:00Z burst should be recurring: $r"
+r="$(slotrun 2026-10-27T09:00:00Z 2026-10-27T09:15:00Z)"; [ "$r" = "$expected" ] || fail "the next 15m window also overlaps the slot: $r"
+# The same burst at 14:00Z: the slot doesn't widen the rest of the day.
+r="$(slotrun 2026-10-27T13:50:00Z 2026-10-27T14:05:00Z)"; [ "$r" = "$raised" ] || fail "14:00Z burst must still raise High: $r"
+r="$(slotrun 2026-10-27T09:10:00Z 2026-10-27T09:25:00Z)"; [ "$r" = "$raised" ] || fail "a window after the slot ends must raise: $r"
+# Weekend: the slot is weekdays only, so Saturday's 10:00 CEST (08:00Z) raises.
+r="$(slotrun 2026-10-24T07:50:00Z 2026-10-24T08:05:00Z)"; [ "$r" = "$raised" ] || fail "weekend burst should raise (weekday slot): $r"
+# DST: before 25 Oct 10:00 Amsterdam was 08:00Z, so Fri 23 Oct 08:00Z is the slot
+# and 09:00Z (11:00 CEST) is not; after it, Tue 27 Oct 08:00Z is 09:00 CET, not the slot.
+r="$(slotrun 2026-10-23T07:50:00Z 2026-10-23T08:05:00Z)"; [ "$r" = "$expected" ] || fail "CEST 08:00Z should be the slot: $r"
+r="$(slotrun 2026-10-23T08:50:00Z 2026-10-23T09:05:00Z)"; [ "$r" = "$raised" ] || fail "CEST 09:00Z is 11:00 local and must raise: $r"
+r="$(slotrun 2026-10-27T07:50:00Z 2026-10-27T08:05:00Z)"; [ "$r" = "$raised" ] || fail "CET 08:00Z is 09:00 local and must raise: $r"
+# A burst well beyond the usual one still raises inside the slot (threshold 10 + allowance 12).
+r="$(slotrun 2026-10-27T08:50:00Z 2026-10-27T09:05:00Z 21)"; [ "$r" = "$expected" ] || fail "21 is within 10 + 12: $r"
+f="$(burst 2026-10-27T08:50:00Z 2026-10-27T09:05:00Z 22 | PH_STATE_ROOT="$rs" python3 "$lib/assess.py" --env production --json - \
+  | jq -c --arg k "$http500" '.findings[] | select(.key == $k)')"
+jq -e '.hint == "high" and .evidence.slot_allowance == 12 and .evidence.threshold == 10 and (.title | test("x22 .*above recurring slot 10:00\\+10m Europe/Amsterdam weekdays \\(allows \\+12 over 10.0\\)"))
+       and .evidence.slot[0].slot == "10:00+10m Europe/Amsterdam weekdays"' <<<"$f" >/dev/null \
+  || fail "a burst past the allowance should raise, labelled with the slot: $f"
+# The switch: --no-slots or PH_SLOTS=off ignore the file.
+r="$(slotrun 2026-10-27T08:50:00Z 2026-10-27T09:05:00Z 10 --no-slots)"; [ "$r" = "$raised" ] || fail "--no-slots: $r"
+r="$(burst 2026-10-27T08:50:00Z 2026-10-27T09:05:00Z | PH_SLOTS=off PH_STATE_ROOT="$rs" python3 "$lib/assess.py" --env production --json - | jq -r '[.findings[].key] | join(" ")')"
+[ "$r" = "$http500 $lerr" ] || fail "PH_SLOTS=off: $r"
+# Watch: a recurring burst is no item (exit 0) but is listed under recurring.
+set +e; out="$(burst 2026-10-27T08:50:00Z 2026-10-27T09:05:00Z | PH_STATE_ROOT="$rs" python3 "$lib/assess.py" --env production --watch \
+  --state "$rs/watch.json" --now 2026-10-27T09:05:30Z -)"; rc=$?; set -e
+[ "$rc" = 0 ] && jq -e '.items == [] and .raise_count == 0 and ([.recurring[] | "\(.key)=\(.count)/\(.threshold)+\(.slot_allowance)"] | join(" "))
+  == "http.svc:workflow-service|500=10/10+12 loki.error:workflow-service=10/10+19"' <<<"$out" >/dev/null \
+  || fail "watch should raise nothing and list the recurring burst (rc=$rc): $out"
+text="$(burst 2026-10-27T08:50:00Z 2026-10-27T09:05:00Z | PH_STATE_ROOT="$rs" python3 "$lib/assess.py" --env production -)"
+grep -q -- '-- recurring slot, not raised: \[high\] http: HTTP 500 to workflow-service (hubble) x10 .*within recurring slot 10:00+10m Europe/Amsterdam weekdays (allows +12 over 10.0)' <<<"$text" \
+  || fail "text report should list the recurring burst: $text"
+
+# Learning a slot: the owning checks run once per matching local day, at the right
+# UTC time either side of the clock change, and the slot is stored only when the key
+# would have raised there on --min-days of them.
+runner="$state/fake-runner"
+cat >"$runner" <<'SH'
+#!/usr/bin/env bash
+while [ "$#" -gt 0 ]; do case "$1" in --end) end="$2"; shift 2 ;; --window) win="$2"; shift 2 ;; --only) only="$2"; shift 2 ;; *) shift ;; esac; done
+echo "$end $win $only" >>"$FAKE_LOG"
+n="$(jq -r --arg e "$end" '.[$e] // 3' <<<"$FAKE_COUNTS")"
+printf '{"check":"http","status":"ok","window_s":600,"series":[{"key":"http.svc:workflow-service|500","count":%s,"min_spike":10,"rules":["new","spike"]}]}\n' "$n"
+printf '{"check":"loki-errors","status":"unavailable","window_s":600,"series":[]}\n'
+SH
+chmod +x "$runner"
+export FAKE_LOG="$state/runner.log" FAKE_COUNTS='{"2026-10-27T09:10:00Z":10,"2026-10-26T09:10:00Z":12,"2026-10-23T08:10:00Z":11,"2026-10-22T08:10:00Z":4}'
+learn() { PH_STATE_ROOT="$rs" python3 "$lib/slots.py" learn --env production --file "$rs/learned.json" --runner "$runner" \
+  --key "$http500" --key "$lerr" --at 10:00 --minutes 10 --days weekdays --lookback 4 --now 2026-10-27T12:00:00Z "$@" 2>/dev/null; }
+set +e; out="$(learn --min-days 4)"; rc=$?; set -e
+[ "$rc" = 1 ] && [ ! -e "$rs/learned.json" ] && grep -q 'not recurring: 3 of 4 measured days reached its threshold 10' <<<"$out" \
+  || fail "3 of 4 days must not store a slot when 4 are needed (rc=$rc): $out"
+[ "$(cut -d' ' -f1 "$FAKE_LOG" | tr '\n' ' ')" = "2026-10-27T09:10:00Z 2026-10-26T09:10:00Z 2026-10-23T08:10:00Z 2026-10-22T08:10:00Z " ] \
+  || fail "learn should query 10:00-10:10 local on the last 4 weekdays, across the clock change: $(cat "$FAKE_LOG")"
+grep -qxF '2026-10-27T09:10:00Z 10m http,loki-errors' "$FAKE_LOG" || fail "learn should run only the owning checks: $(cat "$FAKE_LOG")"
+out="$(learn --min-days 3 --note test)" || fail "3 of 4 days should store a slot: $out"
+jq -e --arg k "$http500" '.slots | length == 1 and (.[0] | .key == $k and .allowance == 12 and .learned.seen == 3 and .learned.measured == 4
+       and .learned.counts["2026-10-22"] == 4 and .tz == "Europe/Amsterdam" and .days == "weekdays")' "$rs/learned.json" >/dev/null \
+  || fail "learned slot: $(cat "$rs/learned.json")"
+grep -q "$lerr: 2026-10-27=?" <<<"$out" || fail "an unavailable check's days are unmeasured, not zero: $out"
+PH_STATE_ROOT="$rs" python3 "$lib/slots.py" rm --env production --file "$rs/learned.json" --key "$http500" >/dev/null
+jq -e '.slots == []' "$rs/learned.json" >/dev/null || fail "slot rm"
+unset FAKE_LOG FAKE_COUNTS
+
 # Normalisation.
 [ "$(python3 "$lib/normalise.py" route /lsq3oanefp/w/my-public-app)" = "/:org/w/:id" ] || fail "public app route"
 [ "$(python3 "$lib/normalise.py" route '/api/public/workflow-session?sessionId=1')" = "/api/public/workflow-session" ] || fail "query string"

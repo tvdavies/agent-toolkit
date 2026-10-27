@@ -30,8 +30,8 @@ Scripts live in `scripts/` (run any with `--help`):
 - `checks/<name>.sh` runs one check on its own, with the same flags. The checks are
   `k8s`, `alerts`, `loki-errors`, `http`, `workflows`, `sentry`, `posthog`,
   `deploys` and `dispatch`.
-- `baseline.sh` captures the baseline, shows it, accepts confirmed noise and
-  manages noise patterns.
+- `baseline.sh` captures the baseline, shows it, accepts confirmed noise,
+  manages noise patterns and learns recurring slots (experimental, below).
 - `query.sh vm|loki '<query>'` is the only way to run an ad-hoc VictoriaMetrics
   or Loki query. It opens its own port-forward and refuses query shapes that can
   OOM-kill production. See **Ad-hoc queries** below.
@@ -58,7 +58,10 @@ Scripts live in `scripts/` (run any with `--help`):
    window that could explain it. The `-- check:` lines summarise each source.
    A source marked `unavailable` or `partial` has **not** been checked. Say so;
    don't treat it as healthy. See `references/checks.md` for what each check can
-   and can't see.
+   and can't see. A `-- recurring slot, not raised:` line (`recurring` in JSON
+   and `--watch`) is a known daily burst at its usual local time and size; it
+   needs no action. A finding titled `above recurring slot …` is bigger than that
+   burst has been, so grade it like any other finding (see **Recurring slots**).
 3. **Confirm before acting.** A hint is a suggestion, not a verdict. Look at the
    signal directly (re-run the finding's `query` with
    `scripts/query.sh loki '<query>' --range 30m`, other metrics and logs through
@@ -124,7 +127,36 @@ Scripts live in `scripts/` (run any with `--help`):
    which raises that key's baseline rate. Use `baseline.sh noise add '<glob>'
    --note "<why>"` only for something that should never alert. Re-capture the
    baseline (`baseline.sh capture --merge`) after a deliberate traffic change.
-   See `references/baselines.md`.
+   For a burst that comes at the same local time on most days, learn a recurring
+   slot instead of accepting it (**Recurring slots**). See
+   `references/baselines.md`.
+
+## Recurring slots (experimental)
+
+The baseline keeps one flat per-hour rate per key, with no time of day, so a
+short burst at the same time every day (customers' scheduled workflows at 10:00
+Europe/Amsterdam failing in their own nodes) raises a spike every day, and
+raising the rate to cover it would blunt the key at every hour. A recurring slot
+lets one key exceed its normal threshold by an allowance, only in windows that
+overlap a local time slot on matching days. Everything else is judged as before,
+and with no `slots.json` nothing changes (`PH_SLOTS=off` turns it off).
+
+- **Learn** (needs Tom's agreement, like `accept`; look with `--dry-run` first):
+  `scripts/baseline.sh slot learn --key '<finding key>' [--key …] --at 10:00
+  --minutes 10 --tz Europe/Amsterdam --days weekdays --note "<who agreed, why>"`.
+  It runs the owning checks (read-only) over that slot on each of the last 10
+  matching days and stores the slot only if the key would have raised there on
+  at least 6 of them, with the largest count as the allowance. The timezone makes
+  it follow the clock change.
+- **Grade**: a `recurring` entry is the usual burst; no ticket. A raised
+  finding `above recurring slot …` is larger than any day it was learned from:
+  compare its count with the slot's `seen` counts in the evidence and check
+  whether the failing orgs, nodes and messages are the usual ones. If not, it's
+  a real incident. Weekends, other hours and other keys aren't covered.
+- **Maintain**: `baseline.sh slot list` (also in `show`), re-learn when the burst
+  grows, `slot rm --key …` when the schedule stops.
+
+Details, the file format and the rules: `references/baselines.md`.
 8. **Report** in one short message: the verdict, each confirmed finding with its
    severity and the ticket or action taken, sources that were unavailable, and
    anything waiting on Tom.

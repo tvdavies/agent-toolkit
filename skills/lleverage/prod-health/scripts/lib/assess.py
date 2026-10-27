@@ -13,6 +13,8 @@ previous runs (see references/watching.md) and keeps a source that has been
 unavailable for --unavailable-minutes as an item of its own.
 
 Baseline file: $PH_STATE_ROOT/<env>/baseline.json (see references/baselines.md).
+Recurring slots (experimental): $PH_STATE_ROOT/<env>/slots.json, read when it
+exists unless --no-slots or PH_SLOTS=off (see lib/slots.py).
 """
 import argparse
 import datetime as dt
@@ -22,6 +24,8 @@ import json
 import os
 import re
 import sys
+
+import slots as slotlib
 
 STATE_ROOT = os.environ.get("PH_STATE_ROOT", os.path.expanduser("~/.local/state/prod-health"))
 # Severities use Linear's issue priority names, worst first: urgent (1), high (2),
@@ -130,14 +134,14 @@ def noise_match(noise, key):
     return None
 
 
-def assess(results, baseline, args):
+def assess(results, baseline, args, slots=()):
     rates = (baseline or {}).get("rates", {})
     means = (baseline or {}).get("means", {})
     ratios = (baseline or {}).get("ratios", {})
     presence = set((baseline or {}).get("presence", []))
     noise = (baseline or {}).get("noise", [])
     have_baseline = bool(baseline and (rates or presence))
-    findings, suppressed, info = [], [], []
+    findings, suppressed, info, recurring = [], [], [], []
 
     def add(f, check):
         f = dict(f)
@@ -150,11 +154,30 @@ def assess(results, baseline, args):
         else:
             findings.append(f)
 
+    def judge(f, check, count, threshold, room):
+        """Raise f, unless only a recurring slot's usual burst put it over the threshold."""
+        allow, found = room
+        if not allow:
+            add(f, check)
+            return
+        f["evidence"] = {**f["evidence"], "threshold": round(threshold, 2), "slot_allowance": allow,
+                         "slot": [{"slot": slotlib.describe(s), "allowance": s.get("allowance"),
+                                   "at": slotlib.iso(a), "seen": (s.get("learned") or {}).get("counts")}
+                                  for s, a, _ in found]}
+        if count < threshold + allow:
+            recurring.append({**f, "check": check, "hint": norm_sev(f.get("hint") or DEFAULT_HINT), "recurring": True,
+                              "title": f"{f['title']}, within recurring slot {slotlib.describe(found[0][0])} "
+                                       f"(allows +{allow:g} over {threshold:.1f})"})
+        else:
+            add({**f, "title": f"{f['title']}, above recurring slot {slotlib.describe(found[0][0])} "
+                                f"(allows +{allow:g} over {threshold:.1f})"}, check)
+
     for r in results:
         check, win = r["check"], r.get("window_s") or 1800
         for f in r.get("findings", []):
             add(f, check)
         series = merged_series(r)
+        w_start, w_end = parse_iso(r.get("start")), parse_iso(r.get("end"))
         for s in series.values():
             key, count = s["key"], s.get("count", 0) or 0
             win = s.get("window_s") or r.get("window_s") or 1800
@@ -184,10 +207,14 @@ def assess(results, baseline, args):
             if not have_baseline:
                 continue
             if base is None and "new" in rules and count >= s.get("min_new", DEFAULTS["min_new"]):
-                add(mk("new", f"NEW {s['title']} x{count}"), check)
+                judge(mk("new", f"NEW {s['title']} x{count}"), check, count, s.get("min_new", DEFAULTS["min_new"]),
+                      slotlib.allowance(slots, key, w_start, w_end))
             elif base is not None and "spike" in rules and count >= s.get("min_spike", DEFAULTS["min_spike"]) \
                     and count >= s.get("ratio", DEFAULTS["ratio"]) * max(expected, 1.0):
-                add(mk("spike", f"{s['title']} x{count} ({count / max(expected, 0.01):.1f}x baseline {expected:.1f})"), check)
+                # Fires when count >= threshold; a recurring slot adds its allowance on top.
+                threshold = max(s.get("min_spike", DEFAULTS["min_spike"]), s.get("ratio", DEFAULTS["ratio"]) * max(expected, 1.0))
+                judge(mk("spike", f"{s['title']} x{count} ({count / max(expected, 0.01):.1f}x baseline {expected:.1f})"),
+                      check, count, threshold, slotlib.allowance(slots, key, w_start, w_end))
             mean_exp = (means.get(key, base) or 0) * win / 3600.0 if base is not None else 0
             if base is not None and "drop" in rules and mean_exp >= s.get("drop_min_expected", DEFAULTS["drop_min_expected"]) \
                     and count < DEFAULTS["drop_ratio"] * mean_exp:
@@ -211,7 +238,7 @@ def assess(results, baseline, args):
         if f["check"] != "deploys":
             f["candidates"] = candidates(f, deploys)
     findings.sort(key=lambda f: (SEV_ORDER.get(f.get("hint"), 9), f["check"], -(f.get("evidence", {}).get("count") or 0)))
-    return findings, suppressed, info, deploys, have_baseline
+    return findings, suppressed, info, deploys, have_baseline, recurring
 
 
 def candidates(f, deploys):
@@ -330,7 +357,7 @@ def track(findings, results, path, now, reraise_h, unavailable_min, orgs):
     return items
 
 
-def render_text(results, findings, suppressed, info, deploys, have_baseline, baseline, orgs, env):
+def render_text(results, findings, suppressed, info, deploys, have_baseline, baseline, orgs, env, recurring=()):
     first = results[0] if results else {}
     lines = []
     bl = "none (run baseline.sh capture)" if not have_baseline else \
@@ -369,6 +396,8 @@ def render_text(results, findings, suppressed, info, deploys, have_baseline, bas
     if suppressed:
         keys = sorted({f"{f['key']}" for f in suppressed})
         lines.append(f"-- suppressed as known noise ({len(suppressed)}): " + ", ".join(keys)[:400])
+    for f in recurring:
+        lines.append(f"-- recurring slot, not raised: [{f['hint']}] {f['check']}: {orgs.label(f['title'])}"[:400])
     return "\n".join(lines)
 
 
@@ -447,6 +476,8 @@ def main():
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--baseline")
     ap.add_argument("--no-baseline", action="store_true")
+    ap.add_argument("--slots", help="recurring slots file (default <state>/<env>/slots.json)")
+    ap.add_argument("--no-slots", action="store_true", help="ignore recurring slots (as does PH_SLOTS=off)")
     ap.add_argument("--save-last", action="store_true")
     ap.add_argument("--capture", action="store_true")
     ap.add_argument("--merge", action="store_true")
@@ -464,8 +495,10 @@ def main():
     bpath = args.baseline or os.path.join(STATE_ROOT, args.env, "baseline.json")
     baseline = None if args.no_baseline else load_json(bpath, None)
     orgs = Orgs(os.path.join(STATE_ROOT, args.env, "org-names.json"))
-    findings, suppressed, info, deploys, have_baseline = assess(results, baseline, args)
-    for f in findings + suppressed:
+    spath = args.slots or slotlib.default_path(args.env)
+    slots = [] if args.no_slots or not slotlib.enabled() else slotlib.load(spath)
+    findings, suppressed, info, deploys, have_baseline, recurring = assess(results, baseline, args, slots)
+    for f in findings + suppressed + recurring:
         names = sorted({n for n in (orgs.name(t) for t in re.findall(r"org-[0-9a-z-]{5,40}", f["key"] + " " + f["title"])) if n})
         if names:
             f["org_names"] = names
@@ -487,6 +520,8 @@ def main():
                                                      "window": baseline.get("window")},
         "findings": findings,
         "suppressed": suppressed,
+        "recurring": recurring,
+        "slots": {"path": spath, "count": len(slots)} if slots else None,
         "sources": {r["check"]: {"status": r.get("status"), "notes": r.get("notes", []),
                                  "summary": r.get("data", {}).get("summary")} for r in results},
         "deploys": deploys,
@@ -499,6 +534,9 @@ def main():
         watch.update(baseline_captured_at=(report["baseline"] or {}).get("captured_at"),
                      items=items, findings=items,
                      raise_count=sum(1 for i in items if i["change"] != "unchanged"),
+                     recurring=[{"key": f["key"], "severity": f["hint"], "summary": f"{f['check']}: {orgs.label(f['title'])}",
+                                 "count": f["evidence"].get("count"), "threshold": f["evidence"].get("threshold"),
+                                 "slot_allowance": f["evidence"].get("slot_allowance")} for f in recurring],
                      sources={c: s["status"] for c, s in report["sources"].items()},
                      source_notes={c: [str(n)[:300] for n in s["notes"]][:5] for c, s in report["sources"].items()
                                    if s["status"] != "ok"},
@@ -510,7 +548,7 @@ def main():
     if args.json:
         print(json.dumps(report, ensure_ascii=False))
     else:
-        print(render_text(results, findings, suppressed, info, deploys, have_baseline, baseline or {}, orgs, args.env))
+        print(render_text(results, findings, suppressed, info, deploys, have_baseline, baseline or {}, orgs, args.env, recurring))
     # Exit status for this report only: 0 healthy, 3 findings, 4 incomplete.
     return EXIT.get(report["verdict"], 3) if args.exit_code else 0
 

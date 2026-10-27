@@ -13,6 +13,16 @@
 #                                     baseline rate for KEY to what the last run saw
 #   noise add PATTERN --note TEXT     always ignore findings whose key matches PATTERN (glob)
 #   noise rm PATTERN | noise list
+#   slot learn --key KEY [--key KEY2] --at HH:MM [--minutes 10] [--tz Europe/Amsterdam]
+#              [--days weekdays] [--lookback 10] [--min-days 6] [--min-count N] [--dry-run]
+#                                     experimental: run the owning checks (read-only) over
+#                                     that local slot on each of the last LOOKBACK matching
+#                                     days; if KEY would have raised there (or reached
+#                                     MIN_COUNT) on MIN_DAYS of them, store a recurring slot
+#                                     in slots.json: a window overlapping it may exceed the
+#                                     normal threshold by the peak count seen
+#   slot add --key KEY --at HH:MM --allowance N --note TEXT [--minutes --tz --days]
+#   slot rm --key KEY [--at HH:MM] | slot list
 # Keys and patterns are the finding keys shown by prod-health.sh --json.
 set -uo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -33,7 +43,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ "$env" = prod ] && env=production
-dir="$STATE_ROOT/$env"; file="$dir/baseline.json"
+dir="$STATE_ROOT/$env"; file="$dir/baseline.json"; slots="$dir/slots.json"
 mkdir -p "$dir"; chmod 700 "$STATE_ROOT" "$dir" 2>/dev/null
 now() { date -u +%FT%TZ; }
 edit() {   # edit JQ_FILTER [jq args...]: atomic in-place update of the baseline
@@ -69,6 +79,11 @@ case "$cmd" in
     jq -r '"baseline \(.env) captured \(.captured_at) over \(.window): \(.rates | length) rates, \(.presence | length) known alerts",
       "noise patterns:", (.noise[] | "  \(.pattern)  # \(.note // "")"),
       "top rates per hour:", (.rates | to_entries | sort_by(-.value) | .[:20][] | "  \(.value * 10 | round / 10)\t\(.key[0:120])")' "$file"
+    if [ -s "$slots" ]; then echo "recurring slots (experimental, $slots):"; python3 "$HERE/lib/slots.py" list --file "$slots" | sed 's/^/  /'; fi
+    ;;
+  slot|slots)
+    sargs=(--env "$env" --file "$slots"); [ -n "$note" ] && sargs+=(--note "$note"); [ "${rest[0]:-}" = learn ] && sargs+=(--baseline "$file") && { [ -z "$end" ] || sargs+=(--now "$end"); }
+    python3 "$HERE/lib/slots.py" "${rest[@]:-list}" "${sargs[@]}"
     ;;
   accept)
     key="${rest[0]:-}"; [ -n "$key" ] || { echo "accept needs a finding KEY" >&2; exit 2; }
