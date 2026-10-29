@@ -186,13 +186,20 @@ ${sources(d.sources)}`;
   void msDone;
   const max = Math.max(1, ...projects.map((p) => p.counts.doneThisWeek));
   const top = projects.reduce((a, p) => (p.counts.doneThisWeek > (a?.counts.doneThisWeek ?? -1) ? p : a), null);
+  // Rows start at about 324px (top 300 plus the heading). Seven 30px rows end at 534, so the
+  // note fits at 548; more projects get shorter rows and push the note's default down.
+  const hrowH = projects.length > 7 ? 26 : 30;
+  const rowsEnd = 324 + projects.length * hrowH;
+  const noteTop = g.noteTop ?? Math.max(548, rowsEnd + 12);
+  if (g.note && noteTop < rowsEnd + 8) warnings.push(`glance: noteTop ${noteTop} overlaps the project rows, which end at about ${rowsEnd}px`);
+  if (g.note && noteTop > 560) warnings.push(`glance: the note starts at ${noteTop}px, so keep it to one line or it runs into the sources`);
   const rows = projects
-    .map((p) => `<div class="irr-hrow"><div class="irr-hlabel">${esc(p.name)}</div><div class="irr-hbar"><i class="${p === top ? "accent" : ""}" style="width:calc((100% - 48px) * ${(p.counts.doneThisWeek / max).toFixed(3)})"></i><span>${p.counts.doneThisWeek}</span></div></div>`)
+    .map((p) => `<div class="irr-hrow" style="height:${hrowH}px"><div class="irr-hlabel">${esc(p.name)}</div><div class="irr-hbar"><i class="${p === top ? "accent" : ""}" style="width:calc((100% - 48px) * ${(p.counts.doneThisWeek / max).toFixed(3)})"></i><span>${p.counts.doneThisWeek}</span></div></div>`)
     .join("");
   const body = `
 ${stats.slice(0, 4).map(([v, l], i) => `<div class="stat" style="position:absolute;left:${64 + i * 296}px;top:190px;width:264px;"><span class="v">${esc(v)}</span><div class="l">${esc(l)}</div></div>`).join("")}
 <div style="position:absolute;left:64px;top:300px;width:1152px;"><div class="k" style="padding-bottom:8px;">ISSUES COMPLETED THIS WEEK, BY PROJECT</div>${rows}</div>
-${g.note ? `<div class="irr-note" style="position:absolute;left:64px;top:${g.noteTop ?? 548}px;width:1152px;"><p class="p">${md(g.note)}</p></div>` : ""}
+${g.note ? `<div class="irr-note" style="position:absolute;left:64px;top:${noteTop}px;width:1152px;"><p class="p">${md(g.note)}</p></div>` : ""}
 ${sources(g.sources ?? [data.initiative.url])}`;
   slides.push(titleSlide("This week", g.title ?? `${all} issues completed across ${projects.filter((p) => p.counts.doneThisWeek).length} projects`, body));
 }
@@ -200,12 +207,15 @@ ${sources(g.sources ?? [data.initiative.url])}`;
 // 4. Projects overview
 {
   const o = content.overview ?? {};
+  // Rows run from 186px to the legend at 576px: seven fit at 54px, more get shorter rows.
+  const prowH = Math.min(54, Math.floor(384 / Math.max(1, projects.length)));
+  if (prowH < 44) warnings.push(`overview: ${projects.length} projects leave ${prowH}px rows; hide some with content.projects.<name>.hide`);
   const rows = projects
     .map((p) => {
       const ms = p.milestones.filter((m) => m.counts.total);
       const by = (s) => ms.filter((m) => msStatus(p, m) === s).length;
       const summary = [by("done") && `${by("done")} done`, by("in-progress") && `${by("in-progress")} in progress`, by("at-risk") && `${by("at-risk")} at risk`, by("not-started") && `${by("not-started")} not started`].filter(Boolean).join(" · ");
-      return `<div class="irr-prow">
+      return `<div class="irr-prow" style="height:${prowH}px">
   <div><a class="h3" href="${esc(p.url)}">${esc(p.name)}</a><div class="micro">${esc(p.lead?.name ?? "")}${p.status?.name ? ` · ${esc(p.status.name)}` : ""}</div></div>
   <div>${bar(p.counts, p.counts.done + p.counts.started === 0)}<div class="micro" style="padding-top:6px;">${esc(countLine(p.counts))}</div></div>
   <div class="micro irr-right">${esc(summary || "no milestones")}</div>
