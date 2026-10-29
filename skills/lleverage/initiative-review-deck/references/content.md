@@ -34,7 +34,7 @@
     "title": "...",
     "stats": [["139", "issues completed"], ...],   // default: completed, started, decisions, milestones at risk
     "note": "How to read the numbers.",
-    "noteTop": 548,
+    "noteTop": 548,                        // default: 548, or just below the project rows when there are more than seven
     "sources": [ref, ...]
   },
   "overview": { "title": "...", "sources": [ref, ...] },
