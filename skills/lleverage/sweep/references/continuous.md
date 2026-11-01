@@ -30,13 +30,18 @@ else failed). Run `sweep-gate.sh --help` for the full rules. In order:
    on the first tick after the last subtask hands back.
 3. Eligible tickets, from the queue: verdict `eligible`, To Do or Backlog, no open
    ancestor, unassigned or Tom's, size XS/S/M or unknown, and not named by an open
-   Docket task or a sweep task from the last three days.
+   Docket task or a sweep task from the last three days, done or not. The one
+   exception is a done prepare task: the ticket it got ready can be delivered
+   next. So a delivery that ended `SKIPPED` (or any other way) isn't raised again
+   for three days. The verdict already excludes a ticket with an open PR linked to
+   it in Linear, in any repo.
 4. Any ready (`**Status:** Ready` and a known S/M size; `**Status:** Ready from
    <date>` counts only from that date, and until then, or if the date can't be
    read, the ticket is listed as waiting and neither delivered nor prepared): raise
    `cycle-sweep:deliver:<hash of the pick>` with up to five tickets, best first
    (priority, then smaller, then older).
-5. Otherwise, unready ones not prepared by a sweep in the last three days: hash
+5. Otherwise, unready ones not named by any sweep task (prepare or deliver) in the
+   last three days: hash
    their sorted IDs. If the hash equals the one recorded in
    `~/.local/state/sweep/gate-state.json`, exit 0 ("nothing to work on": the last
    sweep changed nothing). Otherwise record it and raise
@@ -91,10 +96,11 @@ For one ticket, `Cycle sweep: deliver ID`:
 
 1. Check it is still free, from fresh data: `../workstream/scripts/linear-queue.sh
    tree ID --json` shows verdict `eligible`, `openAncestor` false, state To Do or
-   Backlog, and the assignee is empty or Tom; and
-   `gh pr list -R lleverage-ai/lleverage --state open --search ID` finds nothing
-   (also lleverage-ai/infrastructure if the ticket is about infrastructure). If
-   any fails, stop with `SKIPPED: <why>` and don't touch the ticket. The one
+   Backlog, the assignee is empty or Tom, and `prs` is empty (it holds the open
+   GitHub PRs Linear links to the ticket, in any repo, and open PRs naming it in
+   the tracked repos); and `gh search prs --owner lleverage-ai --state open ID`
+   finds nothing, which covers every lleverage-ai repo and PR bodies too. If any
+   fails, stop with `SKIPPED: <why>` and don't touch the ticket. The one
    exception is a retry of this same task: if its own branch, worktree or PR for
    ID already exists from an earlier attempt, resume yolo-ticket with them.
    Then run the stale check in `prepare-ticket` section 0. If the ticket is old

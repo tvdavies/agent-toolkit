@@ -17,7 +17,8 @@ Verdicts (sweep rules; tree mode reports them too):
   claimed      an ancestor is in a started state (In Progress, Technical Review, ...).
                Another workstream owns that tree. Never touch it from a sweep.
   started      the issue itself is in a started state. Someone is on it.
-  has-pr       an open PR in the tracked repos mentions the identifier.
+  has-pr       an open GitHub PR is linked to the issue in Linear (any repo), or an open
+               PR in the tracked repos names the identifier in its title or branch.
   blocked      an open issue blocks it.
   parent       it has open children. Work the children, not the parent.
   umbrella-done  all of its children are closed. Check its acceptance and close it.
@@ -31,7 +32,10 @@ else the description's "Size:" line, else null) and prepared (the description's
 "**Status:** Ready from <date>" (14 Nov 2026, 14 November 2026 or 2026-11-14) sets
 readyFrom to the ISO date and is prepared "Ready" only from that date (UTC);
 before it, or when the date can't be read (readyFrom null), it is "Ready later".
-Tracked repos for PR detection: $WS_REPOS (space separated), default
+Open PRs (prs) come from two places: the GitHub PR attachments Linear holds on the
+issue, in any repo its GitHub integration links (only while Linear's synced status is
+draft, open, inReview or approved),
+and a title/branch scan of the tracked repos: $WS_REPOS (space separated), default
 "lleverage-ai/lleverage lleverage-ai/infrastructure lleverage-ai/agent-sdk".
 EOF
 }
@@ -63,7 +67,8 @@ FIELDS='identifier title priority estimate url
   assignee{name isMe} description
   parent{identifier state{name type} parent{identifier state{name type} parent{identifier state{name type}}}}
   inverseRelations(first:20){nodes{type issue{identifier state{type}}}}
-  children(first:50){nodes{identifier state{type}}}'
+  children(first:50){nodes{identifier state{type}}}
+  attachments(first:20, filter:{sourceType:{eq:"github"}}){nodes{url metadata}}'
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 : > "$tmp/issues.jsonl"
@@ -98,7 +103,8 @@ else
   done
 fi
 
-# Open PRs in the tracked repos, to spot work already under way elsewhere.
+# Open PRs in the tracked repos, to spot work already under way elsewhere. Linear's own
+# PR links (the attachments above) cover every other repo.
 : > "$tmp/prs.tsv"
 for repo in ${WS_REPOS:-lleverage-ai/lleverage lleverage-ai/infrastructure lleverage-ai/agent-sdk}; do
   gh pr list -R "$repo" --state open --limit 300 --json number,title,headRefName \
@@ -124,7 +130,16 @@ jq -c --rawfile prs "$tmp/prs.tsv" '
   | [$i.parent, $i.parent.parent?, $i.parent.parent.parent?] | map(select(. != null)) as $anc
   | ($prs | split("\n") | map(select(length > 0))
      | map(select(ascii_downcase | test("\\b" + ($i.identifier | ascii_downcase) + "\\b")))
-     | map(split("\t")[0])) as $pr
+     | map(split("\t")[0])) as $scanned
+  # GitHub PRs Linear links to the issue, in any repo, while the synced status says they are
+  # open (draft, open, inReview, approved). A link with no status, such as one pasted by hand,
+  # does not count. (No apostrophes in this program: it is single-quoted.)
+  | [($i.attachments.nodes // [])[]
+     | select((.metadata.status // "" | IN("draft", "open", "inReview", "approved"))
+              and .metadata.mergedAt == null and .metadata.closedAt == null)
+     | .url | capture("^https://github\\.com/(?<repo>[^/]+/[^/]+)/pull/(?<n>[0-9]+)")?
+     | "\(.repo)#\(.n)"] as $linked
+  | ($linked + $scanned | unique) as $pr
   | [$i.inverseRelations.nodes[] | select(.type == "blocks" and (.issue.state.type | openish)) | .issue.identifier] as $blk
   | [$i.children.nodes[] | select(.state.type | openish)] as $kids
   | ($i.description // "") as $desc
