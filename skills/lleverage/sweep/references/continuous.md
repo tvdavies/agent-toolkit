@@ -33,8 +33,9 @@ else failed). Run `sweep-gate.sh --help` for the full rules. In order:
    Docket task or a sweep task from the last three days, done or not. The one
    exception is a done prepare task: the ticket it got ready can be delivered
    next. So a delivery that ended `SKIPPED` (or any other way) isn't raised again
-   for three days. The verdict already excludes a ticket with an open PR linked to
-   it in Linear, in any repo.
+   for three days. The verdict already excludes a ticket with an open PR anywhere
+   in lleverage-ai: linked to it in Linear, or naming it in its title or with a
+   closing word in its body (see `linear-queue.sh --help`).
 4. Any ready (`**Status:** Ready` and a known S/M size; `**Status:** Ready from
    <date>` counts only from that date, and until then, or if the date can't be
    read, the ticket is listed as waiting and neither delivered nor prepared): raise
@@ -96,10 +97,12 @@ For one ticket, `Cycle sweep: deliver ID`:
 
 1. Check it is still free, from fresh data: `../workstream/scripts/linear-queue.sh
    tree ID --json` shows verdict `eligible`, `openAncestor` false, state To Do or
-   Backlog, the assignee is empty or Tom, and `prs` is empty (it holds the open
-   GitHub PRs Linear links to the ticket, in any repo, and open PRs naming it in
-   the tracked repos); and `gh search prs --owner lleverage-ai --state open ID`
-   finds nothing, which covers every lleverage-ai repo and PR bodies too. If any
+   Backlog, the assignee is empty or Tom, and `prs` is empty. `prs` is the claim
+   check, the same one the gate used, so don't repeat it with `gh pr list` or
+   `gh search`: it holds the open GitHub PRs Linear links to the ticket in any
+   repo, open PRs anywhere in lleverage-ai that name it in their title (or in
+   their body after Closes, Fixes or Resolves), and open PRs in the tracked repos
+   that name it in their branch. If any
    fails, stop with `SKIPPED: <why>` and don't touch the ticket. The one
    exception is a retry of this same task: if its own branch, worktree or PR for
    ID already exists from an earlier attempt, resume yolo-ticket with them.
