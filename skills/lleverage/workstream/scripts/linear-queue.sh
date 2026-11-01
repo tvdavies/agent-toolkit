@@ -17,8 +17,10 @@ Verdicts (sweep rules; tree mode reports them too):
   claimed      an ancestor is in a started state (In Progress, Technical Review, ...).
                Another workstream owns that tree. Never touch it from a sweep.
   started      the issue itself is in a started state. Someone is on it.
-  has-pr       an open GitHub PR is linked to the issue in Linear (any repo), or an open
-               PR in the tracked repos names the identifier in its title or branch.
+  has-pr       an open GitHub PR is linked to the issue in Linear (any repo), an open PR
+               anywhere in the search owners names it in its title (or body, after
+               Closes/Fixes/Resolves),
+               or an open PR in the tracked repos names it in its title or branch.
   blocked      an open issue blocks it.
   parent       it has open children. Work the children, not the parent.
   umbrella-done  all of its children are closed. Check its acceptance and close it.
@@ -32,11 +34,21 @@ else the description's "Size:" line, else null) and prepared (the description's
 "**Status:** Ready from <date>" (14 Nov 2026, 14 November 2026 or 2026-11-14) sets
 readyFrom to the ISO date and is prepared "Ready" only from that date (UTC);
 before it, or when the date can't be read (readyFrom null), it is "Ready later".
-Open PRs (prs) come from two places: the GitHub PR attachments Linear holds on the
-issue, in any repo its GitHub integration links (only while Linear's synced status is
-draft, open, inReview or approved),
-and a title/branch scan of the tracked repos: $WS_REPOS (space separated), default
-"lleverage-ai/lleverage lleverage-ai/infrastructure lleverage-ai/agent-sdk".
+Open PRs (prs) come from three places, so no repo list decides whether a ticket is
+claimed:
+  1. the GitHub PR attachments Linear holds on the issue, in any repo its GitHub
+     integration links (only while Linear's synced status is draft, open, inReview or
+     approved);
+  2. a GitHub search of every open PR owned by $WS_SEARCH_OWNERS (space separated,
+     default "lleverage-ai"), matching the identifier in the title, or in the body
+     after a closing word (Closes, Fixes, Resolves, Completes). A bare mention in a
+     body doesn't count. Search can't see branch names, and new PRs take a minute or
+     so to be indexed;
+  3. a title/branch scan of the tracked repos, the fallback for branch-only mentions:
+     $WS_REPOS (space separated), default "lleverage-ai/lleverage
+     lleverage-ai/infrastructure lleverage-ai/agent-sdk lleverage-ai/llegal
+     lleverage-ai/istor lleverage-ai/delta-integrations".
+A search or scan that fails prints a warning on stderr and is left out.
 EOF
 }
 
@@ -103,15 +115,39 @@ else
   done
 fi
 
-# Open PRs in the tracked repos, to spot work already under way elsewhere. Linear's own
-# PR links (the attachments above) cover every other repo.
+# Open PRs that name an identifier, to spot work already under way elsewhere. Linear's own
+# PR links (the attachments above) are the first source. Each line is "owner/repo#n<TAB>text".
 : > "$tmp/prs.tsv"
-for repo in ${WS_REPOS:-lleverage-ai/lleverage lleverage-ai/infrastructure lleverage-ai/agent-sdk}; do
-  gh pr list -R "$repo" --state open --limit 300 --json number,title,headRefName \
-    | jq -r --arg r "$repo" '.[] | "\($r)#\(.number)\t\(.title) \(.headRefName)"' >> "$tmp/prs.tsv" || true
+# Every open PR in the org, by GitHub search, in any repo. An identifier counts when it is in
+# the title, or in the body after a closing word (Closes, Fixes, Resolves, Completes and their
+# forms). A bare mention in a body ("out of scope, see LLE-1", "stacked as LLE-2") does not
+# count: on 1 Nov 2026 every eligible ticket that only a body mentioned was a false claim.
+for owner in ${WS_SEARCH_OWNERS:-lleverage-ai}; do
+  if gh search prs --owner "$owner" --state open --limit 1000 --json repository,number,title,body > "$tmp/search.json"; then
+    [ "$(jq length "$tmp/search.json")" -lt 1000 ] \
+      || echo "linear-queue: warning: 1000 or more open PRs in $owner; some may be missed" >&2
+    jq -r '.[] | "\(.repository.nameWithOwner)#\(.number)\t\(
+             ([.title | match("\\b[A-Za-z]+-[0-9]+\\b"; "g").string]
+              + [.body // "" | match("\\b(?:close[sd]?|closing|fix(?:e[sd])?|fixing|resolve[sd]?|resolving|complete[sd]?|completing)\\b:?\\s+\\[?(?:https://linear\\.app/[^/\\s]+/issue/)?([A-Za-z]+-[0-9]+)\\b"; "gi").captures[0].string])
+             | map(ascii_upcase) | unique | join(" "))"' "$tmp/search.json" >> "$tmp/prs.tsv"
+  else
+    echo "linear-queue: warning: could not search open PRs owned by $owner" >&2
+  fi
 done
+# Fallback: titles and branch names in the tracked repos (search doesn't cover branches).
+for repo in ${WS_REPOS:-lleverage-ai/lleverage lleverage-ai/infrastructure lleverage-ai/agent-sdk lleverage-ai/llegal lleverage-ai/istor lleverage-ai/delta-integrations}; do
+  gh pr list -R "$repo" --state open --limit 300 --json number,title,headRefName \
+    | jq -r --arg r "$repo" '.[] | "\($r)#\(.number)\t\(.title) \(.headRefName)"' >> "$tmp/prs.tsv" \
+    || echo "linear-queue: warning: could not list open PRs in $repo" >&2
+done
+# Index it once, identifier -> [PR refs], so each issue is a lookup rather than a scan.
+jq -R -s '
+  split("\n") | map(select(length > 0) | split("\t")
+    | {ref: .[0], ids: [.[1:] | join(" ") | match("\\b[A-Za-z]+-[0-9]+\\b"; "g").string | ascii_upcase]})
+  | reduce .[] as $p ({}; reduce ($p.ids | unique)[] as $id (.; .[$id] += [$p.ref]))' \
+  "$tmp/prs.tsv" > "$tmp/prs.json"
 
-jq -c --rawfile prs "$tmp/prs.tsv" '
+jq -c --slurpfile prs "$tmp/prs.json" '
   def started: . == "started";
   def openish: (. == "completed" or . == "canceled" or . == "duplicate") | not;
   # "14 Nov 2026", "14 November 2026" or "2026-11-14" at the start of the string, as YYYY-MM-DD; empty if unreadable.
@@ -128,9 +164,7 @@ jq -c --rawfile prs "$tmp/prs.tsv" '
   (now | strftime("%Y-%m-%d")) as $today
   | . as $i
   | [$i.parent, $i.parent.parent?, $i.parent.parent.parent?] | map(select(. != null)) as $anc
-  | ($prs | split("\n") | map(select(length > 0))
-     | map(select(ascii_downcase | test("\\b" + ($i.identifier | ascii_downcase) + "\\b")))
-     | map(split("\t")[0])) as $scanned
+  | ($prs[0][$i.identifier | ascii_upcase] // []) as $scanned
   # GitHub PRs Linear links to the issue, in any repo, while the synced status says they are
   # open (draft, open, inReview, approved). A link with no status, such as one pasted by hand,
   # does not count. (No apostrophes in this program: it is single-quoted.)

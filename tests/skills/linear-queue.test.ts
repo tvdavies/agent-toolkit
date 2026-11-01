@@ -62,6 +62,51 @@ describe("linear-queue.sh --json", () => {
     }
   });
 
+  test("open PRs anywhere in the org claim a ticket by title or closing word, with no repo list; bare body mentions don't", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "linear-queue-"));
+    try {
+      const plain = ["LLE-30", "LLE-31", "LLE-32", "LLE-33", "LLE-34", "LLE-35", "LLE-36"].map((id) => linked(id, []));
+      writeFileSync(path.join(dir, "issues.json"), JSON.stringify({ data: { issues: { pageInfo: { hasNextPage: false }, nodes: plain } } }));
+      writeFileSync(path.join(dir, "linear-cli"), '#!/usr/bin/env bash\ncat "$FAKE_ISSUES"\n');
+      const search = [
+        { repository: { nameWithOwner: "lleverage-ai/istor" }, number: 1, title: "Move Next to 16.4.1 (LLE-30, lle-31)", body: "" },
+        { repository: { nameWithOwner: "lleverage-ai/llegal" }, number: 19, title: "Security updates", body: "Closes [LLE-32](https://linear.app/lleverage/issue/LLE-32/x)\nfixes https://linear.app/lleverage/issue/LLE-33/slug" },
+        { repository: { nameWithOwner: "lleverage-ai/lleverage" }, number: 9527, title: "LLE-99: other work", body: "Out of scope here until LLE-34 lands; stacked as LLE-345." },
+      ];
+      writeFileSync(path.join(dir, "search.json"), JSON.stringify(search));
+      // Org search answers "search prs"; the tracked-repo fallback finds LLE-35 only by its branch.
+      writeFileSync(
+        path.join(dir, "gh"),
+        `#!/usr/bin/env bash\n[ "$1 $2 $4" = "search prs lleverage-ai" ] && { cat "$FAKE_SEARCH"; exit; }\n[ "$1" = search ] && exit 1\n[ "$4" = lleverage-ai/delta-integrations ] && echo '[{"number":3,"title":"Bump zod","headRefName":"tvd/lle-35-bump-zod"}]' || echo '[]'\n`,
+      );
+      chmodSync(path.join(dir, "linear-cli"), 0o755);
+      chmodSync(path.join(dir, "gh"), 0o755);
+      const run = (env: Record<string, string>) =>
+        spawnSync("bash", [queue, "cycle", "--all-assignees", "--json"], {
+          env: { PATH: `${dir}:${process.env.PATH}`, HOME: dir, FAKE_ISSUES: path.join(dir, "issues.json"), FAKE_SEARCH: path.join(dir, "search.json"), ...env },
+          encoding: "utf8",
+        });
+      const result = run({});
+      expect(result.status).toBe(0);
+      const by = Object.fromEntries(result.stdout.trim().split("\n").map((line) => JSON.parse(line)).map((row) => [row.id, row]));
+      expect(by["LLE-30"]).toMatchObject({ verdict: "has-pr", prs: ["lleverage-ai/istor#1"] });
+      expect(by["LLE-31"]).toMatchObject({ verdict: "has-pr", prs: ["lleverage-ai/istor#1"] });
+      expect(by["LLE-32"]).toMatchObject({ verdict: "has-pr", prs: ["lleverage-ai/llegal#19"] });
+      expect(by["LLE-33"]).toMatchObject({ verdict: "has-pr", prs: ["lleverage-ai/llegal#19"] });
+      expect(by["LLE-34"]).toMatchObject({ verdict: "eligible", prs: [] });
+      expect(by["LLE-35"]).toMatchObject({ verdict: "has-pr", prs: ["lleverage-ai/delta-integrations#3"] });
+      expect(by["LLE-36"]).toMatchObject({ verdict: "eligible", prs: [] });
+
+      // A search owner that fails is a warning, not a crash, and the rest still counts.
+      const failing = run({ WS_SEARCH_OWNERS: "lleverage-ai tvdavies" });
+      expect(failing.status).toBe(0);
+      expect(failing.stderr).toContain("could not search open PRs owned by tvdavies");
+      expect(failing.stdout).toContain('"prs":["lleverage-ai/istor#1"]');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("reports size, the prepare-ticket verdict, the assignee and whether any ancestor is open", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "linear-queue-"));
     try {
