@@ -24,7 +24,44 @@ const datedIssues = [
   readyFrom("LLE-9", "Ready from 30 Feb 2020"),
 ];
 
+const pr = (url: string, status: string | null, extra: Record<string, unknown> = {}) => ({
+  url,
+  metadata: status === null ? null : { status, mergedAt: null, closedAt: null, ...extra },
+});
+const linked = (identifier: string, attachments: unknown[]) => ({ ...base, identifier, title: identifier, estimate: 1, state: todo, assignee: null, parent: null, description: null, attachments: { nodes: attachments } });
+const linkedIssues = [
+  linked("LLE-20", [pr("https://github.com/lleverage-ai/delta-integrations/pull/2", "open")]),
+  linked("LLE-21", [pr("https://github.com/lleverage-ai/llegal/pull/19", "inReview"), pr("https://github.com/lleverage-ai/llegal/pull/18", "draft")]),
+  linked("LLE-22", [pr("https://github.com/lleverage-ai/istor/pull/1", "merged", { mergedAt: "2026-10-31T20:34:33.000Z", closedAt: "2026-10-31T20:34:33.000Z" })]),
+  linked("LLE-23", [pr("https://github.com/lleverage-ai/istor/pull/3", "closed", { closedAt: "2026-10-31T20:34:33.000Z" })]),
+  linked("LLE-24", [pr("https://github.com/lleverage-ai/lleverage/pull/8972", null)]),
+  linked("LLE-25", [pr("https://github.com/lleverage-ai/lleverage/issues/5", "open")]),
+];
+
 describe("linear-queue.sh --json", () => {
+  test("open GitHub PRs Linear links to an issue count in any repo; merged, closed or unsynced ones don't", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "linear-queue-"));
+    try {
+      writeFileSync(path.join(dir, "issues.json"), JSON.stringify({ data: { issues: { pageInfo: { hasNextPage: false }, nodes: linkedIssues } } }));
+      writeFileSync(path.join(dir, "linear-cli"), '#!/usr/bin/env bash\ncat "$FAKE_ISSUES"\n');
+      // The tracked-repo scan finds a PR naming LLE-21 too: it is listed once.
+      writeFileSync(path.join(dir, "gh"), `#!/usr/bin/env bash\n[ "$4" = lleverage-ai/llegal ] && echo '[{"number":19,"title":"LLE-21: fix","headRefName":"x"}]' || echo '[]'\n`);
+      chmodSync(path.join(dir, "linear-cli"), 0o755);
+      chmodSync(path.join(dir, "gh"), 0o755);
+      const result = spawnSync("bash", [queue, "cycle", "--all-assignees", "--json"], {
+        env: { PATH: `${dir}:${process.env.PATH}`, HOME: dir, FAKE_ISSUES: path.join(dir, "issues.json"), WS_REPOS: "lleverage-ai/lleverage lleverage-ai/llegal" },
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const by = Object.fromEntries(result.stdout.trim().split("\n").map((line) => JSON.parse(line)).map((row) => [row.id, row]));
+      expect(by["LLE-20"]).toMatchObject({ verdict: "has-pr", prs: ["lleverage-ai/delta-integrations#2"] });
+      expect(by["LLE-21"]).toMatchObject({ verdict: "has-pr", prs: ["lleverage-ai/llegal#18", "lleverage-ai/llegal#19"] });
+      for (const id of ["LLE-22", "LLE-23", "LLE-24", "LLE-25"]) expect(by[id]).toMatchObject({ verdict: "eligible", prs: [] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("reports size, the prepare-ticket verdict, the assignee and whether any ancestor is open", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "linear-queue-"));
     try {

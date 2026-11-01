@@ -26,7 +26,11 @@ A ticket is eligible when all of these hold:
   - it is unassigned or assigned to the Linear user the CLI acts as (Tom);
   - its size is XS, S or M, or not yet known (L and XL are never swept);
   - no open Docket task in the workspace names it (another task has it), and no
-    sweep task for it was updated in the last --recent-days (default 3).
+    sweep task for it was updated in the last --recent-days (default 3), done or
+    not. The one exception: a done "Cycle sweep: prepare" task doesn't stop the
+    ticket it got ready from being delivered, only from being prepared again.
+    So a delivery that ended SKIPPED (or any other way) isn't raised again
+    within --recent-days, and a ticket is never prepared twice in that window.
 It is ready when prepare-ticket's "**Status:** Ready" line is on it and its size
 is known. Human Required tickets are in a started state, so they are never
 eligible and never prepared again. A "**Status:** Ready from <date>" ticket
@@ -90,14 +94,18 @@ jq -c --argjson now "$now" --argjson recent "$((recent_days * 86400))" --argjson
   def age: (.updated_at // "1970-01-01T00:00:00Z" | sub("\\.[0-9]+"; "") | fromdateiso8601) as $t | $now - $t;
   def ids: [.title | scan("\\b[A-Z][A-Z0-9]*-[0-9]+\\b")];
   def sweep: .title | test("^Cycle sweep: (deliver|prepare) ");
+  def deliver: .title | test("^Cycle sweep: deliver ");
   # Sal counts a task open unless it is done, in its completed lane (in-review) or its failed lane (blocked).
   def open: (.status | IN("done", "in-review", "blocked")) | not;
   {
     urgent: [.[] | select(open and ((.labels // []) | any(. == "urgent" or . == "sev1"))) | .id],
     inFlight: [.[] | select(sweep and .assignee == "worker" and (.status | IN("ready", "in-progress")) and age < $stale)
                | {task: .id, title}],
+    # Taken: neither delivered nor prepared. Every recent sweep task counts, done or not
+    # (a SKIPPED delivery is done), except a done prepare: its ticket may be delivered next.
     taken: ([.[] | select((.status | IN("ready", "in-progress")) and age < $recent) | ids[]]
-            + [.[] | select(sweep and .status != "done" and age < $recent) | ids[]]) | unique,
+            + [.[] | select(sweep and (deliver or .status != "done") and age < $recent) | ids[]]) | unique,
+    # Swept: not prepared again. Every recent sweep task, of either kind.
     swept: [.[] | select(sweep and age < $recent) | ids[]] | unique
   }' "$tmp/docket.json" > "$tmp/docket-view.json"
 

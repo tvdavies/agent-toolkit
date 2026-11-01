@@ -66,7 +66,7 @@ only when all of these hold:
   - it isn't started itself. Every agent session acts in Linear as Tom, so any
     In Progress ticket is taken, whoever it is assigned to (a duplicate PR,
     #8113, came from treating Tom's In Progress tickets as free);
-  - no open PR mentions it;
+  - no open PR mentions it or is linked to it in Linear (any repo);
   - it has no open blocker;
   - it isn't a parent with open children;
 - it has no open parent at all (`openAncestor` is false). Judge by the parent

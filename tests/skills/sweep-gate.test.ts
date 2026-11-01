@@ -171,6 +171,39 @@ describe("sweep-gate", () => {
     expect(only.out.reason).toContain("nothing to work on");
   });
 
+  test("a delivery that ended (SKIPPED, so done) is not raised again within --recent-days", () => {
+    const tasks = [
+      { id: "TASK-6", title: "Cycle sweep: deliver LLE-72", status: "done", assignee: "sal" },
+      { id: "TASK-7", title: "Cycle sweep: deliver LLE-73", status: "done", assignee: "sal" },
+    ];
+    const result = run([ready("LLE-72"), ready("LLE-73", { priority: 1 }), ready("LLE-74")], tasks, ["--dry-run"]);
+    expect(result.status).toBe(3);
+    expect(result.out.findings[0].mode).toBe("deliver");
+    expect(result.out.findings[0].tickets.map((t: Issue) => t.id)).toEqual(["LLE-74"]);
+
+    const only = run([ready("LLE-72"), ready("LLE-73")], tasks, ["--dry-run"]);
+    expect(only.status).toBe(0);
+    expect(only.out.reason).toContain("nothing to work on");
+
+    const old = new Date(Date.now() - 4 * 86400_000).toISOString().replace(/\.\d+Z$/, "Z");
+    const later = run([ready("LLE-72")], [{ ...tasks[0], updated_at: old }], ["--dry-run"]);
+    expect(later.status).toBe(3);
+    expect(later.out.findings[0].tickets.map((t: Issue) => t.id)).toEqual(["LLE-72"]);
+  });
+
+  test("a ticket a done prepare sweep got ready is delivered next, but an unfinished prepare still holds it", () => {
+    const done = [{ id: "TASK-8", title: "Cycle sweep: prepare LLE-78", status: "done", assignee: "sal" }];
+    const delivered = run([ready("LLE-78")], done, ["--dry-run"]);
+    expect(delivered.status).toBe(3);
+    expect(delivered.out.findings[0].mode).toBe("deliver");
+    expect(delivered.out.findings[0].tickets.map((t: Issue) => t.id)).toEqual(["LLE-78"]);
+
+    const failed = [{ id: "TASK-9", title: "Cycle sweep: prepare LLE-78", status: "blocked", assignee: "sal" }];
+    const held = run([ready("LLE-78")], failed, ["--dry-run"]);
+    expect(held.status).toBe(0);
+    expect(held.out.reason).toContain("nothing to work on");
+  });
+
   test("a dry run records no fingerprint", () => {
     const result = run([issue("LLE-80")], [], ["--dry-run"]);
     expect(result.status).toBe(3);
