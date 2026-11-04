@@ -54,10 +54,12 @@ same diff base. Score the anchors in the same round as the candidate. For UI,
 capture whole pages, not just the first viewport, and cover every primary
 route and its states.
 
-Anchors set the ceiling. Use the real product surfaces of direct competitors
-(their signed-in apps, not marketing pages), and ask the user for them when
-you can't capture them. An anchor the candidate beats early stops pulling:
-add a stronger one, and say so in the log.
+Anchors calibrate the judges; they are not the goal unless the user makes
+parity the goal. When the goal is an absolute bar ("the best UX we can
+make"), say in the brief what 9 and 10 mean in words and score the frozen
+baseline as the control instead of a competitor. When anchors are used, use
+the same kind of surface (a competitor's signed-in app, not its marketing
+page), and replace an anchor the candidate beats early: it stops pulling.
 
 Measure a judge's noise before trusting it: score the baseline twice with
 each judge. If a category moves by 0.5 or more between the two, use the mean
