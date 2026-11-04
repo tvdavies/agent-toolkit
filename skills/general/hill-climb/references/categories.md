@@ -10,12 +10,17 @@ enough.
   and layout, consistency, iconography, states (empty, loading, error,
   focus), clarity of labels and copy.
 - **Evidence:** a fixed screenshot set, taken the same way every round:
-  - the same screens and states, with realistic data
+  - the same screens and states, with realistic data, captured whole page
+  - every primary route, plus hover, open menu, focus and dialog states
   - light and dark themes
   - at least two widths
   - the in-app preview, Playwright or computer use
 - **Anchors:** baseline screenshots, plus 1 to 3 products the user wants to
-  beat. Ask the user for these if none are given.
+  beat, shown as the same kind of surface (a signed-in dashboard against a
+  dashboard, not a marketing page). Ask the user for these if none are given.
+- **Operator:** do your own design pass each round as well as the judges'
+  findings: type scale, density, rhythm and states are system changes judges
+  rarely ask for by name.
 - **Guards:** no visual regressions on screens outside the scope, plus
   existing tests and type checks.
 - **Target:** every member scores 9 or more in every category.
