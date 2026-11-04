@@ -68,7 +68,9 @@ fetch labelled "$LIMIT" "{$SEL, level=~\"$ERR_LVL\"}"
 # them per namespace; then each namespace is sampled separately (so one noisy
 # namespace cannot crowd out the rest) and normalise.py applies a stricter regex.
 ERRLIKE='Error|ERROR|Unhandled|Traceback|panic|FATAL|Exception|prisma:error'
-UL="{$SEL, level=\"\", $EXCL, namespace!=\"kube-system\"} |~ \`$ERRLIKE\`"
+# Skip the tailscale bridges' nginx access logs (tls sidecar): HTTP 200 Grafana-proxied Loki queries containing isError matched `Error` (3 Nov 16:52-17:05Z, 4 Nov 11:09-11:10Z).
+ULDROP='| namespace!="tailscale" or container!="tls"'
+UL="{$SEL, level=\"\", $EXCL, namespace!=\"kube-system\"} |~ \`$ERRLIKE\` $ULDROP"
 res="$(ph_loki_metric "sum by (namespace) (count_over_time($UL [$W]))")" || ph_unavailable "Loki unlabelled error volume query failed"
 while IFS=$'\t' read -r n ns; do
   [ -n "$ns" ] || continue
@@ -80,7 +82,7 @@ SKIP_SAMPLE="${PH_LOKI_SAMPLE_SKIP:-litellm}"
 for ns in $(echo "${res:-[]}" | jq -r --arg skip "$SKIP_SAMPLE" '($skip | split(",")) as $s
     | map(select(.metric.namespace as $n | $s | index($n) | not)) | sort_by(-(.value[1] | tonumber)) | .[:10][] | .metric.namespace'); do
   FETCHED+=("unlabelled:$ns")
-  fetch "unlabelled:$ns" 1000 "{$SEL, namespace=\"$ns\", level=\"\"} |~ \`$ERRLIKE\`" true 45 &
+  fetch "unlabelled:$ns" 1000 "{$SEL, namespace=\"$ns\", level=\"\"} |~ \`$ERRLIKE\` $ULDROP" true 45 &
 done
 wait
 merge_fetches
