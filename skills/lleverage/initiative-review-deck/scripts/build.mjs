@@ -218,7 +218,7 @@ ${sources(g.sources ?? [data.initiative.url])}`;
       return `<div class="irr-prow" style="height:${prowH}px">
   <div><a class="h3" href="${esc(p.url)}">${esc(p.name)}</a><div class="micro">${esc(p.lead?.name ?? "")}${p.status?.name ? ` · ${esc(p.status.name)}` : ""}</div></div>
   <div>${bar(p.counts, p.counts.done + p.counts.started === 0)}<div class="micro" style="padding-top:6px;">${esc(countLine(p.counts))}</div></div>
-  <div class="micro irr-right">${esc(summary || "no milestones")}</div>
+  <div class="micro irr-right">${(summary || "no milestones").split(" · ").map((part) => `<span class="irr-nowrap">${esc(part)}</span>`).join(" · ")}</div>
 </div>`;
     })
     .join("");
@@ -244,7 +244,10 @@ for (const p of projects) {
   for (let i = 0; i < tiles.length; i += 12) {
     const chunk = tiles.slice(i, i + 12);
     const col = (xs) => xs.join("");
-    const body = `<div class="irr-cols" style="position:absolute;left:64px;top:186px;width:1152px;"><div>${col(chunk.slice(0, 6))}</div><div>${col(chunk.slice(6, 12))}</div></div>
+    // Six or fewer tiles take the full width in one column; more split evenly across two,
+    // so the right half of the slide is never left empty.
+    const cols = chunk.length <= 6 ? [chunk] : [chunk.slice(0, Math.ceil(chunk.length / 2)), chunk.slice(Math.ceil(chunk.length / 2))];
+    const body = `<div class="irr-cols${cols.length === 1 ? " irr-one" : ""}" style="position:absolute;left:64px;top:186px;width:1152px;">${cols.map((c) => `<div>${col(c)}</div>`).join("")}</div>
 ${sources([{ label: `Linear project · ${p.name}`, url: p.url }, ...(p.o.sources ?? [])].concat(hidden ? [{ label: `${hidden} ${hidden === 1 ? "milestone" : "milestones"} without issues not shown`, url: p.url }] : []))}`;
     slides.push(titleSlide("Milestones", p.o.title ?? `${p.name}: ${p.counts.done} of ${p.counts.total} issues done, ${p.counts.doneThisWeek} this week`, body));
   }
@@ -337,6 +340,8 @@ const STYLE = `<style>/* initiative-review-deck */
 .irr-dashed{background:none;outline:var(--ll-stroke-structure) dashed var(--ll-color-grey-700);outline-offset:-1px}
 .tag.irr-quiet{color:var(--ll-text-muted);border-color:var(--ll-surface-hairline)}
 .irr-cols{display:grid;grid-template-columns:1fr 1fr;column-gap:32px}
+.irr-cols.irr-one{grid-template-columns:1fr}
+.irr-nowrap,.irr-src a,.irr-card-src a,.irr-table .micro a{white-space:nowrap}
 .irr-tile{height:66px;border-bottom:var(--ll-stroke-structure) solid var(--ll-surface-hairline);padding-top:8px}
 .irr-tile-top{display:flex;justify-content:space-between;align-items:center;gap:12px}
 .irr-name{font-family:var(--ll-font-sans);font-weight:600;font-size:var(--ll-type-body);color:var(--ll-text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
