@@ -70,6 +70,12 @@ fetch labelled "$LIMIT" "{$SEL, level=~\"$ERR_LVL\"}"
 ERRLIKE='Error|ERROR|Unhandled|Traceback|panic|FATAL|Exception|prisma:error'
 # Skip the tailscale bridges' nginx access logs (tls sidecar): HTTP 200 Grafana-proxied Loki queries containing isError matched `Error` (3 Nov 16:52-17:05Z, 4 Nov 11:09-11:10Z).
 ULDROP='| namespace!="tailscale" or container!="tls"'
+# Skip the minio-backup-to-gcs race (TASK-5282): rclone lists milvus/wp/…/<n>.blk, woodpecker's WAL
+# compaction deletes them, and each copy logs `Failed to copy … StatusCode: 404 … NoSuchKey` before
+# the retry heals it (26 Oct 37 lines, 5 Nov 60). Only that line, only from the backup's rclone
+# container: other minio errors and rclone's own summaries (Attempt N/3 …, not deleting …) still count.
+# LogQL can't test the line inside a label filter, so a label_format template marks matching lines.
+ULDROP+=' | label_format ph_race=`{{ if and (eq .namespace "minio") (eq .container "rclone") (hasPrefix "minio-backup-to-gcs-" .pod) (contains "ERROR : milvus/wp/" __line__) (contains ".blk: Failed to copy: " __line__) (contains "StatusCode: 404" __line__) (contains "NoSuchKey" __line__) }}1{{ end }}` | ph_race="" | drop ph_race'
 UL="{$SEL, level=\"\", $EXCL, namespace!=\"kube-system\"} |~ \`$ERRLIKE\` $ULDROP"
 res="$(ph_loki_metric "sum by (namespace) (count_over_time($UL [$W]))")" || ph_unavailable "Loki unlabelled error volume query failed"
 while IFS=$'\t' read -r n ns; do
