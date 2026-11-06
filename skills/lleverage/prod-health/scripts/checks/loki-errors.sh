@@ -19,10 +19,19 @@ SEL='job="loki.source.kubernetes.pod_logs"'
 EXCL='namespace!~"loki|monitoring"'
 W="${PH_WIN_S}s"
 ERR_LVL='(?i)(error|err|fatal|crit.*|panic)'
+# Skip Gotenberg's Chromium pinning-proxy denials in the warn count (TASK-5521, Tom's call):
+# `CONNECT blocked for 'www.google.com:443' … matches the expression from the denied list`
+# (also optimizationguide-pa, gstatic) from logger chromium.browser.pinning-proxy. Since the
+# Chrome 156 image (infrastructure#724) every conversion logs 3-6 of them, so the count tracks
+# PDF traffic: 552/h on 6 Nov 14:00-14:15Z for 30 healthy conversions. Only those lines, only
+# in gotenberg-service: its `'cid:…'` denials and every other warn still count.
+# LogQL can't test the line inside a label filter, so a label_format template marks matching lines.
+WARNDROP='| label_format ph_pp=`{{ if and (eq .namespace "gotenberg-service") (contains "chromium.browser.pinning-proxy" __line__) (contains "CONNECT blocked for " __line__) (contains "matches the expression from the denied list" __line__) }}1{{ end }}` | ph_pp="" | drop ph_pp'
 
 for lvl in error warn; do
-  re="$ERR_LVL"; [ "$lvl" = warn ] && re='(?i)(warn|warning)'
-  res="$(ph_loki_metric "sum by (namespace) (count_over_time({$SEL, level=~\"$re\"}[$W]))")" \
+  re="$ERR_LVL"; drop=''
+  [ "$lvl" = warn ] && { re='(?i)(warn|warning)'; drop=" $WARNDROP"; }
+  res="$(ph_loki_metric "sum by (namespace) (count_over_time({$SEL, level=~\"$re\"}$drop [$W]))")" \
     || { ph_unavailable "Loki $lvl volume query failed"; continue; }
   while IFS=$'\t' read -r n ns; do
     [ -n "$ns" ] || continue
