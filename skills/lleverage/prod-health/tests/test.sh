@@ -338,6 +338,7 @@ printf '#!/usr/bin/env bash\nexit 0\n' >"$hbin/kubectl"
 cat >"$hbin/curl" <<SH
 #!/usr/bin/env bash
 q=""; for a in "\$@"; do case "\$a" in query=*) q="\$a" ;; esac; done
+printf '%s\n' "\$q" >>"$state/http-queries"
 case "\$q" in
   *"| json method="*) cat "$here/fixtures/http-loki-json.json" ;;
   *"| regexp "*) cat "$here/fixtures/http-loki-access.json" ;;
@@ -366,6 +367,17 @@ for k in 'http.route:example-api|POST /|409' 'http.route:example-api|PUT /|409' 
   grep -qxF "$k" <<<"$hf" || fail "a real request error should still raise $k; got: $hf"
 done
 ! grep -q '|/|' <<<"$hf" || fail "no route key without a method should be raised: $hf"
+# Expired MCP device sign-ins polling /api/v1/me/projects (TASK-5853): only app lines on that
+# route with status 401, a lleverage-mcp/… (claude-code-plugin/…) user agent and null principal,
+# userId and tokenId are dropped, and only from the request-log query.
+jq_q="$(grep -F '| json method=' "$state/http-queries")"
+for s in '(eq .namespace "app")' '(contains "\"route\":\"/api/v1/me/projects\"" __line__)' '(contains "\"status\":401" __line__)' \
+         '(contains "\"userAgent\":\"lleverage-mcp/" __line__)' '(contains "(claude-code-plugin/" __line__)' \
+         '(contains "\"principal\":null" __line__)' '(contains "\"userId\":null" __line__)' '(contains "\"tokenId\":null" __line__)' \
+         '}}1{{ end }}` | ph_mcp="" | drop ph_mcp | json method='; do
+  grep -qF -- "$s" <<<"$jq_q" || fail "the request-log query should drop only expired MCP /me/projects 401s (missing $s): $jq_q"
+done
+! grep -v -F '| json method=' "$state/http-queries" | grep -qF 'ph_mcp' || fail "only the request-log query should carry the MCP drop"
 
 # Recurring slots (experimental). Customers' scheduled workflows fire at 10:00
 # Europe/Amsterdam on weekdays and ~10 fail in their own nodes, which raised

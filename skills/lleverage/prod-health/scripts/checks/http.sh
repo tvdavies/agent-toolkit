@@ -46,7 +46,17 @@ fi
 if ph_ensure_loki; then
   SEL='{job="loki.source.kubernetes.pod_logs", namespace!~"loki|monitoring|kube-system"}'
   PROBE='(?i)"(url|path|endpoint|uri)":"/(health|healthz|ready|readyz|live|livez|metrics)[/"?]'
-  json_q="sum by (namespace, method, endpoint, url, path, route, uri, status, statusCode) (count_over_time($SEL |~ \`\"(status|statusCode)\":\\s*\"?[45][0-9]{2}\\b\` !~ \`$PROBE\` | json method=\"method\", endpoint=\"endpoint\", url=\"url\", path=\"path\", route=\"route\", uri=\"uri\", status=\"status\", statusCode=\"statusCode\" | __error__=\"\" [$W]))"
+  # Skip expired Lleverage MCP device sign-ins polling /api/v1/me/projects (TASK-5853, Tom's call
+  # on 9 Nov 2026). The MCP probes /me/projects on every tools/list while it holds a device
+  # credential and keeps it after a 401, so one client past the 24h idle timeout logs 4 401s a
+  # minute: http.route:app|GET /api/v1/me/projects|401 raised High on 1 Nov (392 in 24h) and
+  # 8 Nov (58 in a 15m window), both Noise. Only app v1 request lines on that exact route with
+  # status 401, a lleverage-mcp/… (claude-code-plugin/…) user agent and principal, userId and
+  # tokenId all null: other /me/projects 401s, other routes and user agents still count, and
+  # Hubble's http.svc:app|401 can't see user agents so it still counts these too.
+  # LogQL can't test the line inside a label filter, so a label_format template marks them.
+  MCPDROP='| label_format ph_mcp=`{{ if and (eq .namespace "app") (contains "\"route\":\"/api/v1/me/projects\"" __line__) (contains "\"status\":401" __line__) (contains "\"userAgent\":\"lleverage-mcp/" __line__) (contains "(claude-code-plugin/" __line__) (contains "\"principal\":null" __line__) (contains "\"userId\":null" __line__) (contains "\"tokenId\":null" __line__) }}1{{ end }}` | ph_mcp="" | drop ph_mcp'
+  json_q="sum by (namespace, method, endpoint, url, path, route, uri, status, statusCode) (count_over_time($SEL |~ \`\"(status|statusCode)\":\\s*\"?[45][0-9]{2}\\b\` !~ \`$PROBE\` $MCPDROP | json method=\"method\", endpoint=\"endpoint\", url=\"url\", path=\"path\", route=\"route\", uri=\"uri\", status=\"status\", statusCode=\"statusCode\" | __error__=\"\" [$W]))"
   acc_q="sum by (namespace, method, path, status) (count_over_time($SEL |~ \`\" [45][0-9]{2} \` !~ \`/(health|metrics|ready|live)\` | regexp \`\"(?P<method>[A-Z]+) (?P<path>\\S+) HTTP/[0-9.]+\" (?P<status>[45][0-9]{2})\` | __error__=\"\" [$W]))"
   jres="$(ph_tmp)/routes-json.json"; ares="$(ph_tmp)/routes-access.json"
   ph_loki_metric "$json_q" >"$jres" || { echo '[]' >"$jres"; ph_unavailable "Loki structured request-log query failed"; }
