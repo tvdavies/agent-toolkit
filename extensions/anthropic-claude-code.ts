@@ -95,6 +95,22 @@ export const MODELS: ProviderModel[] = [
     maxTokens: 128_000,
   },
   {
+    id: "claude-fable-5-2",
+    name: "Claude Fable 5.2 (Claude Code creds)",
+    reasoning: true,
+    // As Fable 5.1: request-level effort, since CPA rejects per-message output_config.
+    compat: { forceAdaptiveThinking: true },
+    // Adaptive thinking is always on (low to max effort, high by default).
+    thinkingLevelMap: { off: null, xhigh: "xhigh" },
+    input: ["text", "image"],
+    // $8/$40, 20% below Fable 5.1; cache hits at 0.025x input ($0.20/MTok), 5-minute writes $10.
+    // Fast mode (speed: "fast", $16/$80) bills subscriptions' usage credits, so it isn't offered.
+    cost: { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 },
+    // Upstream window is 1M; keep Fable 5.1's 272K cost-control budget.
+    contextWindow: 272_000,
+    maxTokens: 128_000,
+  },
+  {
     id: "claude-sonnet-4-6",
     name: "Claude Sonnet 4.6 (Claude Code creds)",
     reasoning: true,
