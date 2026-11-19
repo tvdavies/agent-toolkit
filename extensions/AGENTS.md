@@ -17,7 +17,7 @@ Cheaper cache reads do not remove the need for a context budget.
   Do not change output limits, thinking settings or pricing to implement an input
   context cap.
 
-Fable 5, Fable 5.1 and GPT-6-Astra currently use a 272,000-token context budget.
+Fable 5, Fable 5.1, Fable 5.2 and GPT-6-Astra currently use a 272,000-token context budget.
 This is a deliberate usage-control choice, not their upstream maximum capacity.
 
 ## Check the effective configuration

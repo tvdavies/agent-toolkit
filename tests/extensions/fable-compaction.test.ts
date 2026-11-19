@@ -47,6 +47,19 @@ test("Fable 5.1 stays adaptive without enabling unsupported per-message effort",
   expect(MODELS.find((model) => model.id === "claude-fable-5")?.thinkingLevelMap?.off).toBeUndefined();
 });
 
+test("Fable 5.2 keeps Fable 5.1's adaptive settings and 272K budget at its lower price", () => {
+  const fable52 = MODELS.find((model) => model.id === "claude-fable-5-2")!;
+  expect(fable52.name).toBe("Claude Fable 5.2 (Claude Code creds)");
+  expect(fable52.compat).toEqual(fable.compat);
+  expect(fable52.thinkingLevelMap).toEqual(fable.thinkingLevelMap);
+  expect(fable52.cost).toEqual({ input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 });
+  // Upstream window is 1M; the predecessor's cost-control budget is kept.
+  expect(fable52.contextWindow).toBe(272_000);
+  expect(fable52.contextWindow).toBe(fable.contextWindow);
+  expect(fable52.maxTokens).toBe(128_000);
+  expect(ensureRequiredAdaptiveThinking({ model: fable52.id, thinking: { type: "disabled" } })).toEqual({ model: fable52.id, thinking: { type: "adaptive" } });
+});
+
 test("Opus 5.5 declares native effort levels and the existing cost-control window", () => {
   expect(opus.name).toBe("Claude Opus 5.5 (Claude Code creds)");
   expect(opus.reasoning).toBe(true);
