@@ -85,6 +85,15 @@ ULDROP='| namespace!="tailscale" or container!="tls"'
 # container: other minio errors and rclone's own summaries (Attempt N/3 …, not deleting …) still count.
 # LogQL can't test the line inside a label filter, so a label_format template marks matching lines.
 ULDROP+=' | label_format ph_race=`{{ if and (eq .namespace "minio") (eq .container "rclone") (hasPrefix "minio-backup-to-gcs-" .pod) (contains "ERROR : milvus/wp/" __line__) (contains ".blk: Failed to copy: " __line__) (contains "StatusCode: 404" __line__) (contains "NoSuchKey" __line__) }}1{{ end }}` | ph_race="" | drop ph_race'
+# Skip data-service's SerpAPI retry field lines (TASK-8031, Tom's call, 20 Nov 2026). Search Web logs each
+# retry (`SerpAPI search failed, retrying {`) and each final failure (`Search web provider failed: {`) as
+# a multi-line object, one Loki line per field, and `  providerError: undefined,` is the only line of
+# them that matches `Error`. Bosch's daily ~05:00Z newsletter run logs 50-120 of them for SerpAPI
+# timeouts that data-service retries and the node absorbs into empty results (LLE-14021, LLE-16056);
+# it raised loki.errlike:data-service on 20 Nov (78 lines in 05:00-05:30Z). Only that exact line, only
+# from data-service's service container: a providerError carrying SerpAPI's own text and every other
+# data-service error still count, and a misconfigured SerpAPI still fails the node (workflow checks).
+ULDROP+=' | label_format ph_serp=`{{ if and (eq .namespace "data-service") (eq .container "service") (eq (trim __line__) "providerError: undefined,") }}1{{ end }}` | ph_serp="" | drop ph_serp'
 UL="{$SEL, level=\"\", $EXCL, namespace!=\"kube-system\"} |~ \`$ERRLIKE\` $ULDROP"
 res="$(ph_loki_metric "sum by (namespace) (count_over_time($UL [$W]))")" || ph_unavailable "Loki unlabelled error volume query failed"
 while IFS=$'\t' read -r n ns; do
