@@ -48,7 +48,7 @@ A series can carry `rules`, `min_new`, `min_spike`, `ratio` (default 3) and
 |---|---|
 | `new` | The key is absent from the baseline and `count >= min_new` (default 5; Loki signatures 3; 4xx routes 20; 5xx 5) |
 | `spike` | `count >= min_spike` and `count >= ratio x max(expected, 1)` |
-| `drop` | `expected >= drop_min_expected` (default 20; pageviews, completions and dispatches 60) and `count < 10% of expected` |
+| `drop` | `expected >= drop_min_expected` (default 20; pageviews, completions and dispatches 60) and `count < 10% of expected`. `posthog.pageviews` carries it only in Dutch working hours (Mon–Fri, window end 10:00–17:59 Amsterdam); outside them it is recorded with `rules: []` |
 | ratio (`wf.failed`) | The failure share is at least twice the baseline share, at least 5 points higher, and at least 10 failures |
 | presence (alerts) | The alert key is not in `presence` |
 
