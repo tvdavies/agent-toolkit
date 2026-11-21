@@ -61,7 +61,13 @@ elif [ "${pv:-0}" = 0 ]; then
   # healthy now, so the source is partial rather than ok.
   ph_unavailable "no pageviews in the window, so browser health can't be confirmed; the newest in the last 24h was at ${lastpv:0:19}Z ($pv24 in 24h)"
 fi
-ph_series posthog.pageviews "$pv" "PostHog pageviews on $APPHOST" '{"rules":["drop"],"drop_hint":"high","drop_min_expected":60}'
+# The drop rule compares against a flat all-hours mean, so nights and weekends
+# (0-1 pageviews from Friday 22:20Z to Saturday 06:20Z) always read as a drop.
+# It only applies in Dutch working hours; outside them the series is still
+# recorded for the baseline, with no rule, and posthog.silent (24h) is the guard.
+if [ "$workhours" = 1 ]; then pv_opts='{"rules":["drop"],"drop_hint":"high","drop_min_expected":60}'
+else pv_opts='{"rules":[]}'; fi
+ph_series posthog.pageviews "$pv" "PostHog pageviews on $APPHOST" "$pv_opts"
 
 rows="$(hogql "SELECT coalesce(properties.\$exception_types[1], properties.\$exception_type, '?') AS t,
     substring(coalesce(properties.\$exception_values[1], properties.\$exception_message, ''), 1, 200) AS m,
