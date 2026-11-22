@@ -198,6 +198,24 @@ cp "$here/fixtures/baseline.json" "$state/production/baseline.json"   # its nois
 q="$(ph 40 7 2026-10-12T13:25:00Z)"
 jq -e '.data.exceptions == {all: 23, excluded_noise: 0, counted: 23}' <<<"$q" >/dev/null || fail "no matching pattern: $(jq -c .data <<<"$q")"
 unset FAKE_VOL FAKE_ROWS
+# 21 Nov 2026: Friday night to Saturday morning reads 0-1 pageviews every week, and
+# the flat-mean drop rule raised posthog.pageviews High all night. The drop rule
+# applies only in Dutch working hours; outside them the series is still recorded.
+ph2h() { PATH="$bin:$PATH" POSTHOG_PERSONAL_API_KEY=x PH_STATE_ROOT="$state" FAKE_PV24=40 FAKE_PV2H=7 \
+  "$here/../scripts/checks/posthog.sh" --raw --window 2h --end "$1"; }
+pvdrop() {  # pvdrop END -> number of posthog.pageviews drop findings (baseline mean 60/h, 0 in 2h)
+  ph2h "$1" | PH_STATE_ROOT="$state" python3 "$lib/assess.py" --env production --json - \
+    | jq '[.findings[] | select(.key == "posthog.pageviews" and .kind == "drop")] | length'
+}
+q="$(ph2h 2026-11-21T06:20:00Z)"   # Saturday 07:20 Amsterdam
+jq -e '.series[] | select(.key == "posthog.pageviews") | .rules == [] and .count == 0' <<<"$q" >/dev/null \
+  || fail "weekend pageviews should carry no rules: $(jq -c '.series[] | select(.key == "posthog.pageviews")' <<<"$q")"
+[ "$(pvdrop 2026-11-21T06:20:00Z)" = 0 ] || fail "Saturday-morning zero pageviews should not raise a drop"
+[ "$(pvdrop 2026-11-17T22:20:00Z)" = 0 ] || fail "weeknight zero pageviews should not raise a drop"
+q="$(ph2h 2026-11-17T12:20:00Z)"   # Tuesday 13:20 Amsterdam
+jq -e '.series[] | select(.key == "posthog.pageviews") | .rules == ["drop"] and .drop_hint == "high"' <<<"$q" >/dev/null \
+  || fail "working-hours pageviews should carry the drop rule: $(jq -c '.series[] | select(.key == "posthog.pageviews")' <<<"$q")"
+[ "$(pvdrop 2026-11-17T12:20:00Z)" = 1 ] || fail "working-hours zero pageviews should raise a drop"
 
 # k8s live pods: a pod that a rolling update is draining fails readiness on purpose
 # and is skipped; one still present >5m after its grace period is stuck-terminating;
