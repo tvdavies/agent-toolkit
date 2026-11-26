@@ -27,20 +27,10 @@ ERR_LVL='(?i)(error|err|fatal|crit.*|panic)'
 # in gotenberg-service: its `'cid:…'` denials and every other warn still count.
 # LogQL can't test the line inside a label filter, so a label_format template marks matching lines.
 WARNDROP='| label_format ph_pp=`{{ if and (eq .namespace "gotenberg-service") (contains "chromium.browser.pinning-proxy" __line__) (contains "CONNECT blocked for " __line__) (contains "matches the expression from the denied list" __line__) }}1{{ end }}` | ph_pp="" | drop ph_pp'
-# TEMPORARY, remove when LLE-20369 (https://linear.app/lleverage/issue/LLE-20369) is Done (TASK-9082,
-# Tom's call on 26 Nov 2026). Scheduled sessions' userless wakes are refused and session-service
-# re-announces them every ~2 min with no end, so agent-service logs a flat stream of
-# `[wait-group-wake] Wake not delivered yet …` lines: `wake was refused (403) [MISSING_RUN_ACTOR]` at
-# error (60/h from 2 owed wakes, which kept loki.error:agent-service at ~3x baseline and re-raised it
-# every 6h) and `wake must wait: AGENT_SEAT_REQUIRED` at info (counted nowhere today; dropped too in
-# case its level changes). Only those two refusals, only in agent-service: other wake codes
-# (ACTIVE_RUN_EXISTS, 503 …) and every other agent-service error still count. Applied to the error and
-# warn volume and to the labelled signature sample.
-WAKEDROP='| label_format ph_wake=`{{ if and (eq .namespace "agent-service") (contains "[wait-group-wake] Wake not delivered yet" __line__) (or (contains "wake was refused (403) [MISSING_RUN_ACTOR]" __line__) (contains "wake must wait: AGENT_SEAT_REQUIRED" __line__)) }}1{{ end }}` | ph_wake="" | drop ph_wake'
 
 for lvl in error warn; do
-  re="$ERR_LVL"; drop=" $WAKEDROP"
-  [ "$lvl" = warn ] && { re='(?i)(warn|warning)'; drop=" $WARNDROP $WAKEDROP"; }
+  re="$ERR_LVL"; drop=''
+  [ "$lvl" = warn ] && { re='(?i)(warn|warning)'; drop=" $WARNDROP"; }
   res="$(ph_loki_metric "sum by (namespace) (count_over_time({$SEL, level=~\"$re\"}$drop [$W]))")" \
     || { ph_unavailable "Loki $lvl volume query failed"; continue; }
   while IFS=$'\t' read -r n ns; do
@@ -81,7 +71,7 @@ merge_fetches() {
   done
 }
 FETCHED+=(labelled)
-fetch labelled "$LIMIT" "{$SEL, level=~\"$ERR_LVL\"} $WAKEDROP"
+fetch labelled "$LIMIT" "{$SEL, level=~\"$ERR_LVL\"}"
 
 # Many services log errors without a level label. A cheap literal filter counts
 # them per namespace; then each namespace is sampled separately (so one noisy
